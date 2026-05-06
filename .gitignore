@@ -1,0 +1,31 @@
+# Maven
+target/
+*.jar
+*.war
+!src/main/resources/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# EchoMind runtime
+data/
+skills/*.jar
+logs/
+*.log
+
+# Environment
+.env
+.env.local
+
+# Temporary
+*.tmp
+*.bak

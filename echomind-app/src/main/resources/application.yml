@@ -1,0 +1,70 @@
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+spring:
+  application:
+    name: echomind
+  profiles:
+    active: dev
+  thymeleaf:
+    cache: false
+  datasource:
+    url: jdbc:h2:file:./data/echomind-db;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    database-platform: org.hibernate.dialect.H2Dialect
+  h2:
+    console:
+      enabled: true
+  shell:
+    interactive:
+      enabled: true
+    non-interactive:
+      enabled: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+echomind:
+  models:
+    default-provider: anthropic
+    providers:
+      anthropic:
+        api-key: ${ANTHROPIC_API_KEY:}
+        base-url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+        models:
+          - name: claude-sonnet-4-20250514
+            capabilities: [text, function]
+            default: true
+  memory:
+    short-term-window: 20
+    long-term-type: redis
+    file-path: ./data/memory/
+    redis-ttl-seconds: 604800
+  skill:
+    auto-load-path: ./skills/
+    hot-reload: true
+    marketplace-dir: ./data/marketplace/
+  mcp:
+    server-enabled: true
+    transport: stdio
+  agents:
+    - agent-id: default
+      name: EchoMind Assistant
+      system-prompt: "You are a helpful AI assistant with access to various skills, including weather lookup, calculator, web search, and filesystem operations."
+      model-id: anthropic:claude-sonnet-4-20250514
+      skill-ids: [weather-query, calculator, web-search, filesystem]

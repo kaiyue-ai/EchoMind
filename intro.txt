@@ -1,0 +1,31 @@
+项目 1：AI Agent 平台（MCP & Skill 市场）
+核心功能
+1. 基础 Agent 架构
+  - 支持多模态大模型配置（OpenAI、通义千问、本地模型等），运行时动态切换模型。
+  - 会话记忆管理：短期记忆（对话窗口）与长期记忆（基于文件/Redis/向量库持久化，不强制 RAG，但需体现记忆持久化能力）。
+  - 插件化 Skill 市场：Agent 可动态加载/卸载技能，技能以独立模块打包（参考 MCP 协议或自定义接口），市场提供技能注册、发现、启用/禁用功能。
+  - MCP 兼容：支持通过 MCP 服务端发现和调用外部工具，至少实现一个 MCP 示例（如文件系统、数据库查询工具）。
+2. Skill 市场设计
+  - 每个 Skill 包含元数据（名称、描述、参数 schema、版本、依赖）。
+  - 允许用户自行上传新 Skill（上传 Jar/配置文件并热加载，需注意类加载器隔离）。
+  - 提供简单管理界面（CLI 或 Web 控制台）。
+3. 框架选型
+  - 魔改 Spring AI 。
+  - Java 17+，Spring Boot 3.x，Maven/Gradle。
+  - 需至少包含 3 个不同方向的 Skill 演示（如天气、计算器、网络搜索）。
+可选挑战——Agent Team 协作（高分项）
+- 实现多 Agent 协作框架：多个 Agent 实例可组成团队，通过角色分工（如 Planner、Executor、Reviewer）共同完成复杂任务。
+- 支持消息传递机制：Agent 之间通过消息队列或内存通道进行任务分配、结果汇报和争议仲裁。
+- 典型演示场景：例如「策划一场活动」——Planner 拆解为场地查询、天气查询、人员协调子任务，分发给不同 Skill 或 Agent 执行，最终汇总输出完整方案。
+- 能够可视化协作流程（如 Mermaid 流程图或简单的 Web 仪表盘展示任务状态）。
+- 加分项：实现基于 LLM 的“虚拟角色”动态决策，即 Agent 可以根据任务上下文自行决定下一步行动，而不仅是预设脚本。
+交付产物
+- 基本功能与可选挑战的可运行服务 + 控制台。
+- Demo 视频需展示基础功能，若实现 Agent Team，则额外展示团队协作的全过程。
+- README 包含架构图、Skill 开发指南，若包含 Agent Team 则附上协作流程图与设计说明。
+我的maven仓库的地址:D:\mvn\apache-maven-3.8.6\repo
+我的maven配置文件地址:D:\mvn\apache-maven-3.8.6\conf
+MVC架构
+要求创建claude.md文件，并发挥作用
+我的apikey和url去环境变量ANTHROPIC_API_KEY和ANTHROPIC_BASE_URL去找
+github仓库是https://github.com/kaiyue-ai/EchoMind,名叫EchoMind

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.echomind</groupId>
+        <artifactId>echomind</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>echomind-skill</artifactId>
+    <name>EchoMind Skill Runtime</name>
+    <description>Skill registry, classloader isolation, marketplace, and orchestration</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.echomind</groupId>
+            <artifactId>echomind-skill-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.echomind</groupId>
+            <artifactId>echomind-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.echomind</groupId>
+            <artifactId>echomind-memory</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+    </dependencies>
+</project>

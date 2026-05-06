@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.echomind</groupId>
+        <artifactId>echomind</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>echomind-agent-team</artifactId>
+    <name>EchoMind Agent Team</name>
+    <description>Multi-agent collaboration with role-based delegation, consensus, and visualization</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.echomind</groupId>
+            <artifactId>echomind-agent</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.echomind</groupId>
+            <artifactId>echomind-skill-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/echomind-db-dev;DB_CLOSE_DELAY=-1
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: update
+
+echomind:
+  memory:
+    long-term-type: file
+
+logging:
+  level:
+    com.echomind: DEBUG
+    org.springframework.ai: DEBUG

@@ -1,0 +1,126 @@
+services:
+  # ===== MySQL 数据库 =====
+  mysql:
+    image: mysql:8.3
+    container_name: echomind-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: echomind_root
+      MYSQL_DATABASE: echomind
+      MYSQL_USER: echomind
+      MYSQL_PASSWORD: echomind_secret
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3306:3306"
+    networks:
+      - echomind-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pechomind_root"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== Redis 缓存（可选，用于长时记忆） =====
+  redis:
+    image: redis:7-alpine
+    container_name: echomind-cache
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - echomind-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ===== EchoMind 后端 =====
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: echomind-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # LLM API 配置
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # 数据库配置
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/echomind?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8
+      SPRING_DATASOURCE_USERNAME: echomind
+      SPRING_DATASOURCE_PASSWORD: echomind_secret
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.MySQLDialect
+      # Redis 配置
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      # EchoMind 配置
+      ECHOMIND_MEMORY_LONG_TERM_TYPE: redis
+      ECHOMIND_SKILL_AUTO_LOAD_PATH: /app/skills/
+      ECHOMIND_SKILL_MARKETPLACE_DIR: /app/data/marketplace/
+      # JVM 配置
+      JAVA_OPTS: "-Xms512m -Xmx1024m"
+    ports:
+      - "8080:8080"
+    volumes:
+      - echomind_data:/app/data
+    networks:
+      - echomind-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # ===== EchoMind 前端（Vue 3） =====
+  frontend:
+    build:
+      context: ./echomind-web
+      dockerfile: Dockerfile
+    container_name: echomind-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    networks:
+      - echomind-network
+
+  # ===== Portainer（可选，容器管理） =====
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: echomind-portainer
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    ports:
+      - "9443:9443"
+    networks:
+      - echomind-network
+    profiles:
+      - management
+
+volumes:
+  mysql_data:
+  redis_data:
+  echomind_data:
+  portainer_data:
+
+networks:
+  echomind-network:
+    driver: bridge
