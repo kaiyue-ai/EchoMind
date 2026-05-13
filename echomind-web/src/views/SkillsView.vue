@@ -1,92 +1,101 @@
 <template>
-  <div class="page-container">
-    <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
+  <div class="workspace-page">
+    <header class="workspace-header">
       <div>
-        <h2>Skill 市场</h2>
-        <p>管理 Agent 技能：上传、启用、禁用</p>
+        <span class="eyebrow">Capabilities</span>
+        <h1>Skill 市场</h1>
       </div>
-      <el-upload :before-upload="uploadSkill" :show-file-list="false" accept=".jar">
-        <el-button type="primary">上传 Skill JAR</el-button>
-      </el-upload>
-    </div>
+      <div class="workspace-header-actions">
+        <el-button :loading="loading" @click="skillStore.loadSkills()">刷新</el-button>
+        <el-upload :before-upload="uploadSkill" :show-file-list="false" accept=".jar">
+          <el-button type="primary" :loading="uploading">上传 Skill JAR</el-button>
+        </el-upload>
+      </div>
+    </header>
 
-    <div style="display: flex; gap: 12px; margin-bottom: 20px;">
-      <div class="stat-card" style="flex: 1; text-align: center;">
-        <div style="font-size: 28px; font-weight: 700; color: #e4e4e7;">{{ skills.length }}</div>
-        <div style="font-size: 13px; color: #71717a;">已安装</div>
-      </div>
-      <div class="stat-card" style="flex: 1; text-align: center;">
-        <div style="font-size: 28px; font-weight: 700; color: #22c55e;">{{ enabledCount }}</div>
-        <div style="font-size: 13px; color: #71717a;">已启用</div>
-      </div>
-      <div class="stat-card" style="flex: 1; text-align: center;">
-        <div style="font-size: 28px; font-weight: 700; color: #71717a;">{{ disabledCount }}</div>
-        <div style="font-size: 13px; color: #71717a;">已禁用</div>
-      </div>
-    </div>
+    <el-alert v-if="error" :title="error" type="error" show-icon class="page-alert">
+      <template #default>
+        <el-button text size="small" @click="skillStore.loadSkills()">重试</el-button>
+      </template>
+    </el-alert>
 
-    <div class="card-grid" style="flex: 1; overflow-y: auto;">
-      <div v-for="skill in skills" :key="skill.skillId" class="stat-card skill-card">
-        <div class="skill-status">
-          <el-tag :type="skill.state === 'ENABLED' ? 'success' : 'info'" size="small" effect="dark">
+    <section class="metric-strip">
+      <div class="metric-card">
+        <span>已安装</span>
+        <strong>{{ skills.length }}</strong>
+      </div>
+      <div class="metric-card">
+        <span>已启用</span>
+        <strong>{{ enabledCount }}</strong>
+      </div>
+      <div class="metric-card">
+        <span>未启用</span>
+        <strong>{{ disabledCount }}</strong>
+      </div>
+    </section>
+
+    <div v-loading="loading" class="resource-grid">
+      <ResourceCard v-for="skill in skills" :key="skill.skillId" :meta="`v${skill.metadata?.version || '-'}`">
+        <template #title>{{ skill.metadata?.name || skill.skillId }}</template>
+        <template #actions>
+          <StatusBadge :tone="skill.state === 'ENABLED' ? 'success' : 'neutral'">
             {{ skill.state === 'ENABLED' ? '启用' : skill.state }}
-          </el-tag>
+          </StatusBadge>
+        </template>
+        <p class="resource-desc">{{ skill.metadata?.description || '暂无说明' }}</p>
+        <div class="tag-row">
+          <el-tag v-for="tag in skill.metadata?.tags || []" :key="tag" size="small" effect="plain">{{ tag }}</el-tag>
         </div>
-
-        <div class="skill-name">{{ skill.metadata?.name || skill.skillId }}</div>
-        <div class="skill-version">v{{ skill.metadata?.version }}</div>
-        <div class="skill-desc">{{ skill.metadata?.description }}</div>
-
-        <div class="skill-tags">
-          <el-tag v-for="tag in skill.metadata?.tags || []" :key="tag" size="small" type="info" effect="plain">
-            {{ tag }}
-          </el-tag>
+        <div class="detail-list">
+          <span>ID: {{ skill.skillId }}</span>
+          <span>作者: {{ skill.metadata?.author || 'Unknown' }}</span>
         </div>
-
-        <div style="margin-top: 8px; font-size: 11px; color: #71717a;">
-          {{ skill.metadata?.author || 'Unknown' }}
-        </div>
-
-        <div style="margin-top: 12px; display: flex; gap: 8px;">
-          <el-button v-if="skill.state === 'DISABLED' || skill.state === 'LOADED'"
-                     size="small" type="success" @click="toggleSkill(skill, true)">
+        <template #footer>
+          <el-button
+            v-if="skill.state === 'DISABLED' || skill.state === 'LOADED'"
+            size="small"
+            type="success"
+            :loading="mutatingId === skill.skillId"
+            @click="toggleSkill(skill, true)"
+          >
             启用
           </el-button>
-          <el-button v-if="skill.state === 'ENABLED'"
-                     size="small" type="warning" @click="toggleSkill(skill, false)">
+          <el-button
+            v-if="skill.state === 'ENABLED'"
+            size="small"
+            type="warning"
+            :loading="mutatingId === skill.skillId"
+            @click="toggleSkill(skill, false)"
+          >
             禁用
           </el-button>
-          <el-button size="small" type="danger" @click="deleteSkill(skill)" text>
+          <el-button size="small" type="danger" text :loading="mutatingId === skill.skillId" @click="deleteSkill(skill)">
             删除
           </el-button>
-        </div>
-      </div>
+        </template>
+      </ResourceCard>
+      <el-empty v-if="!loading && skills.length === 0" description="暂无 Skill" />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { Upload } from '@element-plus/icons-vue'
+import { onMounted } from 'vue'
+import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import api from '../api'
+import ResourceCard from '../components/workbench/ResourceCard.vue'
+import StatusBadge from '../components/workbench/StatusBadge.vue'
+import { useSkillStore } from '../stores/skills'
 
-const skills = ref([])
+const skillStore = useSkillStore()
+const { skills, loading, uploading, mutatingId, error, enabledCount, disabledCount } = storeToRefs(skillStore)
 
-const enabledCount = computed(() => skills.value.filter(s => s.state === 'ENABLED').length)
-const disabledCount = computed(() => skills.value.filter(s => s.state !== 'ENABLED').length)
-
-onMounted(() => loadSkills())
-
-async function loadSkills() {
-  try { skills.value = await api.skills.list() } catch (e) { /* ignore */ }
-}
+onMounted(() => skillStore.loadSkills())
 
 async function uploadSkill(file) {
   try {
-    await api.skills.upload(file)
+    await skillStore.uploadSkill(file)
     ElMessage.success('Skill 上传成功: ' + file.name)
-    await loadSkills()
   } catch (e) {
     ElMessage.error('上传失败: ' + (e.response?.data?.error || e.message))
   }
@@ -95,19 +104,22 @@ async function uploadSkill(file) {
 
 async function toggleSkill(skill, enable) {
   try {
-    if (enable) { await api.skills.enable(skill.skillId) }
-    else { await api.skills.disable(skill.skillId) }
+    await skillStore.setEnabled(skill, enable)
     ElMessage.success(enable ? '已启用' : '已禁用')
-    await loadSkills()
-  } catch (e) { ElMessage.error('操作失败') }
+  } catch (e) {
+    ElMessage.error('操作失败: ' + (e.response?.data?.error || e.message))
+  }
 }
 
 async function deleteSkill(skill) {
   try {
     await ElMessageBox.confirm('确定要删除该 Skill 吗？', '确认删除', { type: 'warning' })
-    await api.skills.delete(skill.skillId)
+    await skillStore.deleteSkill(skill)
     ElMessage.success('已删除')
-    await loadSkills()
-  } catch (e) { /* 取消 */ }
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error('删除失败: ' + (e.response?.data?.error || e.message))
+    }
+  }
 }
 </script>

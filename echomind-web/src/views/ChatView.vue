@@ -1,143 +1,274 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>智能对话</h2>
-      <p>与 AI Agent 对话，支持多模型切换和 Skill 调用</p>
-    </div>
-
-    <div style="display: flex; gap: 16px; flex: 1; overflow: hidden;">
-      <div style="flex: 1; display: flex; flex-direction: column;">
-        <div class="chat-container">
-          <div class="chat-messages" ref="msgContainer">
-            <div v-if="messages.length === 0" style="text-align: center; color: #71717a; margin-top: 80px;">
-              <div style="font-size: 48px; margin-bottom: 16px;">🧠</div>
-              <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px; color: #a1a1aa;">欢迎使用 EchoMind</div>
-              <div style="font-size: 14px;">在下方输入消息，AI Agent 将为您服务</div>
-            </div>
-
-            <div v-for="(msg, i) in messages" :key="i"
-                 :class="['message-bubble', 'message-' + msg.role]">
-              <div v-if="msg.role === 'assistant'" v-html="renderMarkdown(msg.content)"></div>
-              <div v-else>{{ msg.content }}</div>
-              <div v-if="msg.skillResults?.length" style="margin-top: 8px; font-size: 12px; opacity: 0.8;">
-                Skills: {{ msg.skillResults.join(', ') }}
-              </div>
-            </div>
-
-            <div v-if="loading" class="message-bubble message-assistant">
-              思考中...
-            </div>
-          </div>
-
-          <div class="chat-input-area">
-            <el-input
-              v-model="input"
-              type="textarea"
-              :rows="2"
-              placeholder="输入消息，Enter 发送，Shift+Enter 换行..."
-              @keydown.enter.exact="sendMessage"
-              :disabled="loading"
-              resize="none"
-            />
-            <el-button type="primary" @click="sendMessage"
-                       :loading="loading" :disabled="!input.trim()">
-              发送
-            </el-button>
-          </div>
+  <div class="chat-workspace">
+    <section class="chat-stage">
+      <header class="workspace-header">
+        <div>
+          <span class="eyebrow">EchoMind Chat</span>
+          <h1>智能对话</h1>
         </div>
-      </div>
-
-      <div style="width: 280px; display: flex; flex-direction: column; gap: 12px; flex-shrink: 0;">
-        <div class="stat-card">
-          <div style="font-weight: 600; margin-bottom: 10px; font-size: 14px;">模型选择</div>
-          <el-select v-model="selectedModel" placeholder="选择模型" size="small" style="width: 100%">
-            <el-option v-for="m in models" :key="m.providerId+':'+m.modelName"
-                       :label="m.providerId + '/' + m.modelName"
-                       :value="m.providerId + ':' + m.modelName" />
-          </el-select>
+        <div class="workspace-header-actions">
+          <el-button text title="新建会话" @click="newSession">
+            <el-icon><Plus /></el-icon>
+            新建
+          </el-button>
+          <el-button text :title="inspectorOpen ? '隐藏上下文' : '显示上下文'" @click="uiStore.toggleInspector()">
+            <el-icon><Setting /></el-icon>
+          </el-button>
         </div>
+      </header>
 
-        <div class="stat-card">
-          <div style="font-weight: 600; margin-bottom: 10px; font-size: 14px;">Agent</div>
-          <el-select v-model="selectedAgent" placeholder="选择Agent" size="small" style="width: 100%">
-            <el-option v-for="a in agents" :key="a.agentId"
-                       :label="a.name" :value="a.agentId" />
-          </el-select>
-        </div>
+      <MessageList ref="messageListRef" :messages="messages" />
+      <ChatComposer
+        v-model="input"
+        :attachments="attachments"
+        :loading="loading"
+        :uploading="uploadingImage"
+        @send="sendMessage"
+        @select-image="uploadImage"
+        @remove-attachment="removeAttachment"
+      />
+    </section>
 
-        <div class="stat-card">
-          <div style="font-weight: 600; margin-bottom: 10px; font-size: 14px;">会话</div>
-          <div style="font-size: 12px; color: #71717a; word-break: break-all;">
-            <div>ID: {{ sessionId?.substring(0, 8) }}...</div>
-            <div style="margin-top: 4px;">消息数: {{ messages.length }}</div>
-          </div>
-          <el-button size="small" text @click="newSession" style="margin-top: 8px; color: #a1a1aa;">新建会话</el-button>
-        </div>
-      </div>
-    </div>
+    <InspectorPanel
+      v-if="inspectorOpen"
+      v-model:selected-model="selectedModel"
+      v-model:selected-agent="selectedAgent"
+      :models="models"
+      :agents="agents"
+      :skills="skills"
+      :servers="servers"
+      :selected-model-supports-vision="selectedModelSupportsVision"
+      :has-attachments="attachments.length > 0"
+      :session-id="sessionId"
+      :message-count="messages.length"
+      @new-session="newSession"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
-import { Promotion } from '@element-plus/icons-vue'
-import { marked } from 'marked'
+import { computed, inject, nextTick, onActivated, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
+import { ElMessage } from 'element-plus'
+import { Plus, Setting } from '@element-plus/icons-vue'
 import api from '../api'
+import ChatComposer from '../components/chat/ChatComposer.vue'
+import InspectorPanel from '../components/chat/InspectorPanel.vue'
+import MessageList from '../components/chat/MessageList.vue'
+import { useAgentStore } from '../stores/agents'
+import { useChatStore } from '../stores/chat'
+import { useMcpStore } from '../stores/mcp'
+import { useModelStore } from '../stores/models'
+import { useSkillStore } from '../stores/skills'
+import { useUiStore } from '../stores/ui'
 
-const input = ref('')
-const messages = ref([])
-const loading = ref(false)
-const sessionId = ref(null)
-const selectedModel = ref('anthropic:claude-sonnet-4-20250514')
-const selectedAgent = ref('default')
-const models = ref([])
-const agents = ref([])
-const msgContainer = ref(null)
+defineOptions({ name: 'ChatView' })
 
-onMounted(async () => {
-  try {
-    models.value = await api.models.list()
-    agents.value = await api.agents.list()
-  } catch (e) { /* use defaults */ }
+const chatStore = useChatStore()
+const agentStore = useAgentStore()
+const modelStore = useModelStore()
+const skillStore = useSkillStore()
+const mcpStore = useMcpStore()
+const uiStore = useUiStore()
+const route = useRoute()
+const router = useRouter()
+const refreshSessions = inject('refreshSessions', null)
+const messageListRef = ref(null)
+const uploadingImage = ref(false)
+
+const {
+  input,
+  messages,
+  attachments,
+  loading,
+  sessionId,
+  selectedModel,
+  selectedAgent,
+  thinkingMsgIndex
+} = storeToRefs(chatStore)
+const { agents } = storeToRefs(agentStore)
+const { models } = storeToRefs(modelStore)
+const { skills } = storeToRefs(skillStore)
+const { servers } = storeToRefs(mcpStore)
+const { inspectorOpen } = storeToRefs(uiStore)
+
+const fallbackModelId = 'deepseek:deepseek-v4-flash'
+const legacyClaudeModelPrefix = ['anthropic', 'claude'].join(':') + '-'
+
+const selectedModelSpec = computed(() => {
+  const [providerId, modelName] = (selectedModel.value || '').split(':')
+  return models.value.find(model => model.providerId === providerId && model.modelName === modelName)
 })
 
-function renderMarkdown(text) {
-  if (!text) return ''
-  return marked.parse(text)
-}
+const selectedModelSupportsVision = computed(() => supportsVision(selectedModelSpec.value))
 
-async function sendMessage() {
-  const msg = input.value.trim()
-  if (!msg || loading.value) return
-  input.value = ''
+onMounted(async () => {
+  await Promise.allSettled([
+    modelStore.loadModels(),
+    agentStore.loadAgents(),
+    skillStore.loadSkills(),
+    mcpStore.loadMcp()
+  ])
+  ensureSelectedModel()
+  await loadRouteHistory(route.query.sessionId)
+})
 
-  messages.value.push({ role: 'user', content: msg })
-  loading.value = true
+watch(() => route.query.sessionId, async (newSid) => {
+  if (newSid && newSid !== sessionId.value) {
+    sessionId.value = newSid
+    messages.value = []
+    await loadRouteHistory(newSid)
+  }
+})
 
+watch(models, () => ensureSelectedModel(), { immediate: true })
+
+onActivated(() => {
+  nextTick(() => messageListRef.value?.scrollToBottom())
+})
+
+async function loadRouteHistory(sid) {
+  if (!sid || sid === sessionId.value && messages.value.length > 0) return
   try {
-    const res = await api.chat.send(selectedAgent.value, msg, sessionId.value)
-    sessionId.value = res.sessionId
-    messages.value.push({
-      role: 'assistant',
-      content: res.response,
-      skillResults: res.skillResults
-    })
+    chatStore.setHistory(sid, await api.chat.history(sid))
   } catch (e) {
-    messages.value.push({
-      role: 'system',
-      content: '请求失败: ' + (e.response?.data?.error || e.message)
-    })
-  } finally {
-    loading.value = false
-    await nextTick()
-    if (msgContainer.value) {
-      msgContainer.value.scrollTop = msgContainer.value.scrollHeight
-    }
+    /* 会话可能已被清理，保持空状态 */
   }
 }
 
+function sendMessage() {
+  ensureSelectedModel()
+  const msg = input.value.trim()
+  if ((!msg && attachments.value.length === 0) || loading.value) return
+  if (attachments.value.length > 0 && !selectedModelSupportsVision.value) {
+    ElMessage.warning('当前模型不支持多模态图片输入，请先切换到带 VISION 能力的模型')
+    return
+  }
+
+  const outgoingAttachments = attachments.value.map(att => ({ ...att }))
+  input.value = ''
+  attachments.value = []
+  messages.value.push({ role: 'user', content: msg, attachments: outgoingAttachments })
+  loading.value = true
+  thinkingMsgIndex.value = messages.value.length
+  messages.value.push({ role: 'assistant', content: '思考中...' })
+  nextTick(() => messageListRef.value?.scrollToBottom())
+
+  let firstToken = true
+  api.chat.stream(
+    selectedAgent.value,
+    msg || '请理解这张图片。',
+    sessionId.value,
+    selectedModel.value,
+    outgoingAttachments,
+    (token) => {
+      if (firstToken) {
+        messages.value.splice(thinkingMsgIndex.value, 1, { role: 'assistant', content: token })
+        firstToken = false
+      } else {
+        const idx = messages.value.length - 1
+        if (idx >= 0 && messages.value[idx].role === 'assistant') {
+          messages.value[idx] = { ...messages.value[idx], content: messages.value[idx].content + token }
+        }
+      }
+      nextTick(() => messageListRef.value?.scrollToBottom())
+    },
+    () => finishStream(),
+    async (error) => handleStreamError(error, msg, outgoingAttachments),
+    (meta) => {
+      if (meta.sessionId && meta.sessionId !== sessionId.value) {
+        sessionId.value = meta.sessionId
+        router.replace({ path: '/chat', query: { sessionId: meta.sessionId } })
+      }
+    }
+  )
+}
+
+function finishStream() {
+  loading.value = false
+  thinkingMsgIndex.value = -1
+  if (refreshSessions) refreshSessions()
+  nextTick(() => messageListRef.value?.scrollToBottom())
+}
+
+async function handleStreamError(error, msg, outgoingAttachments) {
+  console.error('Stream error, falling back to sync:', error)
+  if (outgoingAttachments.length > 0) {
+    messages.value.splice(thinkingMsgIndex.value, 1, {
+      role: 'system',
+      content: '请求失败: ' + (error.message || '当前模型无法处理图片')
+    })
+    finishStream()
+    return
+  }
+
+  try {
+    const res = await api.chat.sendSync(
+      selectedAgent.value,
+      msg || '请理解这张图片。',
+      sessionId.value,
+      selectedModel.value,
+      outgoingAttachments
+    )
+    sessionId.value = res.sessionId
+    if (res.sessionId) {
+      router.replace({ path: '/chat', query: { sessionId: res.sessionId } })
+    }
+    messages.value.splice(thinkingMsgIndex.value, 1, {
+      role: 'assistant',
+      content: res.response || '(empty response)',
+      skillResults: res.skillResults
+    })
+  } catch (e2) {
+    messages.value.splice(thinkingMsgIndex.value, 1, {
+      role: 'system',
+      content: '请求失败: ' + (e2.response?.data?.error || e2.message)
+    })
+  } finally {
+    finishStream()
+  }
+}
+
+function supportsVision(model) {
+  return Array.isArray(model?.capabilities)
+    && model.capabilities.some(c => String(c).toUpperCase() === 'VISION')
+}
+
+function ensureSelectedModel() {
+  if (!models.value.length) {
+    if (!selectedModel.value || selectedModel.value.startsWith(legacyClaudeModelPrefix)) {
+      selectedModel.value = fallbackModelId
+    }
+    return
+  }
+  const available = models.value.map(model => `${model.providerId}:${model.modelName}`)
+  if (available.includes(selectedModel.value)) return
+
+  const preferred = models.value.find(model => model.providerId === 'deepseek' && model.modelName === 'deepseek-v4-flash')
+  const defaultModel = models.value.find(model => model.isDefault === true || model.default === true)
+  const nextModel = preferred || defaultModel || models.value[0]
+  selectedModel.value = `${nextModel.providerId}:${nextModel.modelName}`
+}
+
+async function uploadImage(file) {
+  uploadingImage.value = true
+  try {
+    const res = await api.storage.uploadImage(file)
+    if (res?.attachment) attachments.value.push(res.attachment)
+  } catch (error) {
+    ElMessage.error(api.parseError(error, '图片上传失败'))
+  } finally {
+    uploadingImage.value = false
+  }
+}
+
+function removeAttachment(att) {
+  attachments.value = attachments.value.filter(item => item !== att)
+}
+
 function newSession() {
-  sessionId.value = null
-  messages.value = []
+  chatStore.resetSession()
+  router.replace({ path: '/chat' })
 }
 </script>
