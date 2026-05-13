@@ -71,7 +71,12 @@ public class WeatherSkill implements Skill {
             ),
             List.of(),
             "EchoMind",
-            List.of("weather", "forecast", "temperature", "天气", "气温", "温度", "预报")
+            List.of("weather", "forecast", "temperature", "天气", "气温", "温度", "预报"),
+            List.of("天气", "查天气", "天气预报", "气温", "温度", "weather", "forecast"),
+            Map.of(
+                "weather", List.of("天气", "天气预报", "气象"),
+                "temperature", List.of("气温", "温度", "多少度")
+            )
         );
     }
 

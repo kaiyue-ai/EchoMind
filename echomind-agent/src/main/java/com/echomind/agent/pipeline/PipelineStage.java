@@ -16,10 +16,11 @@ package com.echomind.agent.pipeline;
  * <p>标准阶段及其顺序：</p>
  * <ol>
  *   <li>{@code order=10} ContextEnrichStage — 上下文丰富（加载历史记忆）</li>
- *   <li>{@code order=20} ToolResolutionStage — 工具/模型解析</li>
- *   <li>{@code order=30} SkillInvocationStage — Skill调用</li>
- *   <li>{@code order=40} ResultAggregationStage — 结果聚合（LLM生成最终响应）</li>
- *   <li>{@code order=50} MemoryPersistStage — 记忆持久化</li>
+ *   <li>{@code order=20} ToolResolutionStage — 解析本轮模型</li>
+ *   <li>{@code order=30} MultimodalGuardStage — 校验模型是否支持图片输入</li>
+ *   <li>{@code order=35} AttachmentPreparationStage — 准备模型可读取的附件 URL</li>
+ *   <li>{@code order=40} ResultAggregationStage — 注册可用工具并调用模型</li>
+ *   <li>{@code order=50} MemoryPersistStage — 写回会话记忆</li>
  * </ol>
  *
  * @author EchoMind Team

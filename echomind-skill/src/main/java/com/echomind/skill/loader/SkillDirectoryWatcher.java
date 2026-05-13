@@ -1,8 +1,8 @@
 package com.echomind.skill.loader;
 
 import com.echomind.skill.registry.SkillRegistry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -40,10 +40,9 @@ import static java.nio.file.StandardWatchEventKinds.*;
  * @see SkillJarLoader
  * @see SkillRegistry
  */
+@Slf4j
+@RequiredArgsConstructor
 public class SkillDirectoryWatcher {
-
-    /** SLF4J日志记录器，用于记录文件监控和加载事件 */
-    private static final Logger log = LoggerFactory.getLogger(SkillDirectoryWatcher.class);
 
     /** 被监控的目录路径，JAR文件的创建、修改和删除均在此目录下被监听 */
     private final Path watchDir;
@@ -67,16 +66,21 @@ public class SkillDirectoryWatcher {
     private Thread watcherThread;
 
     /**
-     * 构造目录监视器。
+     * 只扫描并加载目录里已有的 JAR，不启动后台监听线程。
      *
-     * @param watchDir  要监控的目录路径
-     * @param jarLoader JAR文件加载器
-     * @param registry  Skill注册中心
+     * <p>生产环境通常关闭热重载，但仍需要启动时加载内置 Skill。
+     * 这个方法把“首次加载”和“后续监听”拆开，避免 hotReload=false 时 Skill 一个都不进注册中心。</p>
      */
-    public SkillDirectoryWatcher(Path watchDir, SkillJarLoader jarLoader, SkillRegistry registry) {
-        this.watchDir = watchDir;
-        this.jarLoader = jarLoader;
-        this.registry = registry;
+    public void scanExistingJars() {
+        try {
+            Files.createDirectories(watchDir);
+            try (var stream = Files.list(watchDir)) {
+                stream.filter(f -> f.toString().endsWith(".jar"))
+                    .forEach(this::loadJar);
+            }
+        } catch (IOException e) {
+            log.error("Failed to scan skill directory", e);
+        }
     }
 
     /**
@@ -91,21 +95,11 @@ public class SkillDirectoryWatcher {
      * </ol>
      */
     public void start() {
+        scanExistingJars();
         running = true;
         watcherThread = new Thread(this::watchLoop, "skill-dir-watcher");
         watcherThread.setDaemon(true);
         watcherThread.start();
-
-        // 加载目录中已有的JAR文件
-        try {
-            Files.createDirectories(watchDir);
-            try (var stream = Files.list(watchDir)) {
-                stream.filter(f -> f.toString().endsWith(".jar"))
-                    .forEach(this::loadJar);
-            }
-        } catch (IOException e) {
-            log.error("Failed to scan skill directory", e);
-        }
 
         log.info("Skill directory watcher started: {}", watchDir);
     }

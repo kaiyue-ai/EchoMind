@@ -26,7 +26,8 @@
         <module>skills/skill-weather</module>
         <module>skills/skill-calculator</module>
         <module>skills/skill-websearch</module>
-        <module>skills/skill-filesystem</module>
+        <module>skills/skill-markdown-code</module>
+        <module>skills/skill-date-query</module>
     </modules>
 
     <properties>
@@ -45,6 +46,9 @@
         <h2.version>2.3.232</h2.version>
         <mysql.version>8.3.0</mysql.version>
         <lombok.version>1.18.34</lombok.version>
+        <knife4j.version>4.5.0</knife4j.version>
+        <aliyun-oss.version>3.18.1</aliyun-oss.version>
+        <pdfbox.version>2.0.31</pdfbox.version>
 
         <maven-surefire-plugin.version>3.3.1</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.3.1</maven-failsafe-plugin.version>
@@ -127,6 +131,11 @@
 
             <!-- External -->
             <dependency>
+                <groupId>com.github.xiaoymin</groupId>
+                <artifactId>knife4j-openapi3-jakarta-spring-boot-starter</artifactId>
+                <version>${knife4j.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>com.squareup.okhttp3</groupId>
                 <artifactId>okhttp</artifactId>
                 <version>${okhttp.version}</version>
@@ -145,6 +154,16 @@
                 <groupId>com.mysql</groupId>
                 <artifactId>mysql-connector-j</artifactId>
                 <version>${mysql.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.aliyun.oss</groupId>
+                <artifactId>aliyun-sdk-oss</artifactId>
+                <version>${aliyun-oss.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>pdfbox</artifactId>
+                <version>${pdfbox.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

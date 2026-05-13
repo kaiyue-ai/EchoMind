@@ -7,8 +7,8 @@ import com.echomind.agent.team.messaging.TeamMessageBus;
 import com.echomind.agent.team.messaging.TeamMessageType;
 import com.echomind.agent.team.visualization.TeamTraceRecorder;
 import com.echomind.agent.team.visualization.MermaidGenerator;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -18,13 +18,13 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>协调器按照 Planner → Executor → Reviewer 的三阶段范式驱动团队协作：
  * <ol>
- *   <li><b>Phase 1 — 规划（Planner）</b>：
+ *   <li><b>第一阶段：规划（Planner）</b>：
  *       向 PLANNER 角色发送任务描述，由 LLM 分解为 2-4 个子任务。
  *       子任务通过 {@link #parseSubtasks} 从 LLM 响应中解析提取。</li>
- *   <li><b>Phase 2 — 执行（Executor）</b>：
+ *   <li><b>第二阶段：执行（Executor）</b>：
  *       遍历每个子任务，分别委托 EXECUTOR 角色执行。
  *       若无 EXECUTOR，回退使用 PLANNER。</li>
- *   <li><b>Phase 3 — 审阅（Reviewer）</b>：
+ *   <li><b>第三阶段：审阅（Reviewer）</b>：
  *       REVIEWER 角色评估所有执行结果并生成整合的最终输出。
  *       若无 REVIEWER，直接拼接所有步骤结果。</li>
  * </ol>
@@ -37,10 +37,9 @@ import java.util.concurrent.CompletableFuture;
  *   <li>maxRounds 参数预留用于未来多轮迭代场景（当前版本未启用）。</li>
  * </ul>
  */
+@Slf4j
+@RequiredArgsConstructor
 public class TeamCoordinator {
-
-    /** 日志记录器 */
-    private static final Logger log = LoggerFactory.getLogger(TeamCoordinator.class);
 
     /** Agent 编排器，每个角色 Agent 通过它执行任务 */
     private final AgentOrchestrator orchestrator;
@@ -50,22 +49,6 @@ public class TeamCoordinator {
     private final TeamTraceRecorder traceRecorder;
     /** 最大协作轮次（当前版本预留） */
     private final int maxRounds;
-
-    /**
-     * 创建团队协调器。
-     *
-     * @param orchestrator  Agent 编排器
-     * @param messageBus    团队消息总线
-     * @param traceRecorder 团队跟踪记录器
-     * @param maxRounds     最大协作轮次
-     */
-    public TeamCoordinator(AgentOrchestrator orchestrator, TeamMessageBus messageBus,
-                           TeamTraceRecorder traceRecorder, int maxRounds) {
-        this.orchestrator = orchestrator;
-        this.messageBus = messageBus;
-        this.traceRecorder = traceRecorder;
-        this.maxRounds = maxRounds;
-    }
 
     /**
      * 执行团队协作任务。
@@ -81,7 +64,7 @@ public class TeamCoordinator {
         traceRecorder.startSession(sessionId, team.getTeamId(), task);
         traceRecorder.recordEvent("task_start", "Task assigned to team " + team.getName());
 
-        // Phase 1: Planner 分解任务
+        // 第一阶段：Planner 分解任务
         AgentTeam.TeamRole plannerRole = AgentTeam.TeamRole.PLANNER;
         var planner = team.getAgent(plannerRole);
         if (planner == null) {
@@ -99,7 +82,7 @@ public class TeamCoordinator {
         messageBus.publish(new TeamMessage("team-coordinator", "all",
             TeamMessageType.TASK_ASSIGN, "Task decomposed into subtasks"));
 
-        // Phase 2: Executor 逐一处理子任务
+        // 第二阶段：Executor 逐一处理子任务
         List<String> stepResults = new ArrayList<>();
         var executor = team.getAgent(AgentTeam.TeamRole.EXECUTOR);
         if (executor == null) {
@@ -122,7 +105,7 @@ public class TeamCoordinator {
             traceRecorder.recordEvent("step_complete", "Completed subtask " + (i + 1));
         }
 
-        // Phase 3: Reviewer 评估结果
+        // 第三阶段：Reviewer 评估结果
         var reviewer = team.getAgent(AgentTeam.TeamRole.REVIEWER);
         if (reviewer != null) {
             traceRecorder.recordEvent("review_start", "Reviewer evaluating results");

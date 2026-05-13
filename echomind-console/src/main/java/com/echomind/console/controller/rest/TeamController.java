@@ -1,92 +1,57 @@
 package com.echomind.console.controller.rest;
 
-import com.echomind.agent.Agent;
-import com.echomind.agent.AgentFactory;
-import com.echomind.agent.team.AgentTeam;
-import com.echomind.agent.team.TeamCoordinator;
-import com.echomind.agent.team.TeamResult;
-import com.echomind.agent.team.messaging.TeamMessageBus;
+import com.echomind.console.dto.TeamCreateRequest;
+import com.echomind.console.dto.TeamExecuteRequest;
+import com.echomind.console.dto.TeamResumeRequest;
+import com.echomind.console.dto.TeamRunCreateRequest;
+import com.echomind.console.dto.TeamRunView;
+import com.echomind.console.dto.TeamView;
+import com.echomind.console.service.TeamApplicationService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Agent Team协作控制器。
- * 管理多Agent团队的创建、任务执行和协作流程可视化。
+ * 管理多Agent团队的创建、任务执行和协作流程可视化入口。
+ *
+ * <p>团队当前仍是运行时对象，Controller不直接保存团队实例，也不直接调用AgentFactory。
+ * 所有团队编排统一放在{@link TeamApplicationService}，便于后续替换成数据库持久化。</p>
  */
 @RestController
 @RequestMapping("/api/teams")
+@RequiredArgsConstructor
 public class TeamController {
 
-    private final TeamCoordinator teamCoordinator;
-    private final TeamMessageBus messageBus;
-    private final AgentFactory agentFactory;
-
-    /** 存储活跃的团队实例 */
-    private final Map<String, AgentTeam> activeTeams = new ConcurrentHashMap<>();
-
-    public TeamController(TeamCoordinator teamCoordinator, TeamMessageBus messageBus,
-                          AgentFactory agentFactory) {
-        this.teamCoordinator = teamCoordinator;
-        this.messageBus = messageBus;
-        this.agentFactory = agentFactory;
-    }
+    private final TeamApplicationService teamService;
 
     /**
      * 列出所有活跃的Agent团队。
      */
     @GetMapping
-    public ResponseEntity<List<Map<String, Object>>> listTeams() {
-        List<Map<String, Object>> teams = activeTeams.entrySet().stream()
-            .map(e -> Map.<String, Object>of(
-                "teamId", e.getKey(),
-                "name", e.getValue().getName(),
-                "roles", e.getValue().getRoles().stream().map(Enum::name).toList()
-            ))
-            .toList();
-        return ResponseEntity.ok(teams);
+    public ResponseEntity<List<TeamView>> listTeams() {
+        return ResponseEntity.ok(teamService.listTeams());
     }
 
     /**
      * 创建一个新的Agent团队。
-     * 需要指定Planner、Executor、Reviewer三个角色的Agent ID。
+     * 需要指定Planner、Executor，可选指定Reviewer角色的Agent ID。
      */
     @PostMapping
-    public ResponseEntity<Map<String, Object>> createTeam(@RequestBody Map<String, String> body) {
-        String teamName = body.getOrDefault("name", "Team-" + UUID.randomUUID().toString().substring(0, 8));
-        String plannerId = body.get("plannerId");
-        String executorId = body.get("executorId");
-        String reviewerId = body.get("reviewerId");
+    public ResponseEntity<?> createTeam(@RequestBody TeamCreateRequest request) {
+        return ResponseEntity.ok(teamService.createTeam(request));
+    }
 
-        Agent planner = agentFactory.get(plannerId != null ? plannerId : "default");
-        Agent executor = agentFactory.get(executorId != null ? executorId : "default");
-        Agent reviewer = agentFactory.get(reviewerId);
-
-        if (planner == null || executor == null) {
-            return ResponseEntity.badRequest()
-                .body(Map.of("error", "Planner and Executor agents must exist"));
-        }
-
-        String teamId = UUID.randomUUID().toString();
-        Map<AgentTeam.TeamRole, Agent> roleMap = new java.util.HashMap<>();
-        roleMap.put(AgentTeam.TeamRole.PLANNER, planner);
-        roleMap.put(AgentTeam.TeamRole.EXECUTOR, executor);
-        if (reviewer != null) {
-            roleMap.put(AgentTeam.TeamRole.REVIEWER, reviewer);
-        }
-
-        AgentTeam team = new AgentTeam(teamId, teamName, roleMap);
-        activeTeams.put(teamId, team);
-
-        return ResponseEntity.ok(Map.of(
-            "teamId", teamId,
-            "name", teamName,
-            "roles", team.getRoles().stream().map(Enum::name).toList()
-        ));
+    /**
+     * 硬删除团队及其 Run、Step、Event 黑板记录。
+     */
+    @DeleteMapping("/{teamId}")
+    public ResponseEntity<Void> deleteTeam(@PathVariable String teamId) {
+        teamService.deleteTeam(teamId);
+        return ResponseEntity.noContent().build();
     }
 
     /**
@@ -94,26 +59,45 @@ public class TeamController {
      * 团队协作流程：Planner分解 → Executor执行 → Reviewer评审 → 汇总输出
      */
     @PostMapping("/{teamId}/execute")
-    public ResponseEntity<Map<String, Object>> executeTask(@PathVariable String teamId,
-                                                            @RequestBody Map<String, String> body) {
-        AgentTeam team = activeTeams.get(teamId);
-        if (team == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Team not found: " + teamId));
-        }
+    public ResponseEntity<?> executeTask(@PathVariable String teamId,
+                                         @RequestBody TeamExecuteRequest request) {
+        return ResponseEntity.ok(teamService.executeTask(teamId, request));
+    }
 
-        String task = body.get("task");
-        if (task == null || task.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "task is required"));
-        }
+    /**
+     * 创建一次异步团队协作 Run。
+     */
+    @PostMapping("/{teamId}/runs")
+    public ResponseEntity<TeamRunView> createRun(@PathVariable String teamId,
+                                                 @RequestBody TeamRunCreateRequest request) {
+        return ResponseEntity.ok(teamService.createRun(teamId, request));
+    }
 
-        TeamResult result = teamCoordinator.execute(team, task);
-        return ResponseEntity.ok(Map.of(
-            "teamId", teamId,
-            "status", result.status(),
-            "finalOutput", result.finalOutput(),
-            "stepResults", result.stepResults(),
-            "mermaidDiagram", result.mermaidDiagram()
-        ));
+    /**
+     * 查询团队最近的协作 Run。
+     */
+    @GetMapping("/{teamId}/runs")
+    public ResponseEntity<List<TeamRunView>> listRuns(@PathVariable String teamId) {
+        return ResponseEntity.ok(teamService.listRuns(teamId));
+    }
+
+    /**
+     * 查询一次 Run 的黑板状态、Step、Event、Mermaid 和最终报告。
+     */
+    @GetMapping("/{teamId}/runs/{runId}")
+    public ResponseEntity<TeamRunView> getRun(@PathVariable String teamId,
+                                              @PathVariable String runId) {
+        return ResponseEntity.ok(teamService.getRun(teamId, runId));
+    }
+
+    /**
+     * Reviewer 要求澄清后，用户提交补充信息并继续 Run。
+     */
+    @PostMapping("/{teamId}/runs/{runId}/resume")
+    public ResponseEntity<TeamRunView> resumeRun(@PathVariable String teamId,
+                                                 @PathVariable String runId,
+                                                 @RequestBody TeamResumeRequest request) {
+        return ResponseEntity.ok(teamService.resumeRun(teamId, runId, request));
     }
 
     /**
@@ -121,8 +105,6 @@ public class TeamController {
      */
     @GetMapping("/message-bus/pending")
     public ResponseEntity<Map<String, Object>> getPendingMessages() {
-        return ResponseEntity.ok(Map.of(
-            "pendingCount", messageBus.pendingCount()
-        ));
+        return ResponseEntity.ok(teamService.pendingMessages());
     }
 }

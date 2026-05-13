@@ -1,170 +1,86 @@
-# CLAUDE.md — EchoMind AI Agent Platform
+# CLAUDE.md - EchoMind Claude 入口
 
-## Project Overview
-EchoMind is a modular AI Agent platform built on Spring Boot 3.3 / Java 17, providing:
-- Multi-model LLM abstraction with runtime switching (adapted Spring AI)
-- Plugin-based Skill marketplace with classloader isolation
-- MCP protocol compatibility for external tool discovery
-- Session memory (short-term window + long-term persistence)
-- Optional multi-Agent Team collaboration with role-based workflow
+本文件是 Claude / Claude Code 进入 EchoMind 项目时的轻量上下文。详细工程规则不要在这里重复维护，统一看 `AGENTS.md` 和 `docs/harness`。
 
-## Build Commands
-```bash
-# Full project build (skip tests)
-mvn -f D:\claudeWorkSpace\ai-agent\pom.xml clean package -DskipTests
+## 必读文件
 
-# Full project build with tests
-mvn -f D:\claudeWorkSpace\ai-agent\pom.xml clean verify
+1. `AGENTS.md`：最高优先级规则和常用命令。
+2. `docs/harness/AGENTS.md`：项目阅读 harness。
+3. `docs/harness/src/api/ARCHITECTURE.md`：API 和应用服务边界。
+4. `docs/harness/src/db/CONSTRAINTS.md`：数据库和存储硬约束。
+5. `docs/harness/PROGRESS.md`：当前进度、已知问题和下一步建议。
 
-# Build single module
-mvn -f D:\claudeWorkSpace\ai-agent\echomind-common\pom.xml clean install
+## 项目速览
 
-# Run the application
-mvn -f D:\claudeWorkSpace\ai-agent\echomind-app\pom.xml spring-boot:run
+EchoMind 是 Java 17 / Spring Boot 3.3 + Vue 3 的 AI Agent 平台。
 
-# Run tests for a module
-mvn -f D:\claudeWorkSpace\ai-agent\echomind-llm\pom.xml test
+核心模块：
 
-# Maven settings override (if needed)
-mvn -s D:\mvn\apache-maven-3.8.6\conf\settings.xml clean package
+- `echomind-common`：公共模型、异常、Schema 校验。
+- `echomind-skill-api`：Skill SPI。
+- `echomind-skill`：Skill 加载、注册、热加载、市场状态。
+- `echomind-llm`：模型 Provider 和模型路由。
+- `echomind-memory`：会话记忆、Redis Stack 向量检索、Agent 知识库。
+- `echomind-mcp`：外部 MCP 客户端和 stdio 通信。
+- `echomind-agent`：单 Agent 执行、Pipeline、能力注册表。
+- `echomind-agent-team`：多 Agent 团队协作编排。
+- `echomind-console`：REST Controller、Application Service、CLI。
+- `echomind-boot`：Spring Boot 自动装配。
+- `echomind-app`：应用入口和配置文件。
+- `echomind-web`：Vue 3 前端。
+- `skills/*`：内置 Skill 示例。
+
+## 当前架构边界
+
+```text
+Controller / CLI
+  -> Application Service
+  -> Runtime Orchestrator / Pipeline / CapabilityRegistry
+  -> Repository / Memory / LLM Provider / Skill / MCP
 ```
 
-## Module Map
-```
-pom.xml                          Parent POM, dependency management, 12 sub-modules
-echomind-common/                 Shared models (AgentMessage, SkillMetadata), exceptions, JSON Schema validation
-echomind-skill-api/              SPI: Skill interface — THE extension contract. No dependencies.
-echomind-llm/                    DynamicModelRouter, ProviderRegistry, AnthropicProvider, OpenAIProvider
-echomind-memory/                 ConversationWindow (Deque), FileLongTermStore, RedisLongTermStore
-echomind-mcp/                    MCPServer, MCPClient, JsonRpcMessage (2024-11-05 spec)
-echomind-skill/                  SkillRegistry, SkillClassLoader, SkillJarLoader, SkillDirectoryWatcher
-echomind-agent/                  Agent, AgentFactory, ExecutionPipeline (5 stages), AgentOrchestrator
-echomind-agent-team/             AgentTeam, TeamCoordinator, TeamMessageBus, ConsensusEngine, MermaidGenerator
-echomind-console/                REST controllers, Thymeleaf web UI, Spring Shell CLI
-echomind-boot/                   Spring Boot auto-configuration, EchoMindProperties
-echomind-app/                    @SpringBootApplication entry point, application.yml
-skills/skill-weather/            Weather Skill (OpenWeatherMap API or mock)
-skills/skill-calculator/         Calculator Skill (exp4j)
-skills/skill-websearch/          Web Search Skill (DuckDuckGo API)
-skills/skill-filesystem/         MCP File System Skill (MCP + standard Skill dual-mode)
+关键规则：
+
+- Controller 不直接拼业务流程。
+- Application Service 负责校验、持久化顺序和运行时同步。
+- `AgentFactory`、`SkillRegistry`、`CapabilityRegistry` 只是运行时索引。
+- MySQL 保存业务事实；Redis Stack 保存缓存和可重建向量索引。
+- 主项目只接入外部 MCP Server，不暴露自身 MCP Server。
+- 对话记忆按 `sessionId` 隔离。
+
+## 常用命令
+
+```powershell
+cd D:\claudeWorkSpace\ai-agent
+mvn.cmd -q -DskipTests compile
+mvn.cmd -q test
 ```
 
-## Dependency Direction (strict — no cycles)
-```
-echomind-skill-api  ←──  (zero deps, pure SPI)
-echomind-common     ←──  (zero deps)
-echomind-llm        ←──  common + Spring AI
-echomind-memory     ←──  common
-echomind-mcp        ←──  common
-echomind-skill      ←──  skill-api, common, memory
-echomind-agent      ←──  skill-api, common, llm, memory, mcp
-echomind-agent-team ←──  agent, skill-api
-echomind-console    ←──  agent, agent-team(optional), skill, mcp
-echomind-boot       ←──  console, agent, skill, llm, memory, mcp
-echomind-app        ←──  boot
-skills/*            ←──  skill-api (provided scope, isolated classloader)
+```powershell
+cd D:\claudeWorkSpace\ai-agent\echomind-web
+npm.cmd run build
 ```
 
-## Module Descriptions
-- **echomind-common**: Shared models (`AgentMessage`, `SkillMetadata`, `SkillState`, `ToolCall`), JSON Schema validation utilities, and the exception hierarchy rooted at `EchoMindException`. Zero external dependencies beyond Jackson and SLF4J.
-- **echomind-llm**: "Adapted Spring AI" — wraps Spring AI's `ChatModel` with a `DynamicModelRouter` that selects providers at runtime based on session context. Providers implement a unified `ModelProvider` interface. Also contains the AOP observer (`@Observable` + `AgentInvocationObserver`) for agent call instrumentation.
-- **echomind-memory**: Short-term memory via `ConversationWindow` (bounded `Deque<AgentMessage>`), long-term persistence via `LongTermMemoryStore` interface with `FileLongTermStore` (JSON files) and optional `RedisLongTermStore`. `AutoSummarizer` compresses old windows via LLM.
-- **echomind-mcp**: MCP 2024-11-05 protocol implementation. `MCPServer` registers tools and handles JSON-RPC over stdio/HTTP. `MCPClient` discovers and invokes remote MCP tools. `MCPToolAdapter` bridges MCP tools into the Skill ecosystem.
-- **echomind-skill-api**: THE extension contract. Single `Skill` interface with lifecycle hooks. Skills are packaged as JARs with `echomind-skill-api` at `provided` scope. This module has NO other dependencies — it's the shared contract between platform and plugins.
-- **echomind-skill**: Runtime for skills. `SkillClassLoader` provides parent-first delegation for `java.*` and `com.echomind.skill.api.*`, self-first for skill classes. `SkillJarLoader` reads JAR manifests for the `EchoMind-Skill-Class` entry. `SkillDirectoryWatcher` watches `./skills/` for hot-reload. `MarketplaceService` persists metadata via JPA.
-- **echomind-agent**: Agent instance (`Agent`) with `ExecutionPipeline` (5 stages: context enrichment → tool resolution → skill invocation → result aggregation → memory persistence). `AgentOrchestrator` drives the pipeline. `TaskRouter` matches user intent to skills/agents.
-- **echomind-agent-team**: Multi-agent collaboration. `TeamCoordinator` runs Planner→Executor→Reviewer cycles over a `TeamMessageBus`. `ConsensusEngine` resolves disputes. `MermaidGenerator` produces flow diagrams from `TeamTraceRecorder` events. `DynamicDecisionEngine` uses LLM for next-action decisions (bonus).
-- **echomind-console**: MVC controllers (REST + Thymeleaf views), Spring Shell CLI commands. Web UI uses Bootstrap 5. WebSocket (STOMP) for real-time team dashboard updates.
-- **echomind-boot**: Auto-configuration via `EchoMindAutoConfiguration` with `@ConditionalOnProperty` guards. Properties under `echomind.*` namespace via `EchoMindProperties`.
-- **echomind-app**: Entry point. Contains `EchoMindApplication`, `application.yml`, and multi-profile configs (`application-dev.yml`, `application-prod.yml`).
-
-## Coding Conventions
-
-### Package Naming
-- All EchoMind code under `com.echomind.<module>`
-- Sub-packages by concern: `.controller`, `.service`, `.config`, `.model`
-
-### Bean Naming
-- Service beans: camelCase class name (Spring default), e.g. `skillRegistry`
-- Configuration properties: `echomind.<module>.<property>`
-
-### Exception Handling
-- Base: `EchoMindException extends RuntimeException`
-- Specific: `SkillLoadException`, `ModelRoutingException`, `MemoryPersistenceException`, `MCPTransportException`
-- Controllers use `@ControllerAdvice` returning RFC 7807 Problem Details
-
-### MVC Layering
-```
-Controller (@RestController / @Controller)
-    ↓
-Service / Orchestrator (@Service)
-    ↓
-Domain / SPI (interfaces in -api modules)
+```powershell
+cd D:\claudeWorkSpace\ai-agent
+mvn.cmd -q clean package "-Dmaven.test.skip=true"
+docker build -f Dockerfile.runtime -t ai-agent-backend:latest .
+docker build -t ai-agent-frontend:latest .\echomind-web
+docker compose up -d backend frontend
 ```
 
-## Key Extension Points
+部署后：
 
-### Skill Interface (echomind-skill-api)
-```java
-public interface Skill {
-    SkillMetadata metadata();
-    CompletableFuture<SkillResult> execute(SkillRequest request);
-    default void onEnable() {}
-    default void onDisable() {}
-    default void onDestroy() {}
-}
+```powershell
+Invoke-RestMethod http://localhost:8080/actuator/health
+Invoke-RestMethod http://localhost:8080/api/models
+Invoke-RestMethod http://localhost:8080/api/mcp/servers
+Invoke-RestMethod http://localhost:8080/api/mcp/tools
 ```
 
-### ModelProvider Interface (echomind-llm)
-```java
-public interface ModelProvider {
-    String providerId();
-    Set<ModelCapability> capabilities();
-    ChatResponse chat(ChatRequest request, ModelSpec model);
-    Flux<ChatResponse> stream(ChatRequest request, ModelSpec model);
-}
-```
+## 维护提醒
 
-### PipelineStage Interface (echomind-agent)
-```java
-public interface PipelineStage {
-    int order();
-    PipelineContext process(PipelineContext ctx);
-}
-```
+- 本文件只放 Claude 工具入口信息，不再维护长篇架构细节。
+- 架构和调用链路变化优先更新 `docs/harness`，必要时再同步 `README.md`。
+- 如果发现本文件和 `AGENTS.md`、`docs/harness` 冲突，以 `AGENTS.md` 和 `docs/harness` 为准。
 
-### LongTermMemoryStore Interface (echomind-memory)
-```java
-public interface LongTermMemoryStore {
-    void save(String sessionId, List<AgentMessage> messages);
-    List<AgentMessage> load(String sessionId);
-    List<AgentMessage> query(String sessionId, String keyword);
-    void delete(String sessionId);
-}
-```
-
-## Environment Variables
-| Variable | Required | Description |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Anthropic API key |
-| `ANTHROPIC_BASE_URL` | Yes | Anthropic API base URL |
-| `OPENAI_API_KEY` | No | OpenAI API key (optional) |
-| `ECHOMIND_SKILL_DIR` | No | Skill auto-load directory (default: `./skills/`) |
-| `ECHOMIND_MEMORY_DIR` | No | Memory persistence directory (default: `./data/memory/`) |
-
-## Skill Development Process
-1. Create a new Maven module under `skills/`
-2. Add `echomind-skill-api` as `provided` scope dependency
-3. Implement the `Skill` interface
-4. Set `EchoMind-Skill-Class` in JAR manifest to the FQCN
-5. Build with `mvn package`
-6. Place JAR in `./skills/` directory (auto-hot-load) or upload via Web/CLI
-
-## Testing
-- **Unit tests**: `mvn test` — JUnit 5 + Mockito
-- **Integration tests**: `mvn verify` — `@SpringBootTest` on `echomind-app` with test profile
-- Key test patterns:
-  - `SkillClassLoader` isolation: verify skill classes loaded from skill JAR, not app classpath
-  - `DynamicModelRouter`: verify routing based on session model preference
-  - `FileLongTermStore`: write messages, create new instance, verify read-back
-  - MCP JSON-RPC: verify parse/serialize round-trip

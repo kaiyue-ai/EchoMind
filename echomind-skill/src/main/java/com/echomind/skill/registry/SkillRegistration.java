@@ -5,6 +5,10 @@ import com.echomind.skill.api.Skill;
 import com.echomind.skill.api.SkillMetadata;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
+
 /**
  * Skill注册记录，封装一个Skill在注册中心中的完整运行时信息。
  *
@@ -26,6 +30,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
  * @author EchoMind Team
  * @see SkillRegistry
  */
+@Getter
+@AllArgsConstructor
 public class SkillRegistration {
 
     /** Skill的唯一标识符，对应SkillMetadata.skillId()，在注册表中作为键 */
@@ -35,9 +41,11 @@ public class SkillRegistration {
     private final SkillMetadata metadata;
 
     /** Skill的运行时实例，用于执行技能和生命周期管理 */
+    @Getter(onMethod_ = @JsonIgnore)
     private final Skill skill;
 
     /** 加载此Skill的隔离类加载器，确保Skill的类隔离和独立卸载 */
+    @Getter(onMethod_ = @JsonIgnore)
     private final ClassLoader classLoader;
 
     /**
@@ -47,46 +55,6 @@ public class SkillRegistration {
      * {@link SkillRegistry#register}, {@link SkillRegistry#enable},
      * {@link SkillRegistry#disable} 等方法触发。</p>
      */
+    @Setter
     private volatile SkillState state;
-
-    /**
-     * 构造一个Skill注册记录。
-     *
-     * @param skillId     Skill的唯一标识符
-     * @param metadata    Skill的静态元数据
-     * @param skill       Skill运行时实例
-     * @param classLoader 隔离类加载器
-     * @param state       初始运行时状态
-     */
-    public SkillRegistration(String skillId, SkillMetadata metadata, Skill skill,
-                             ClassLoader classLoader, SkillState state) {
-        this.skillId = skillId;
-        this.metadata = metadata;
-        this.skill = skill;
-        this.classLoader = classLoader;
-        this.state = state;
-    }
-
-    /** @return Skill的唯一标识符 */
-    public String getSkillId() { return skillId; }
-
-    /** @return Skill的静态元数据 */
-    public SkillMetadata getMetadata() { return metadata; }
-
-    /** @return Skill运行时实例 */
-    @JsonIgnore
-    public Skill getSkill() { return skill; }
-
-    /** @return 加载此Skill的隔离类加载器 */
-    @JsonIgnore
-    public ClassLoader getClassLoader() { return classLoader; }
-
-    /** @return Skill的当前运行时状态 */
-    public SkillState getState() { return state; }
-
-    /**
-     * 更新Skill的运行时状态。
-     * @param state 新的运行时状态
-     */
-    public void setState(SkillState state) { this.state = state; }
 }

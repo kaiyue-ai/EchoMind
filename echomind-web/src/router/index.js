@@ -9,7 +9,7 @@ const routes = [
     path: '/chat',
     name: 'Chat',
     component: () => import('../views/ChatView.vue'),
-    meta: { title: '智能对话' }
+    meta: { title: '智能对话', keepAlive: true }
   },
   {
     path: '/skills',
@@ -23,12 +23,7 @@ const routes = [
     component: () => import('../views/AgentsView.vue'),
     meta: { title: 'Agent 管理' }
   },
-  {
-    path: '/memory',
-    name: 'Memory',
-    component: () => import('../views/MemoryView.vue'),
-    meta: { title: '记忆管理' }
-  },
+
   {
     path: '/mcp',
     name: 'MCP',

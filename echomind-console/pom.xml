@@ -15,12 +15,20 @@
     <dependencies>
         <dependency>
             <groupId>com.echomind</groupId>
+            <artifactId>echomind-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.echomind</groupId>
             <artifactId>echomind-agent</artifactId>
         </dependency>
         <dependency>
             <groupId>com.echomind</groupId>
             <artifactId>echomind-agent-team</artifactId>
             <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.echomind</groupId>
+            <artifactId>echomind-memory</artifactId>
         </dependency>
         <dependency>
             <groupId>com.echomind</groupId>
@@ -43,8 +51,25 @@
             <artifactId>spring-boot-starter-websocket</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.shell</groupId>
             <artifactId>spring-shell-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.xiaoymin</groupId>
+            <artifactId>knife4j-openapi3-jakarta-spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

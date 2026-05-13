@@ -2,11 +2,12 @@ package com.echomind.mcp.client;
 
 import com.echomind.common.exception.MCPTransportException;
 import com.echomind.mcp.jsonrpc.JsonRpcMessage;
-import com.echomind.mcp.server.ToolResult;
-import com.echomind.mcp.server.ToolSpec;
+import com.echomind.mcp.tool.ToolResult;
+import com.echomind.mcp.tool.ToolSpec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.*;
 import java.net.URI;
@@ -53,10 +54,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * </ul>
  *
  * @author EchoMind Team
- * @see com.echomind.mcp.server.MCPServer
  * @see MCPToolAdapter
  * @since 1.0
  */
+@Slf4j
 public class MCPClient {
 
     /** 共享的 Jackson ObjectMapper —— 用于 JSON-RPC 消息的序列化与反序列化 */
@@ -197,6 +198,4 @@ public class MCPClient {
         return response.body();
     }
 
-    /** 日志记录器 —— 用于记录 MCP 客户端的调试和错误信息 */
-    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MCPClient.class);
 }

@@ -1,7 +1,7 @@
 package com.echomind.console.controller.rest;
 
-import com.echomind.llm.router.DynamicModelRouter;
-import com.echomind.llm.router.ModelProviderRegistry;
+import com.echomind.console.dto.ModelSwitchRequest;
+import com.echomind.console.service.ModelApplicationService;
 import com.echomind.llm.router.ModelSpec;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -9,10 +9,12 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 
+import lombok.RequiredArgsConstructor;
+
 /**
  * 模型管理控制器 —— 提供 LLM 模型的查询与运行时切换 API。
  *
- * <p>EchoMind 支持多模型提供商（Anthropic、OpenAI 等）的动态路由。
+ * <p>EchoMind 支持多模型提供商（DeepSeek、OpenAI 兼容、百炼等）的动态路由。
  * 本控制器提供：
  * <ol>
  *   <li><b>模型列表</b>：查看所有已注册的模型及其能力、默认状态</li>
@@ -29,23 +31,11 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/models")
+@RequiredArgsConstructor
 public class ModelController {
 
-    /** 动态模型路由器，根据会话上下文选择最合适的模型 */
-    private final DynamicModelRouter router;
-    /** 模型提供商注册中心，维护所有已注册的提供商及其模型 */
-    private final ModelProviderRegistry registry;
-
-    /**
-     * 构造模型管理控制器。
-     *
-     * @param router   动态模型路由器
-     * @param registry 模型提供商注册中心
-     */
-    public ModelController(DynamicModelRouter router, ModelProviderRegistry registry) {
-        this.router = router;
-        this.registry = registry;
-    }
+    /** 模型应用服务，收口模型列表和运行时默认模型切换。 */
+    private final ModelApplicationService modelService;
 
     /**
      * 列出所有可用的 LLM 模型。
@@ -56,7 +46,7 @@ public class ModelController {
      */
     @GetMapping
     public ResponseEntity<List<ModelSpec>> listModels() {
-        return ResponseEntity.ok(router.listAll());
+        return ResponseEntity.ok(modelService.listModels());
     }
 
     /**
@@ -67,20 +57,13 @@ public class ModelController {
      *
      * @param body 请求体，包含：
      *             <ul>
-     *               <li>{@code providerId} —— 目标模型提供商标识（如 "anthropic"）</li>
-     *               <li>{@code modelName} —— 目标模型名称（如 "claude-sonnet-4-20250514"）</li>
+     *               <li>{@code providerId} —— 目标模型提供商标识（如 "deepseek"）</li>
+     *               <li>{@code modelName} —— 目标模型名称（如 "deepseek-v4-flash"）</li>
      *             </ul>
      * @return 包含切换状态、providerId 和 modelName 的确认响应
      */
     @PutMapping("/switch")
-    public ResponseEntity<Map<String, String>> switchModel(@RequestBody Map<String, String> body) {
-        String providerId = body.get("providerId");
-        String modelName = body.get("modelName");
-        registry.setDefault(providerId, modelName);
-        return ResponseEntity.ok(Map.of(
-            "status", "switched",
-            "providerId", providerId,
-            "modelName", modelName
-        ));
+    public ResponseEntity<Map<String, String>> switchModel(@RequestBody ModelSwitchRequest request) {
+        return ResponseEntity.ok(modelService.switchModel(request));
     }
 }

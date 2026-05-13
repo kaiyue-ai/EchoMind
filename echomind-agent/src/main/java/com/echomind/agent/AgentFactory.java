@@ -5,6 +5,8 @@ import com.echomind.agent.pipeline.ExecutionPipeline;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import lombok.RequiredArgsConstructor;
+
 /**
  * Agent工厂，负责根据配置创建和管理Agent实例。
  *
@@ -27,9 +29,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * @see AgentConfig
  * @see ExecutionPipeline
  */
+@RequiredArgsConstructor
 public class AgentFactory {
 
     /** 共享的执行管道，所有Agent使用同一个管道实例处理请求 */
+    // 这个管道是多阶段的编排器，处理任务
     private final ExecutionPipeline pipeline;
 
     /**
@@ -37,15 +41,6 @@ public class AgentFactory {
      * 支持运行时动态创建和查询Agent。
      */
     private final Map<String, Agent> agents = new ConcurrentHashMap<>();
-
-    /**
-     * 构造Agent工厂。
-     *
-     * @param pipeline 共享的执行管道，所有Agent都将使用此管道
-     */
-    public AgentFactory(ExecutionPipeline pipeline) {
-        this.pipeline = pipeline;
-    }
 
     /**
      * 根据配置创建新的Agent实例。

@@ -4,6 +4,10 @@ import com.echomind.common.model.SkillState;
 import jakarta.persistence.*;
 import java.time.Instant;
 
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
+
 /**
  * Skill市场JPA实体，对应数据库表{@code echomind_skills}。
  *
@@ -19,6 +23,8 @@ import java.time.Instant;
  *   <li><b>parameterSchemaJson</b> — 参数JSON Schema，最长4000字符</li>
  *   <li><b>dependenciesJson</b> — 依赖项JSON数组，最长1000字符</li>
  *   <li><b>tagsJson</b> — 标签JSON数组，最长1000字符</li>
+ *   <li><b>keywordsJson</b> — 显式触发关键词JSON数组，最长2000字符</li>
+ *   <li><b>aliasesJson</b> — 关键词别名JSON对象，最长4000字符</li>
  *   <li><b>state</b> — Skill当前状态（枚举值存储为字符串）</li>
  *   <li><b>jarPath</b> — Skill JAR文件在服务器上的存储路径</li>
  * </ul>
@@ -35,6 +41,8 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "echomind_skills")
+@Getter
+@Setter
 public class SkillRepository {
 
     /**
@@ -81,6 +89,22 @@ public class SkillRepository {
     @Column(length = 1000)
     private String tagsJson;
 
+    /**
+     * Skill显式声明的触发关键词JSON数组。
+     *
+     * <p>当前不自动改表，因此该字段只作为运行时/未来迁移预留，不参与JPA持久化。
+     * 工具匹配实际读取的是JAR中{@code SkillMetadata}的运行时元数据。</p>
+     */
+    @Transient
+    private String keywordsJson;
+
+    /**
+     * Skill关键词别名JSON对象。
+     * 结构示例：{@code {"invoice":["发票","票据"]}}。
+     */
+    @Transient
+    private String aliasesJson;
+
     /** Skill的当前运行时状态，以字符串形式存储在数据库中（如LOADED、ENABLED、DISABLED） */
     @Enumerated(EnumType.STRING)
     private SkillState state;
@@ -89,9 +113,11 @@ public class SkillRepository {
     private String jarPath;
 
     /** 记录创建时间，由{@link #prePersist()}自动设置 */
+    @Setter(AccessLevel.NONE)
     private Instant createdAt;
 
     /** 记录最后更新时间，由{@link #prePersist()}和{@link #preUpdate()}自动更新 */
+    @Setter(AccessLevel.NONE)
     private Instant updatedAt;
 
     /**
@@ -112,60 +138,4 @@ public class SkillRepository {
     void preUpdate() {
         updatedAt = Instant.now();
     }
-
-    /** @return Skill记录的唯一主键 */
-    public String getId() { return id; }
-    /** @param id Skill记录的唯一主键 */
-    public void setId(String id) { this.id = id; }
-
-    /** @return Skill名称 */
-    public String getName() { return name; }
-    /** @param name Skill名称 */
-    public void setName(String name) { this.name = name; }
-
-    /** @return Skill版本号 */
-    public String getVersion() { return version; }
-    /** @param version Skill版本号 */
-    public void setVersion(String version) { this.version = version; }
-
-    /** @return Skill功能描述 */
-    public String getDescription() { return description; }
-    /** @param description Skill功能描述 */
-    public void setDescription(String description) { this.description = description; }
-
-    /** @return 参数JSON Schema字符串 */
-    public String getParameterSchemaJson() { return parameterSchemaJson; }
-    /** @param json 参数JSON Schema字符串 */
-    public void setParameterSchemaJson(String json) { this.parameterSchemaJson = json; }
-
-    /** @return 依赖项JSON字符串 */
-    public String getDependenciesJson() { return dependenciesJson; }
-    /** @param json 依赖项JSON字符串 */
-    public void setDependenciesJson(String json) { this.dependenciesJson = json; }
-
-    /** @return Skill作者信息 */
-    public String getAuthor() { return author; }
-    /** @param author Skill作者信息 */
-    public void setAuthor(String author) { this.author = author; }
-
-    /** @return 标签JSON字符串 */
-    public String getTagsJson() { return tagsJson; }
-    /** @param json 标签JSON字符串 */
-    public void setTagsJson(String json) { this.tagsJson = json; }
-
-    /** @return Skill当前运行时状态 */
-    public SkillState getState() { return state; }
-    /** @param state Skill运行运行时状态 */
-    public void setState(SkillState state) { this.state = state; }
-
-    /** @return JAR文件存储路径 */
-    public String getJarPath() { return jarPath; }
-    /** @param jarPath JAR文件存储路径 */
-    public void setJarPath(String jarPath) { this.jarPath = jarPath; }
-
-    /** @return 记录创建时间 */
-    public Instant getCreatedAt() { return createdAt; }
-
-    /** @return 记录最后更新时间 */
-    public Instant getUpdatedAt() { return updatedAt; }
 }

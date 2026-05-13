@@ -1,0 +1,37 @@
+# ============================
+# EchoMind 后端运行镜像
+# 本地已完成 Maven 打包时使用，避免 Docker 构建阶段反复下载 Maven 依赖。
+# ============================
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+
+# 知识库支持扫描版 PDF：应用先用 PDFBox 渲染页面，再调用 Tesseract 做 OCR。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-chi-sim && \
+    rm -rf /var/lib/apt/lists/*
+
+# 创建非 root 用户，并准备运行期数据目录。
+RUN groupadd -r echomind && useradd -r -g echomind echomind
+RUN mkdir -p /app/data/objects /app/data/marketplace /app/skills && \
+    chown -R echomind:echomind /app
+
+# 复制本机 Maven 打包好的应用和预编译 Skill JAR。
+COPY echomind-app/target/echomind-app-*.jar /app/echomind-app.jar
+COPY external-mcp/nowcoder-java-interview-mcp-server-1.0.0.jar /app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
+COPY skills/skill-weather/target/*-jar-with-dependencies.jar /app/skills/
+COPY skills/skill-calculator/target/*-jar-with-dependencies.jar /app/skills/
+COPY skills/skill-websearch/target/*-jar-with-dependencies.jar /app/skills/
+COPY skills/skill-markdown-code/target/*-jar-with-dependencies.jar /app/skills/
+COPY skills/skill-date-query/target/*-jar-with-dependencies.jar /app/skills/
+COPY skills/filesystem-1.0.0.jar /app/skills/
+
+RUN chown -R echomind:echomind /app
+USER echomind
+
+EXPOSE 8080
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/echomind-app.jar"]

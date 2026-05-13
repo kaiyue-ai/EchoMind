@@ -1,11 +1,13 @@
 package com.echomind.mcp.client;
 
-import com.echomind.mcp.server.ToolProvider;
-import com.echomind.mcp.server.ToolResult;
-import com.echomind.mcp.server.ToolSpec;
+import com.echomind.mcp.tool.ToolProvider;
+import com.echomind.mcp.tool.ToolResult;
+import com.echomind.mcp.tool.ToolSpec;
 
 import java.util.List;
 import java.util.Map;
+
+import lombok.RequiredArgsConstructor;
 
 /**
  * MCP 工具适配器 —— 将远程 MCP 客户端适配为本地 ToolProvider 接口。
@@ -28,8 +30,8 @@ import java.util.Map;
  * MCPClient client = new MCPClient("http://remote:8080", "my-agent");
  * client.initialize();
  * MCPToolAdapter adapter = new MCPToolAdapter(client);
- * // 将 adapter 注册到 MCPServer 或 SkillRegistry
- * server.registerToolProvider(adapter);
+ * // 将 adapter 注册进 CapabilityRegistry，Agent 就能调用远端工具。
+ * capabilityRegistry.registerToolProvider(adapter);
  * }</pre>
  *
  * <p>设计决策：
@@ -47,6 +49,7 @@ import java.util.Map;
  * @see ToolProvider
  * @since 1.0
  */
+@RequiredArgsConstructor
 public class MCPToolAdapter implements ToolProvider {
 
     /** 远程 MCP 客户端 —— 所有实际操作都委托给此客户端 */
@@ -57,16 +60,6 @@ public class MCPToolAdapter implements ToolProvider {
      * 为 null 表示缓存未初始化或已被清除，需要重新获取。
      */
     private List<ToolSpec> cachedTools;
-
-    /**
-     * 构造 MCP 工具适配器。
-     *
-     * @param client 已构造的 MCP 客户端实例（建议在构造适配器前先调用
-     *               {@link MCPClient#initialize()} 完成握手）
-     */
-    public MCPToolAdapter(MCPClient client) {
-        this.client = client;
-    }
 
     /**
      * 获取工具列表 —— 首次调用从远程获取并缓存，后续调用返回缓存结果。

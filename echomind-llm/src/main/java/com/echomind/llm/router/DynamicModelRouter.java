@@ -2,11 +2,10 @@ package com.echomind.llm.router;
 
 import com.echomind.common.exception.ModelRoutingException;
 import com.echomind.llm.session.SessionContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
-import java.util.Optional;
 
 /**
  * 动态模型路由器 —— EchoMind LLM 层的核心路由组件。
@@ -37,22 +36,12 @@ import java.util.Optional;
  * @see ModelCapability
  * @see SessionContext
  */
+@Slf4j
+@RequiredArgsConstructor
 public class DynamicModelRouter {
-
-    /** 日志记录器，用于跟踪路由决策过程 */
-    private static final Logger log = LoggerFactory.getLogger(DynamicModelRouter.class);
 
     /** 模型提供商注册表，持有所有已注册的模型和提供商信息 */
     private final ModelProviderRegistry registry;
-
-    /**
-     * 构造动态模型路由器。
-     *
-     * @param registry 模型提供商注册表，不能为 {@code null}
-     */
-    public DynamicModelRouter(ModelProviderRegistry registry) {
-        this.registry = registry;
-    }
 
     /**
      * 根据会话上下文解析最适合的模型规格。

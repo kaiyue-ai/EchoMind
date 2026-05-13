@@ -1,189 +1,208 @@
 package com.echomind.memory;
 
 import com.echomind.common.model.AgentMessage;
-import com.echomind.memory.longterm.LongTermMemoryStore;
-import com.echomind.memory.session.SessionConfig;
-import com.echomind.memory.session.SessionManager;
-import com.echomind.memory.shortterm.ConversationWindow;
+import com.echomind.common.model.SessionSummary;
+import com.echomind.memory.cache.RecentMemoryCache;
+import com.echomind.memory.embedding.MemoryEmbeddingService;
+import com.echomind.memory.embedding.MemorySearchHit;
+import com.echomind.memory.persistence.ChatMessageEntity;
+import com.echomind.memory.persistence.PersistentChatMemoryStore;
 import com.echomind.memory.shortterm.WindowConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.echomind.memory.summary.MemorySummaryService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
- * 记忆管理器 —— Agent 记忆系统的中央调度组件。
+ * 会话记忆编排器。
  *
- * <p>职责概述：
- * <ol>
- *   <li><b>短期记忆：</b>每个会话维护独立的 {@link ConversationWindow}，
- *       通过 {@code ConcurrentHashMap<String, ConversationWindow>} 实现会话隔离。</li>
- *   <li><b>长期记忆：</b>委托给 {@link LongTermMemoryStore}，采用写穿（write-through）策略：
- *       每条消息在加入短期窗口的同时立即写入长期存储，确保崩溃安全。</li>
- *   <li><b>会话管理：</b>委托给 {@link SessionManager}，创建、查询和销毁用户会话。</li>
- *   <li><b>全量上下文：</b>合并长期记忆 + 本会话短期记忆，提供 Agent 推理所需的完整对话上下文。</li>
- * </ol>
- *
- * <p>关键设计决策：
+ * <p>当前策略是“一次对话历史一份记忆”：
  * <ul>
- *   <li><b>会话隔离</b>：每个会话拥有独立的 ConversationWindow，杜绝跨会话消息污染。</li>
- *   <li><b>写穿策略</b>：addMessage 同时写入短期窗口和长期存储，JVM 崩溃不丢消息。</li>
- *   <li><b>先驱逐后添加</b>：窗口满时先 evict 再 add，避免 ConversationWindow 自动 trim 导致消息丢失。</li>
- *   <li><b>线程安全</b>：ConcurrentHashMap + ConcurrentLinkedDeque 保证并发安全。</li>
+ *   <li>MySQL：完整会话、消息、摘要和向量索引，是事实来源。</li>
+ *   <li>Redis：只保存最近 N 条消息，作为提示词热缓存。</li>
+ *   <li>向量检索：用当前用户问题召回同一会话里的相关历史。</li>
  * </ul>
  *
- * @author EchoMind Team
- * @see ConversationWindow
- * @see LongTermMemoryStore
- * @since 1.0
+ * <p>注意：{@link #getFullContext(String)} 是给页面历史和管理接口用的；
+ * 模型调用必须使用 {@link #getPromptContext(String, String)}，否则会重新把全量历史塞进提示词。</p>
  */
+@Slf4j
+@RequiredArgsConstructor
 public class MemoryManager {
 
-    private static final Logger log = LoggerFactory.getLogger(MemoryManager.class);
-
-    /** 长期记忆持久化存储 —— 写穿模式，每条消息立即持久化 */
-    private final LongTermMemoryStore longTerm;
-    /** 会话管理器 —— 管理会话的生命周期和配置 */
-    private final SessionManager sessionManager;
-    /** 窗口配置 —— 控制最大消息数、驱逐数量 */
+    /** 近期窗口配置，控制 Redis 最近上下文条数。 */
     private final WindowConfig windowConfig;
-    /**
-     * 每个会话独立的短期记忆窗口 —— Key 为 sessionId，Value 为该会话的 ConversationWindow。
-     * 使用 ConcurrentHashMap 支持高并发读写。
-     */
-    private final Map<String, ConversationWindow> sessionWindows = new ConcurrentHashMap<>();
+    /** MySQL 正式会话记忆。 */
+    private final PersistentChatMemoryStore chatStore;
+    /** Redis 或本地内存近期缓存。 */
+    private final RecentMemoryCache recentCache;
+    /** 向量索引与相似历史检索。 */
+    private final MemoryEmbeddingService embeddingService;
+    /** 摘要生成服务。 */
+    private final MemorySummaryService summaryService;
+    /** 相关历史召回条数。 */
+    private final int retrievalTopK;
+    /** 每隔多少条消息刷新一次摘要，避免每轮都扫全量历史。 */
+    private final int summaryRefreshInterval;
 
     /**
-     * 构造 MemoryManager，注入所有必需组件。
+     * 保存消息，兼容旧调用方。
      *
-     * @param windowConfig   短期窗口配置（最大消息数、驱逐数量）
-     * @param longTermStore  长期记忆存储实现（文件、Redis 等）
-     * @param sessionManager 会话管理器实例
+     * @param memoryKey 会话 ID
+     * @param message   消息
      */
-    public MemoryManager(WindowConfig windowConfig, LongTermMemoryStore longTermStore,
-                         SessionManager sessionManager) {
-        this.windowConfig = windowConfig;
-        this.longTerm = longTermStore;
-        this.sessionManager = sessionManager;
+    public void addMessage(String memoryKey, AgentMessage message) {
+        addMessage(memoryKey, null, message);
     }
 
     /**
-     * 向指定会话添加一条消息 —— 写穿模式。
+     * 保存消息到 MySQL，并同步刷新 Redis 近期缓存和向量索引。
      *
-     * <p>流程：
-     * <ol>
-     *   <li>获取或创建该会话的专属 ConversationWindow</li>
-     *   <li>若窗口已满，先驱逐最旧消息（防止后续 add 自动 trim 丢失消息）</li>
-     *   <li>消息追加到短期窗口</li>
-     *   <li>消息立即写穿到长期存储</li>
-     * </ol>
-     *
-     * @param sessionId 会话唯一标识
-     * @param message   要添加的 Agent 消息
+     * @param memoryKey 会话 ID
+     * @param agentId   Agent ID，可为空
+     * @param message   消息
      */
-    public void addMessage(String sessionId, AgentMessage message) {
-        ConversationWindow window = sessionWindows.computeIfAbsent(sessionId,
-            k -> new ConversationWindow(windowConfig));
+    public void addMessage(String memoryKey, String agentId, AgentMessage message) {
+        if (isBlank(memoryKey) || message == null) {
+            return;
+        }
+        ChatMessageEntity saved = chatStore.saveMessage(memoryKey, agentId, message);
+        recentCache.append(memoryKey, message);
+        embeddingService.indexMessage(memoryKey, saved.getId(), message);
+        refreshSummaryIfNeeded(memoryKey);
+    }
 
-        // 先驱逐后添加：防止 ConversationWindow.add() 的自动 trim 静默丢弃消息
-        if (window.isFull()) {
-            List<AgentMessage> evicted = window.evictOldest(
-                Math.max(1, windowConfig.getEvictCount()));
-            // 驱逐的消息已在窗口达到上限前通过写穿保存，此处无需重复
+    /**
+     * 读取 Redis 里的近期消息；缓存空时从 MySQL 最近 N 条回源。
+     *
+     * @param memoryKey 会话 ID
+     * @return 最近消息，按时间升序
+     */
+    public List<AgentMessage> getRecentMessages(String memoryKey) {
+        List<AgentMessage> cached = recentCache.recent(memoryKey);
+        if (!cached.isEmpty()) {
+            return cached;
+        }
+        List<AgentMessage> fromDb = chatStore.loadRecent(memoryKey, windowConfig.getMaxMessages());
+        fromDb.forEach(message -> recentCache.append(memoryKey, message));
+        return fromDb;
+    }
+
+    /**
+     * 完整历史只从 MySQL 读取。
+     *
+     * @param memoryKey 会话 ID
+     * @return 完整消息历史，按时间升序
+     */
+    public List<AgentMessage> getFullContext(String memoryKey) {
+        return chatStore.loadFullHistory(memoryKey);
+    }
+
+    /**
+     * 构造模型提示词上下文。
+     *
+     * <p>上下文由三段组成：早期摘要、相关历史、最近 N 条消息。
+     * 当前用户消息由管线最后追加，因此这里不会重复加入。</p>
+     *
+     * @param memoryKey          会话 ID
+     * @param currentUserMessage 当前用户问题
+     * @return 可直接传给模型的历史上下文
+     */
+    public List<AgentMessage> getPromptContext(String memoryKey, String currentUserMessage) {
+        List<AgentMessage> result = new ArrayList<>();
+        String summary = chatStore.loadSummary(memoryKey);
+        if (!isBlank(summary)) {
+            result.add(AgentMessage.system("【会话摘要】\n" + summary));
         }
 
-        window.add(message);
-
-        // 写穿：立即持久化到长期存储，确崩溃安全
-        try {
-            longTerm.save(sessionId, List.of(message));
-        } catch (Exception e) {
-            log.warn("Failed to persist message to long-term store for session {}: {}",
-                sessionId, e.getMessage());
+        List<AgentMessage> recent = getRecentMessages(memoryKey);
+        Set<String> recentFingerprints = fingerprints(recent);
+        List<MemorySearchHit> hits = embeddingService.search(memoryKey, currentUserMessage, retrievalTopK).stream()
+            .filter(hit -> !recentFingerprints.contains(fingerprint(hit.role(), hit.content())))
+            .toList();
+        if (!hits.isEmpty()) {
+            result.add(AgentMessage.system(formatRelevantHistory(hits)));
         }
+
+        result.addAll(recent);
+        return result;
     }
 
-    /**
-     * 获取指定会话的近期消息（短期窗口内容）。
-     *
-     * @param sessionId 会话唯一标识
-     * @return 该会话最近的对话消息列表；无消息时返回空列表
-     */
-    public List<AgentMessage> getRecentMessages(String sessionId) {
-        ConversationWindow window = sessionWindows.get(sessionId);
-        if (window == null) {
-            return Collections.emptyList();
-        }
-        return window.getMessages();
+    /** 清除指定会话的全部正式历史、向量和近期缓存。 */
+    public void clearSession(String memoryKey) {
+        recentCache.clear(memoryKey);
+        embeddingService.deleteSession(memoryKey);
+        chatStore.deleteSession(memoryKey);
     }
 
-    /**
-     * 从长期存储中加载指定会话的历史消息。
-     *
-     * @param sessionId 会话唯一标识
-     * @return 该会话的全部长期历史消息列表
-     */
-    public List<AgentMessage> getLongTermHistory(String sessionId) {
-        return longTerm.load(sessionId);
+    /** 当前会话近期缓存大小。 */
+    public int shortTermSize(String memoryKey) {
+        return recentCache.size(memoryKey);
     }
 
-    /**
-     * 获取指定会话的完整上下文 —— 长期历史 + 短期窗口合并。
-     *
-     * <p>合并策略：先长期历史（时间久远），追加短期消息（最新），按时间升序排列。
-     * 由于采用写穿策略，长期存储已包含所有消息，短期窗口作为缓存加速读取。
-     * 为避免重复，合并时以长期存储为主，用消息时间戳去重。
-     *
-     * @param sessionId 会话唯一标识
-     * @return 合并后的完整消息列表（长期 + 短期去重，按时间升序）
-     */
-    public List<AgentMessage> getFullContext(String sessionId) {
-        List<AgentMessage> context = new ArrayList<>(getLongTermHistory(sessionId));
-        List<AgentMessage> recent = getRecentMessages(sessionId);
-
-        // 用时间戳去重：长期存储已有写入的消息，但短期窗口可能尚未 evict
-        if (!context.isEmpty() && !recent.isEmpty()) {
-            AgentMessage lastPersisted = context.get(context.size() - 1);
-            for (AgentMessage msg : recent) {
-                if (msg.timestamp() != null && lastPersisted.timestamp() != null
-                    && msg.timestamp().isAfter(lastPersisted.timestamp())) {
-                    context.add(msg);
-                }
-            }
-        } else {
-            context.addAll(recent);
-        }
-        return context;
-    }
-
-    /**
-     * 清除指定会话的全部记忆 —— 移除短期窗口并删除长期存储中该会话的数据。
-     *
-     * @param sessionId 要清除的会话唯一标识
-     */
-    public void clearSession(String sessionId) {
-        sessionWindows.remove(sessionId);
-        longTerm.delete(sessionId);
-    }
-
-    /**
-     * 查询指定会话短期记忆窗口中的消息数量。
-     *
-     * @param sessionId 会话唯一标识
-     * @return 短期记忆窗口大小；会话不存在时返回 0
-     */
-    public int shortTermSize(String sessionId) {
-        ConversationWindow window = sessionWindows.get(sessionId);
-        return window != null ? window.size() : 0;
-    }
-
-    /**
-     * 查询当前活跃会话总数。
-     *
-     * @return 活跃会话数
-     */
+    /** 当前近期缓存可见的会话数量。 */
     public int activeSessionCount() {
-        return sessionWindows.size();
+        return recentCache.sessionIds().size();
+    }
+
+    /** 会话列表从 MySQL 读取，确保重启后仍然完整。 */
+    public List<SessionSummary> listSessions() {
+        return chatStore.listSessions();
+    }
+
+    private void refreshSummaryIfNeeded(String memoryKey) {
+        long count = chatStore.countMessages(memoryKey);
+        int interval = Math.max(1, summaryRefreshInterval);
+        if (count <= windowConfig.getMaxMessages() || count % interval != 0) {
+            return;
+        }
+        try {
+            String summary = summaryService.summarize(chatStore.loadFullHistory(memoryKey));
+            chatStore.updateSummary(memoryKey, summary);
+        } catch (Exception e) {
+            log.warn("Failed to refresh memory summary for session {}: {}", memoryKey, e.getMessage());
+        }
+    }
+
+    private String formatRelevantHistory(List<MemorySearchHit> hits) {
+        StringBuilder sb = new StringBuilder("【相关历史】以下片段来自同一会话的历史记录，可作为回答参考：\n");
+        for (MemorySearchHit hit : hits) {
+            sb.append("- ")
+                .append(roleLabel(hit.role()))
+                .append("：")
+                .append(hit.content())
+                .append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private Set<String> fingerprints(List<AgentMessage> messages) {
+        Set<String> set = new HashSet<>();
+        for (AgentMessage message : messages) {
+            set.add(fingerprint(message.role(), message.content()));
+        }
+        return set;
+    }
+
+    private String fingerprint(String role, String content) {
+        return (role == null ? "" : role) + "::" + (content == null ? "" : content);
+    }
+
+    private String roleLabel(String role) {
+        return switch (role) {
+            case "user" -> "用户";
+            case "assistant" -> "助手";
+            case "tool" -> "工具";
+            case "system" -> "系统";
+            default -> role == null ? "未知" : role;
+        };
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }

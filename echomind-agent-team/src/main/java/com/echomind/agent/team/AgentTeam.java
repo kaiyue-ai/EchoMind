@@ -5,6 +5,8 @@ import com.echomind.agent.Agent;
 import java.util.List;
 import java.util.Map;
 
+import lombok.Getter;
+
 /**
  * Agent 团队 —— 组合多个 Agent 以完成复杂协作任务。
  *
@@ -28,8 +30,10 @@ import java.util.Map;
 public class AgentTeam {
 
     /** 团队唯一标识 */
+    @Getter
     private final String teamId;
     /** 团队显示名称 */
+    @Getter
     private final String name;
     /** 角色到 Agent 的映射（不可变副本） */
     private final Map<TeamRole, Agent> roleAgents;
@@ -47,10 +51,6 @@ public class AgentTeam {
         this.roleAgents = Map.copyOf(roleAgents);
     }
 
-    /** @return 团队唯一标识 */
-    public String getTeamId() { return teamId; }
-    /** @return 团队显示名称 */
-    public String getName() { return name; }
     /**
      * 获取指定角色绑定的 Agent。
      * @param role 团队角色

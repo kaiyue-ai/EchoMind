@@ -22,12 +22,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # ===== Redis 缓存（可选，用于长时记忆） =====
+  # ===== Redis Stack（近期上下文热缓存 + 向量检索） =====
   redis:
-    image: redis:7-alpine
+    image: redis/redis-stack-server:latest
     container_name: echomind-cache
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    environment:
+      REDIS_ARGS: "--appendonly yes"
     volumes:
       - redis_data:/data
     ports:
@@ -40,11 +41,31 @@ services:
       timeout: 3s
       retries: 5
 
+  # ===== RabbitMQ 消息队列 =====
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: echomind-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: echomind
+      RABBITMQ_DEFAULT_PASS: echomind_secret
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - echomind-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
   # ===== EchoMind 后端 =====
   backend:
+    image: ai-agent-backend:latest
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.runtime
     container_name: echomind-backend
     restart: unless-stopped
     depends_on:
@@ -54,10 +75,20 @@ services:
         condition: service_healthy
     environment:
       # LLM API 配置
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${ANTHROPIC_API_KEY:-}}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ALIYUN_BAILIAN_API_KEY: ${ALIYUN_BAILIAN_API_KEY:-}
+      ALIYUN_BAILIAN_BASE_URL: ${ALIYUN_BAILIAN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      ALIYUN_BAILIAN_EMBEDDING_BASE_URL: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com}
+      # 阿里云 OSS：优先读取用户本机/部署环境里的 AccessKeyID 和 AccessKeySecret。
+      ECHOMIND_STORAGE_MODE: ${ECHOMIND_STORAGE_MODE:-oss}
+      ALIYUN_OSS_ENDPOINT: ${ALIYUN_OSS_ENDPOINT:-}
+      ALIYUN_OSS_BUCKET: ${ALIYUN_OSS_BUCKET:-my-dev-oss}
+      AccessKeyID: ${AccessKeyID:-}
+      AccessKeySecret: ${AccessKeySecret:-}
       # 数据库配置
+      SPRING_PROFILES_ACTIVE: prod
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/echomind?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8
       SPRING_DATASOURCE_USERNAME: echomind
       SPRING_DATASOURCE_PASSWORD: echomind_secret
@@ -66,16 +97,32 @@ services:
       # Redis 配置
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
+      # RabbitMQ 配置
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: echomind
+      SPRING_RABBITMQ_PASSWORD: echomind_secret
       # EchoMind 配置
-      ECHOMIND_MEMORY_LONG_TERM_TYPE: redis
+      ECHOMIND_MEMORY_VECTOR_STORE: redis-stack
+      ECHOMIND_MEMORY_EMBEDDING_MODEL: tongyi-embedding-vision-plus
+      ECHOMIND_MEMORY_RETRIEVAL_TOP_K: 3
       ECHOMIND_SKILL_AUTO_LOAD_PATH: /app/skills/
       ECHOMIND_SKILL_MARKETPLACE_DIR: /app/data/marketplace/
+      ECHOMIND_MCP_EXTERNAL_SERVERS_0_ID: nowcoder-java-interview
+      ECHOMIND_MCP_EXTERNAL_SERVERS_0_ENABLED: "true"
+      ECHOMIND_MCP_EXTERNAL_SERVERS_0_TRANSPORT: stdio
+      ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_0: java
+      ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_1: -jar
+      ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_2: /app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
+      ECHOMIND_MCP_EXTERNAL_SERVERS_0_WORKING_DIRECTORY: /app/mcp
+      ECHOMIND_FS_EXTRA_ROOTS: ${ECHOMIND_FS_EXTRA_ROOTS:-/mnt/host}
       # JVM 配置
-      JAVA_OPTS: "-Xms512m -Xmx1024m"
+      JAVA_OPTS: "-Xms512m -Xmx1024m -Dechomind.fs.extra-roots=${ECHOMIND_FS_EXTRA_ROOTS:-/mnt/host} -Dechomind.fs.path-mappings=${ECHOMIND_FS_PATH_MAPPINGS:-C:\\Users\\Jimmy->/mnt/host}"
     ports:
       - "8080:8080"
     volumes:
       - echomind_data:/app/data
+      - ${HOST_MOUNT_PATH:-C:\Users\Jimmy}:/mnt/host
     networks:
       - echomind-network
     healthcheck:
@@ -87,6 +134,7 @@ services:
 
   # ===== EchoMind 前端（Vue 3） =====
   frontend:
+    image: ai-agent-frontend:latest
     build:
       context: ./echomind-web
       dockerfile: Dockerfile

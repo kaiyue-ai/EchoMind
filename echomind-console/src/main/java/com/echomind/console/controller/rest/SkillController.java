@@ -1,17 +1,13 @@
 package com.echomind.console.controller.rest;
 
-import com.echomind.skill.marketplace.MarketplaceService;
-import com.echomind.skill.marketplace.SkillRepository;
-import com.echomind.skill.registry.SkillRegistration;
-import com.echomind.skill.registry.SkillRegistry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.echomind.console.dto.SkillRepositoryView;
+import com.echomind.console.dto.SkillView;
+import com.echomind.console.service.SkillApplicationService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -32,29 +28,16 @@ import java.util.Map;
  *   <li>上传操作先将 MultipartFile 写入临时文件，再委托
  *       {@link MarketplaceService} 加载并注册。</li>
  *   <li>删除操作从注册中心移除技能并从持久化存储中清除。</li>
+ *   <li>启用、禁用、上传和删除会同步更新统一能力注册中心。</li>
  * </ul>
  */
 @RestController
 @RequestMapping("/api/skills")
+@RequiredArgsConstructor
 public class SkillController {
 
-    private static final Logger log = LoggerFactory.getLogger(SkillController.class);
-
-    /** 技能注册中心，维护所有已加载技能的运行时状态 */
-    private final SkillRegistry registry;
-    /** 技能市场服务，处理技能 JAR 的持久化和上传逻辑 */
-    private final MarketplaceService marketplace;
-
-    /**
-     * 构造技能管理控制器。
-     *
-     * @param registry    技能注册中心
-     * @param marketplace 技能市场服务
-     */
-    public SkillController(SkillRegistry registry, MarketplaceService marketplace) {
-        this.registry = registry;
-        this.marketplace = marketplace;
-    }
+    /** Skill应用服务，收口Skill生命周期与能力注册同步。 */
+    private final SkillApplicationService skillService;
 
     /**
      * 列出所有已注册的技能。
@@ -64,8 +47,8 @@ public class SkillController {
      * @return 技能注册信息列表
      */
     @GetMapping
-    public ResponseEntity<List<SkillRegistration>> listSkills() {
-        return ResponseEntity.ok(registry.listAll());
+    public ResponseEntity<List<SkillView>> listSkills() {
+        return ResponseEntity.ok(skillService.listSkills());
     }
 
     /**
@@ -78,8 +61,7 @@ public class SkillController {
      */
     @PostMapping("/{skillId}/enable")
     public ResponseEntity<Map<String, String>> enable(@PathVariable String skillId) {
-        registry.enable(skillId);
-        return ResponseEntity.ok(Map.of("status", "enabled", "skillId", skillId));
+        return ResponseEntity.ok(skillService.enable(skillId));
     }
 
     /**
@@ -92,8 +74,7 @@ public class SkillController {
      */
     @PostMapping("/{skillId}/disable")
     public ResponseEntity<Map<String, String>> disable(@PathVariable String skillId) {
-        registry.disable(skillId);
-        return ResponseEntity.ok(Map.of("status", "disabled", "skillId", skillId));
+        return ResponseEntity.ok(skillService.disable(skillId));
     }
 
     /**
@@ -106,16 +87,8 @@ public class SkillController {
      * @return 持久化后的技能仓库实体；若处理失败则返回 500
      */
     @PostMapping("/upload")
-    public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file) {
-        try {
-            Path tempFile = Files.createTempFile("skill-", ".jar");
-            file.transferTo(tempFile.toFile());
-            SkillRepository entity = marketplace.upload(tempFile);
-            return ResponseEntity.ok(entity);
-        } catch (Exception e) {
-            log.error("Skill upload failed", e);
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
-        }
+    public ResponseEntity<SkillRepositoryView> upload(@RequestParam("file") MultipartFile file) {
+        return ResponseEntity.ok(skillService.upload(file));
     }
 
     /**
@@ -128,7 +101,7 @@ public class SkillController {
      */
     @DeleteMapping("/{skillId}")
     public ResponseEntity<Void> delete(@PathVariable String skillId) {
-        marketplace.delete(skillId);
+        skillService.delete(skillId);
         return ResponseEntity.noContent().build();
     }
 }

@@ -10,16 +10,12 @@
     </parent>
     <artifactId>echomind-mcp</artifactId>
     <name>EchoMind MCP</name>
-    <description>MCP protocol support: server-side tool registration, client discovery, JSON-RPC transport</description>
+    <description>MCP client support: external server discovery, tool adapters, JSON-RPC transport</description>
 
     <dependencies>
         <dependency>
             <groupId>com.echomind</groupId>
             <artifactId>echomind-common</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.echomind</groupId>
-            <artifactId>echomind-skill-api</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -28,6 +24,11 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

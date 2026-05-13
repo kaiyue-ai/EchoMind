@@ -6,6 +6,8 @@ import com.echomind.llm.router.DynamicModelRouter;
 import com.echomind.llm.router.ModelSpec;
 import com.echomind.llm.session.SessionContext;
 
+import lombok.RequiredArgsConstructor;
+
 /**
  * 动态决策引擎 —— 使用 LLM 决定 Agent Team 的下一步行动。
  *
@@ -24,23 +26,13 @@ import com.echomind.llm.session.SessionContext;
  * <p>设计要点：这是项目中的额外加分功能（bonus feature），
  * 通过 LLM 提供比简单规则更灵活的决策能力。
  */
+@RequiredArgsConstructor
 public class DynamicDecisionEngine {
 
     /** 动态模型路由器，根据会话选择最优模型 */
     private final DynamicModelRouter router;
     /** 模型提供商，用于调用 LLM API */
     private final ModelProvider provider;
-
-    /**
-     * 创建动态决策引擎。
-     *
-     * @param router   动态模型路由器
-     * @param provider 模型提供商
-     */
-    public DynamicDecisionEngine(DynamicModelRouter router, ModelProvider provider) {
-        this.router = router;
-        this.provider = provider;
-    }
 
     /**
      * 决定下一步团队行动。

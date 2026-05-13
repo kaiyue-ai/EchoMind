@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+import lombok.Getter;
+
 /**
  * 团队跟踪记录器 —— 记录 Agent Team 协作流程中的关键事件。
  *
@@ -26,8 +28,10 @@ public class TeamTraceRecorder {
     /** 事件列表（按时间顺序存储） */
     private final List<TraceEvent> events = new ArrayList<>();
     /** 当前会话标识 */
+    @Getter
     private String sessionId;
     /** 当前团队标识 */
+    @Getter
     private String teamId;
     /** 当前任务描述 */
     private String task;
@@ -63,10 +67,6 @@ public class TeamTraceRecorder {
 
     /** @return 事件列表的不可变副本 */
     public List<TraceEvent> getEvents() { return List.copyOf(events); }
-    /** @return 当前会话标识 */
-    public String getSessionId() { return sessionId; }
-    /** @return 当前团队标识 */
-    public String getTeamId() { return teamId; }
 
     /**
      * 跟踪事件记录 —— 单个事件的数据载体。

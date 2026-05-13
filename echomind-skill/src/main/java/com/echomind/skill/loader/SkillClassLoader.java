@@ -1,7 +1,6 @@
 package com.echomind.skill.loader;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -46,10 +45,8 @@ import java.util.Set;
  * @author EchoMind Team
  * @see SkillJarLoader
  */
+@Slf4j
 public class SkillClassLoader extends URLClassLoader implements Closeable {
-
-    /** SLF4J日志记录器，用于记录类加载事件和异常 */
-    private static final Logger log = LoggerFactory.getLogger(SkillClassLoader.class);
 
     /**
      * 父类优先的包前缀集合。

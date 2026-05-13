@@ -1,0 +1,25 @@
+package com.echomind.agent.team.state;
+
+/**
+ * 写入 Team 黑板事件流的事件类型。
+ */
+public enum TeamEventType {
+    RUN_CREATED,
+    RUN_RESUMED,
+    PLAN_STARTED,
+    PLAN_CREATED,
+    PLAN_REVIEW_STARTED,
+    PLAN_REVIEWED,
+    STEP_ASSIGNED,
+    STEP_STARTED,
+    STEP_COMPLETED,
+    STEP_FAILED,
+    RETRY_REQUESTED,
+    STEP_RETRY_STARTED,
+    STEP_RETRY_COMPLETED,
+    RESULT_REVIEW_STARTED,
+    RESULT_REVIEWED,
+    CLARIFICATION_REQUESTED,
+    RUN_COMPLETED,
+    RUN_FAILED
+}

@@ -29,7 +29,7 @@ import java.util.Map;
  *
  * @see SkillRequest#context() 包含此上下文的技能请求
  * @see com.echomind.agent.Agent 创建和管理智能体实例的实体
- * @see com.echomind.memory.ConversationWindow 当前会话的短期记忆窗口
+ * @see com.echomind.memory.MemoryManager 当前会话的记忆编排器
  */
 public record SkillContext(
     /**

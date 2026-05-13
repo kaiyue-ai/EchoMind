@@ -5,10 +5,10 @@ import com.echomind.common.model.SkillState;
 import com.echomind.skill.api.Skill;
 import com.echomind.skill.loader.SkillJarLoader;
 import com.echomind.skill.registry.SkillRegistry;
+import com.echomind.skill.storage.ObjectStorageService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,10 +48,8 @@ import java.util.Optional;
  * @see SkillRepository
  * @see SkillJarLoader
  */
+@Slf4j
 public class MarketplaceService {
-
-    /** SLF4J日志记录器，用于记录上传、删除等操作事件 */
-    private static final Logger log = LoggerFactory.getLogger(MarketplaceService.class);
 
     /** JSON序列化器，用于将元数据对象转换为JSON字符串存储到数据库 */
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -68,6 +66,9 @@ public class MarketplaceService {
     /** 市场目录路径，上传的JAR文件将复制到此处 */
     private final Path marketplaceDir;
 
+    /** Skill JAR 的对象存储服务，优先写 OSS，配置缺失时写本地兜底目录 */
+    private final ObjectStorageService storageService;
+
     /**
      * 构造市场服务。
      *
@@ -81,10 +82,18 @@ public class MarketplaceService {
      */
     public MarketplaceService(SkillEntityRepository repository, SkillJarLoader jarLoader,
                               SkillRegistry registry, String marketplaceDirPath) {
+        this(repository, jarLoader, registry, marketplaceDirPath,
+            new com.echomind.skill.storage.LocalObjectStorageService(Paths.get(marketplaceDirPath)));
+    }
+
+    public MarketplaceService(SkillEntityRepository repository, SkillJarLoader jarLoader,
+                              SkillRegistry registry, String marketplaceDirPath,
+                              ObjectStorageService storageService) {
         this.repository = repository;
         this.jarLoader = jarLoader;
         this.registry = registry;
         this.marketplaceDir = Paths.get(marketplaceDirPath);
+        this.storageService = storageService;
         try {
             Files.createDirectories(marketplaceDir);
         } catch (Exception e) {
@@ -114,9 +123,12 @@ public class MarketplaceService {
                 throw new SkillLoadException("Skill already exists: " + metadata.skillId());
             }
 
-            // 复制JAR到市场目录
+            // 先保留一份本地运行时缓存，再把 JAR 写入对象存储作为持久化事实。
             Path destJar = marketplaceDir.resolve(metadata.skillId().replace("@", "-") + ".jar");
             Files.copy(jarFile, destJar, StandardCopyOption.REPLACE_EXISTING);
+            String objectKey = "skills/" + metadata.name() + "/" + metadata.version() + "/"
+                + metadata.skillId().replace("@", "-") + ".jar";
+            var storedJar = storageService.putObject(objectKey, destJar, "application/java-archive");
 
             SkillRepository entity = new SkillRepository();
             entity.setName(metadata.name());
@@ -126,8 +138,10 @@ public class MarketplaceService {
             entity.setDependenciesJson(toJson(metadata.dependencies()));
             entity.setAuthor(metadata.author());
             entity.setTagsJson(toJson(metadata.tags()));
+            entity.setKeywordsJson(toJson(metadata.keywords()));
+            entity.setAliasesJson(toJson(metadata.aliases()));
             entity.setState(SkillState.LOADED);
-            entity.setJarPath(destJar.toString());
+            entity.setJarPath(storedJar.uri());
 
             entity = repository.save(entity);
 
@@ -161,19 +175,56 @@ public class MarketplaceService {
      *   <li>删除市场目录中的JAR文件（失败时记录警告但不中断）</li>
      * </ol>
      *
-     * @param skillId 要删除的Skill的唯一标识符
+     * @param identifier 要删除的Skill标识；可以是数据库ID，也可以是{@code name@version}
+     * @return 被删除Skill的运行时skillId，格式为{@code name@version}
      */
-    public void delete(String skillId) {
-        Optional<SkillRepository> entity = repository.findById(skillId);
+    public Optional<String> delete(String identifier) {
+        Optional<SkillRepository> entity = findByIdOrSkillId(identifier);
         if (entity.isPresent()) {
+            SkillRepository skill = entity.get();
+            String skillId = toSkillId(skill);
             registry.unregister(skillId);
-            repository.deleteById(skillId);
+            repository.deleteById(skill.getId());
             try {
-                Files.deleteIfExists(Paths.get(entity.get().getJarPath()));
+                String jarPath = skill.getJarPath();
+                if (jarPath != null && storageService.supports(jarPath)) {
+                    storageService.deleteObject(jarPath);
+                } else if (jarPath != null) {
+                    Files.deleteIfExists(Paths.get(jarPath));
+                }
+                Files.deleteIfExists(marketplaceDir.resolve(skillId.replace("@", "-") + ".jar"));
             } catch (Exception e) {
                 log.warn("Failed to delete skill JAR: {}", e.getMessage());
             }
+            return Optional.of(skillId);
         }
+        return Optional.empty();
+    }
+
+    /**
+     * 根据数据库ID或运行时skillId查找市场记录。
+     */
+    public Optional<SkillRepository> findByIdOrSkillId(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
+            return Optional.empty();
+        }
+
+        Optional<SkillRepository> byId = repository.findById(identifier);
+        if (byId.isPresent()) {
+            return byId;
+        }
+
+        int separator = identifier.lastIndexOf('@');
+        if (separator <= 0 || separator == identifier.length() - 1) {
+            return Optional.empty();
+        }
+        String name = identifier.substring(0, separator);
+        String version = identifier.substring(separator + 1);
+        return repository.findByNameAndVersion(name, version);
+    }
+
+    private String toSkillId(SkillRepository skill) {
+        return skill.getName() + "@" + skill.getVersion();
     }
 
     /**

@@ -2,6 +2,8 @@ package com.echomind.agent;
 
 import java.util.List;
 
+import lombok.Data;
+
 /**
  * Agent配置对象，用于定义Agent的属性并通过{@link AgentFactory}创建Agent实例。
  *
@@ -22,7 +24,7 @@ import java.util.List;
  * agentId: "weather-agent"
  * name: "天气助手"
  * systemPrompt: "你是一个专业的天气查询助手..."
- * modelId: "anthropic:claude-sonnet-4-20250514"
+ * modelId: "deepseek:deepseek-v4-flash"
  * skillIds:
  *   - "weather-skill@1.0"
  *   - "calculator-skill@1.0"
@@ -32,6 +34,7 @@ import java.util.List;
  * @see AgentFactory
  * @see Agent
  */
+@Data
 public class AgentConfig {
 
     /** Agent唯一标识符 */
@@ -48,29 +51,4 @@ public class AgentConfig {
 
     /** 绑定的Skill ID列表，默认为空列表 */
     private List<String> skillIds = List.of();
-
-    /** @return Agent唯一标识符 */
-    public String getAgentId() { return agentId; }
-    /** @param agentId Agent唯一标识符 */
-    public void setAgentId(String agentId) { this.agentId = agentId; }
-
-    /** @return Agent显示名称 */
-    public String getName() { return name; }
-    /** @param name Agent显示名称 */
-    public void setName(String name) { this.name = name; }
-
-    /** @return 系统提示词 */
-    public String getSystemPrompt() { return systemPrompt; }
-    /** @param systemPrompt 系统提示词 */
-    public void setSystemPrompt(String systemPrompt) { this.systemPrompt = systemPrompt; }
-
-    /** @return 默认模型ID */
-    public String getModelId() { return modelId; }
-    /** @param modelId 默认模型ID */
-    public void setModelId(String modelId) { this.modelId = modelId; }
-
-    /** @return 绑定的Skill ID列表 */
-    public List<String> getSkillIds() { return skillIds; }
-    /** @param skillIds 绑定的Skill ID列表 */
-    public void setSkillIds(List<String> skillIds) { this.skillIds = skillIds; }
 }

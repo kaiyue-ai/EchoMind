@@ -21,6 +21,7 @@ import java.util.Map;
  *   <li><b>parameterSchema</b>：JSON Schema 格式的参数定义，描述技能执行时所需的输入结构</li>
  *   <li><b>dependencies</b>：技能所依赖的其他技能标识列表，用于加载顺序控制和依赖注入</li>
  *   <li><b>tags</b>：技能标签，用于在技能市场中按关键词分类和搜索</li>
+ *   <li><b>keywords / aliases</b>：技能自声明触发词和别名，用于动态工具匹配</li>
  * </ul>
  *
  * @see com.echomind.skill.api.SkillMetadata SPI 层对应的技能元数据定义
@@ -60,8 +61,31 @@ public record SkillMetadata(
      * 技能的分类标签列表，例如 {@code ["data", "weather", "api"]}。
      * 为技能市场的前端搜索和后端过滤提供索引依据。
      */
-    List<String> tags
+    List<String> tags,
+    /**
+     * 技能作者显式声明的触发关键词，用于工具路由强匹配。
+     */
+    List<String> keywords,
+    /**
+     * 关键词别名表，key 为规范词，value 为用户可能说出的别名。
+     */
+    Map<String, List<String>> aliases
 ) {
+    public SkillMetadata {
+        parameterSchema = parameterSchema == null ? Map.of() : parameterSchema;
+        dependencies = dependencies == null ? List.of() : dependencies;
+        tags = tags == null ? List.of() : tags;
+        keywords = keywords == null ? List.of() : keywords;
+        aliases = aliases == null ? Map.of() : aliases;
+    }
+
+    /** 兼容旧调用点的 7 参数构造器。 */
+    public SkillMetadata(String name, String version, String description,
+                         Map<String, Object> parameterSchema, List<String> dependencies,
+                         String author, List<String> tags) {
+        this(name, version, description, parameterSchema, dependencies, author, tags, List.of(), Map.of());
+    }
+
     /**
      * 生成技能的唯一标识符。
      * 规则为 {@code name + "@" + version}，形如 {@code "weather@1.2.0"}。

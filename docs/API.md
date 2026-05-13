@@ -21,7 +21,7 @@
 {
   "sessionId": "a1b2c3d4-...",
   "agentId": "default",
-  "modelId": "anthropic:claude-sonnet-4-20250514",
+  "modelId": "deepseek:deepseek-v4-flash",
   "response": "北京今天晴天，22°C...",
   "skillResults": ["[weather-query]: Weather for Beijing: Sunny, 22C"]
 }
@@ -45,8 +45,8 @@
 // 响应
 [
   {
-    "providerId": "anthropic",
-    "modelName": "claude-sonnet-4-20250514",
+    "providerId": "deepseek",
+    "modelName": "deepseek-v4-flash",
     "capabilities": ["TEXT", "FUNCTION"],
     "default": true
   },
@@ -63,15 +63,15 @@
 ```json
 // 请求
 {
-  "providerId": "anthropic",
-  "modelName": "claude-opus-4-7"
+  "providerId": "deepseek",
+  "modelName": "deepseek-v4-flash"
 }
 
 // 响应
 {
   "status": "switched",
-  "providerId": "anthropic",
-  "modelName": "claude-opus-4-7"
+  "providerId": "deepseek",
+  "modelName": "deepseek-v4-flash"
 }
 ```
 
@@ -137,7 +137,7 @@
     "agentId": "default",
     "name": "EchoMind Assistant",
     "systemPrompt": "You are a helpful AI assistant...",
-    "defaultModelId": "anthropic:claude-sonnet-4-20250514",
+    "defaultModelId": "deepseek:deepseek-v4-flash",
     "skillIds": ["weather-query", "calculator", "web-search"]
   }
 ]
@@ -150,7 +150,7 @@
   "agentId": "my-agent",
   "name": "自定义助手",
   "systemPrompt": "你是一个Java开发专家...",
-  "modelId": "anthropic:claude-sonnet-4-20250514",
+  "modelId": "deepseek:deepseek-v4-flash",
   "skillIds": ["calculator"]
 }
 
@@ -194,56 +194,80 @@
 
 ## 6. MCP 接口 `/api/mcp`
 
-### GET `/api/mcp/server` — 服务器信息
+### GET `/api/mcp/servers` — 已挂载外部 MCP 服务
 ```json
+[
+  {
+    "id": "nowcoder-java-interview",
+    "transport": "stdio",
+    "command": ["java", "-jar", "/app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar"],
+    "workingDirectory": "/app/mcp",
+    "running": true,
+    "toolCount": 1,
+    "tools": [],
+    "mountedAt": "2026-05-10T12:00:00Z",
+    "error": null
+  }
+]
+```
+
+### POST `/api/mcp/servers` — 动态挂载外部 MCP 服务
+```json
+// 请求
 {
-  "name": "EchoMind-MCP",
-  "version": "1.0.0",
-  "toolCount": 4
+  "id": "demo",
+  "transport": "stdio",
+  "command": ["java", "-jar", "/app/mcp/demo.jar"],
+  "workingDirectory": "/app/mcp"
 }
 ```
 
-### GET `/api/mcp/tools` — 列出MCP工具
+### POST `/api/mcp/servers/{serverId}/refresh` — 刷新工具列表
+```json
+// 响应: ExternalMcpServerStatus
+```
+
+### DELETE `/api/mcp/servers/{serverId}` — 卸载外部 MCP 服务
+```json
+// 响应: 卸载前的 ExternalMcpServerStatus
+```
+
+### GET `/api/mcp/tools` — 列出外部 MCP 工具
 ```json
 // 响应
 [
   {
-    "name": "read_file",
-    "description": "Read content of a file",
+    "name": "fetch_nowcoder_java_interview_article",
+    "description": "抓取牛客网 Java 面经文章。传 url 时抓指定文章；不传 url 时随机抓取公开 Java/后端面经。",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "description": "File path" }
-      },
-      "required": ["path"]
+        "url": { "type": "string", "description": "牛客网文章地址，必须是 www.nowcoder.com 下的链接" },
+        "random": { "type": "boolean", "description": "是否随机抓取；url 为空时自动随机抓取" },
+        "keyword": { "type": "string", "description": "随机抓取筛选关键词，例如 Java、后端、Spring、美团" },
+        "maxAttempts": { "type": "integer", "description": "随机候选详情页最大尝试次数，默认 3，最大 8" },
+        "includeHtml": { "type": "boolean", "description": "是否额外返回简单 HTML 版本" }
+      }
     }
   }
 ]
 ```
 
-### POST `/api/mcp/tools/{toolName}/call` — 调用MCP工具
+### POST `/api/mcp/tools/{toolName}/call` — 调用外部 MCP 工具
 ```json
 // 请求
 {
   "arguments": {
-    "path": "/tmp/test.txt"
+    "random": true,
+    "keyword": "Java",
+    "maxAttempts": 3
   }
 }
 
 // 响应: ToolResult
 {
-  "content": [{ "type": "text", "text": "File contents here..." }],
+  "content": [{ "type": "text", "text": "# 腾讯云智后台开发一面，base武汉\n\n- 来源：https://www.nowcoder.com/feed/main/detail/..." }],
   "isError": false
-}
-```
-
-### POST `/api/mcp/register-skill/{skillId}` — 注册Skill为MCP工具
-```json
-// 响应
-{
-  "status": "registered",
-  "skillId": "filesystem@1.0.0",
-  "toolCount": "4"
 }
 ```
 
@@ -258,7 +282,16 @@
   {
     "teamId": "uuid",
     "name": "活动策划团队",
-    "roles": ["PLANNER", "EXECUTOR", "REVIEWER"]
+    "roles": ["PLANNER", "EXECUTOR", "REVIEWER"],
+    "members": [
+      {
+        "agentId": "default",
+        "agentName": "EchoMind Assistant",
+        "role": "PLANNER",
+        "capabilityTags": ["planning"],
+        "sortOrder": 10
+      }
+    ]
   }
 ]
 ```
@@ -268,20 +301,80 @@
 // 请求
 {
   "name": "活动策划团队",
-  "plannerId": "default",
-  "executorId": "default",
-  "reviewerId": "default"
+  "members": [
+    { "agentId": "default", "role": "PLANNER", "capabilityTags": ["planning"], "sortOrder": 10 },
+    { "agentId": "default", "role": "EXECUTOR", "capabilityTags": ["search", "venue"], "sortOrder": 20 },
+    { "agentId": "default", "role": "EXECUTOR", "capabilityTags": ["weather"], "sortOrder": 30 },
+    { "agentId": "default", "role": "REVIEWER", "capabilityTags": ["review", "report"], "sortOrder": 40 }
+  ]
 }
 
 // 响应
 {
   "teamId": "uuid",
   "name": "活动策划团队",
-  "roles": ["PLANNER", "EXECUTOR", "REVIEWER"]
+  "roles": ["PLANNER", "EXECUTOR", "REVIEWER"],
+  "members": []
 }
 ```
 
+### DELETE `/api/teams/{teamId}` — 硬删除团队
+直接删除团队定义及其成员、Run、Step、Event 黑板记录，不做逻辑删除。
+
+```http
+204 No Content
+```
+
+### POST `/api/teams/{teamId}/runs` — 创建异步团队 Run
+```json
+// 请求
+{ "task": "策划一场60人户外团建活动" }
+
+// 响应
+{
+  "runId": "uuid",
+  "teamId": "uuid",
+  "task": "策划一场60人户外团建活动",
+  "status": "PENDING",
+  "steps": [],
+  "events": []
+}
+```
+
+### GET `/api/teams/{teamId}/runs/{runId}` — 查询 Run 黑板
+```json
+{
+  "runId": "uuid",
+  "status": "EXECUTING",
+  "clarificationStage": null,
+  "planReviewJson": "{\"action\":\"CONTINUE\"}",
+  "resultReviewJson": null,
+  "finalOutput": null,
+  "mermaidDiagram": null,
+  "steps": [
+    {
+      "stepId": "step-1-abcd",
+      "title": "查询活动场地",
+      "assignedAgentId": "default",
+      "status": "RUNNING",
+      "retryCount": 0
+    }
+  ],
+  "events": [
+    { "type": "STEP_STARTED", "actorRole": "EXECUTOR", "message": "Executor started step" }
+  ]
+}
+```
+
+### POST `/api/teams/{teamId}/runs/{runId}/resume` — 提交澄清并继续
+```json
+// 请求
+{ "clarificationAnswer": "活动日期是下周五，预算每人300元以内。" }
+```
+
 ### POST `/api/teams/{teamId}/execute` — 执行团队任务
+兼容旧同步入口；新版前端使用 `/runs` 创建异步任务并轮询查询。
+
 ```json
 // 请求
 {
@@ -330,8 +423,8 @@ HTTP 状态码：
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | 是 | Anthropic API 密钥 |
-| `ANTHROPIC_BASE_URL` | 是 | Anthropic API 地址 |
+| `DEEPSEEK_API_KEY` | 是 | DeepSeek API 密钥 |
+| `DEEPSEEK_BASE_URL` | 是 | DeepSeek 兼容 API 地址，默认 `https://api.deepseek.com/anthropic` |
 | `OPENAI_API_KEY` | 否 | OpenAI API 密钥（可选） |
 
 ---
@@ -353,7 +446,7 @@ curl http://localhost:8080/api/models
 # 查询记忆
 curl http://localhost:8080/api/memory/{sessionId}
 
-# 列出MCP工具
+# 列出外部MCP工具
 curl http://localhost:8080/api/mcp/tools
 
 # 执行Agent Team任务

@@ -59,16 +59,22 @@ public class WebSearchSkill implements Skill {
         return new SkillMetadata(
             "web-search",
             "1.0.0",
-            "Search the web using DuckDuckGo Instant Answer API",
+            "Search the internet for real-time information, news, and current events. Use this whenever you need up-to-date information beyond your knowledge cutoff.",
             Map.of(
                 "properties", Map.of(
-                    "query", Map.of("type", "string", "description", "Search query")
+                    "query", Map.of("type", "string", "description", "What to search for on the web")
                 ),
                 "required", List.of("query")
             ),
             List.of(),
             "EchoMind",
-            List.of("search", "web", "find", "lookup", "internet", "搜索", "查询", "搜索网络", "网络搜索")
+            List.of("search", "web", "find", "lookup", "internet", "搜索", "查询", "搜索网络", "网络搜索"),
+            List.of("搜索", "查询", "查一下", "联网搜索", "网络搜索", "最新", "实时信息", "search web"),
+            Map.of(
+                "search", List.of("搜索", "查找", "查一下", "查询"),
+                "web", List.of("联网", "网络", "网页", "互联网"),
+                "current", List.of("最新", "实时", "现在")
+            )
         );
     }
 
@@ -85,41 +91,80 @@ public class WebSearchSkill implements Skill {
     public CompletableFuture<SkillResult> execute(SkillRequest request) {
         return CompletableFuture.supplyAsync(() -> {
             long start = System.currentTimeMillis();
+            String query = String.valueOf(request.parameters().getOrDefault("query", ""));
             try {
-                String query = String.valueOf(request.parameters().getOrDefault("query", ""));
                 String encoded = java.net.URLEncoder.encode(query, "UTF-8");
-                String url = "https://api.duckduckgo.com/?q=" + encoded + "&format=json&no_html=1";
 
-                Request httpReq = new Request.Builder().url(url).build();
+                // Try Instant Answer API first (good for facts, calculations, definitions)
+                String instantUrl = "https://api.duckduckgo.com/?q=" + encoded
+                                  + "&format=json&no_html=1&skip_disambig=1";
+                Request httpReq = new Request.Builder()
+                    .url(instantUrl)
+                    .header("User-Agent", "EchoMind/1.0")
+                    .build();
                 try (Response resp = HTTP.newCall(httpReq).execute()) {
-                    String body = resp.body() != null ? resp.body().string() : "No results";
-                    // 从 DuckDuckGo 响应中提取 AbstractText 字段
+                    String body = resp.body() != null ? resp.body().string() : "";
                     String result = extractAbstract(body);
-                    return SkillResult.success(result, System.currentTimeMillis() - start);
+                    if (!result.isEmpty() && !result.startsWith("No relevant")) {
+                        return SkillResult.success(result, System.currentTimeMillis() - start);
+                    }
+                }
+
+                // Fallback: scrape DuckDuckGo Lite for real web results
+                String liteUrl = "https://lite.duckduckgo.com/lite/?q=" + encoded;
+                Request liteReq = new Request.Builder()
+                    .url(liteUrl)
+                    .header("User-Agent", "EchoMind/1.0")
+                    .build();
+                try (Response resp = HTTP.newCall(liteReq).execute()) {
+                    String body = resp.body() != null ? resp.body().string() : "";
+                    String results = extractLiteResults(body, query);
+                    return SkillResult.success(results, System.currentTimeMillis() - start);
                 }
             } catch (Exception e) {
-                return SkillResult.success(
-                    "[Search Result] Query: " + request.parameters().get("query") +
-                    " (mock result - API unavailable)",
+                return SkillResult.failure(
+                    "Search failed: " + e.getMessage(),
                     System.currentTimeMillis() - start);
             }
         });
     }
 
     /**
-     * 从 DuckDuckGo JSON 响应中提取摘要文本。
-     *
-     * <p>提取策略（按优先级）：
-     * <ol>
-     *   <li>{@code AbstractText} —— 最丰富的结果摘要</li>
-     *   <li>{@code Answer} —— 即时回答（如计算、定义）</li>
-     *   <li>默认提示 —— 两种字段均为空时的降级文本</li>
-     * </ol>
-     *
-     * <p>JSON 解析失败时返回错误提示而非抛出异常。
-     *
-     * @param json DuckDuckGo API 返回的 JSON 字符串
-     * @return 提取的摘要文本；解析失败时返回错误提示
+     * Extract search result snippets from DuckDuckGo Lite HTML.
+     * Lite version has minimal markup: results are in &lt;a&gt; tags with class="result-link"
+     * and snippets in &lt;td&gt; elements with class="result-snippet".
+     */
+    private String extractLiteResults(String html, String query) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Web search results for \"").append(query).append("\":\n");
+        // Parse result-snippet td elements
+        int idx = 0;
+        int count = 0;
+        while ((idx = html.indexOf("result-snippet", idx)) != -1 && count < 5) {
+            int start = html.indexOf('>', idx) + 1;
+            int end = html.indexOf("</td>", start);
+            if (start > 0 && end > start) {
+                String snippet = html.substring(start, end).trim();
+                // Strip HTML tags
+                snippet = snippet.replaceAll("<[^>]+>", "").replaceAll("&amp;", "&")
+                    .replaceAll("&lt;", "<").replaceAll("&gt;", ">")
+                    .replaceAll("&quot;", "\"").replaceAll("&#39;", "'");
+                if (!snippet.isEmpty()) {
+                    count++;
+                    sb.append(count).append(". ").append(snippet).append("\n");
+                }
+            }
+            idx = end + 5;
+        }
+        if (count == 0) {
+            sb.append("(No search results found — DuckDuckGo returned empty results)");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Extract AbstractText or Answer from DuckDuckGo Instant Answer JSON.
+     * Returns empty string when neither field has content.
      */
     private String extractAbstract(String json) {
         try {
@@ -127,11 +172,9 @@ public class WebSearchSkill implements Skill {
             var node = mapper.readTree(json);
             String abs = node.path("AbstractText").asText();
             if (!abs.isEmpty()) return abs;
-            String answer = node.path("Answer").asText();
-            if (!answer.isEmpty()) return answer;
-            return "No relevant results found for your query.";
+            return node.path("Answer").asText();
         } catch (Exception e) {
-            return "Search completed but failed to parse results.";
+            return "";
         }
     }
 }

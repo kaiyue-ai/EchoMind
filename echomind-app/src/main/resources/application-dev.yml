@@ -6,10 +6,6 @@ spring:
     hibernate:
       ddl-auto: update
 
-echomind:
-  memory:
-    long-term-type: file
-
 logging:
   level:
     com.echomind: DEBUG

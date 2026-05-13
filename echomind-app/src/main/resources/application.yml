@@ -13,8 +13,16 @@ management:
 spring:
   application:
     name: echomind
+  servlet:
+    multipart:
+      # 聊天图片和 Skill JAR 都走 multipart/form-data；这里和前端 Nginx 限制保持一致。
+      max-file-size: 10MB
+      max-request-size: 12MB
   profiles:
     active: dev
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.autoconfigure.openai.OpenAiAutoConfiguration
   thymeleaf:
     cache: false
   datasource:
@@ -38,33 +46,130 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      chat:
+        options:
+          model: gpt-4o
+    retry:
+      max-attempts: 3
+      backoff:
+        initial-interval: 1000
+        multiplier: 2
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:echomind}
+    password: ${RABBITMQ_PASSWORD:echomind_secret}
 
 echomind:
   models:
-    default-provider: anthropic
+    default-provider: deepseek
     providers:
-      anthropic:
-        api-key: ${ANTHROPIC_API_KEY:}
-        base-url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+      deepseek:
+        api-key: ${DEEPSEEK_API_KEY:${ANTHROPIC_API_KEY:}}
+        base-url: ${DEEPSEEK_BASE_URL:${ANTHROPIC_BASE_URL:https://api.deepseek.com/anthropic}}
         models:
-          - name: claude-sonnet-4-20250514
+          - name: deepseek-v4-flash
             capabilities: [text, function]
             default: true
+      openai:
+        api-key: ${OPENAI_API_KEY:}
+        base-url: https://api.openai.com
+        models:
+          - name: gpt-4o
+            capabilities: [text, function, vision]
+            default: true
+      aliyun-bailian:
+        api-key: ${ALIYUN_BAILIAN_API_KEY:}
+        base-url: ${ALIYUN_BAILIAN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+        models:
+          - name: qwen-vl-plus
+            capabilities: [text, vision]
+            default: true
+          - name: qwen-plus
+            capabilities: [text, function]
+            default: false
+      # ---- 以下为参考示例，取消注释并填入凭证即可启用 ----
+      # tongyi:
+      #   api-key: ${DASHSCOPE_API_KEY:}
+      #   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      #   models:
+      #     - name: qwen-max
+      #       capabilities: [text, function]
+      #       default: true
+      # ollama:
+      #   api-key: ollama
+      #   base-url: http://localhost:11434/v1
+      #   models:
+      #     - name: llama3.2
+      #       capabilities: [text, function]
+      #       default: true
   memory:
     short-term-window: 20
-    long-term-type: redis
-    file-path: ./data/memory/
+    # MySQL 保存完整会话；Redis 只保存最近 short-term-window 条热上下文。
     redis-ttl-seconds: 604800
+    embedding-enabled: true
+    vector-store: ${ECHOMIND_MEMORY_VECTOR_STORE:redis-stack}
+    vector-index-name: ${ECHOMIND_MEMORY_VECTOR_INDEX_NAME:idx:echomind:memory:vectors}
+    vector-key-prefix: ${ECHOMIND_MEMORY_VECTOR_KEY_PREFIX:echomind:memory:vector:}
+    embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com}
+    embedding-api-key: ${ALIYUN_BAILIAN_API_KEY:}
+    embedding-model: tongyi-embedding-vision-plus
+    retrieval-top-k: 3
+    summary-max-chars: 3000
+    summary-refresh-interval: 6
+    knowledge-top-k: ${ECHOMIND_MEMORY_KNOWLEDGE_TOP_K:4}
+    knowledge-chunk-size: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_SIZE:1000}
+    knowledge-chunk-overlap: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_OVERLAP:150}
+    knowledge-min-vector-similarity: ${ECHOMIND_MEMORY_KNOWLEDGE_MIN_VECTOR_SIMILARITY:0.25}
+    knowledge-vector-weight: ${ECHOMIND_MEMORY_KNOWLEDGE_VECTOR_WEIGHT:0.75}
+    knowledge-keyword-weight: ${ECHOMIND_MEMORY_KNOWLEDGE_KEYWORD_WEIGHT:0.25}
+    knowledge-keyword-candidate-limit: ${ECHOMIND_MEMORY_KNOWLEDGE_KEYWORD_CANDIDATE_LIMIT:40}
+    knowledge-vector-index-name: ${ECHOMIND_MEMORY_KNOWLEDGE_VECTOR_INDEX_NAME:idx:echomind:agent:knowledge:vectors}
+    knowledge-vector-key-prefix: ${ECHOMIND_MEMORY_KNOWLEDGE_VECTOR_KEY_PREFIX:echomind:agent:knowledge:vector:}
+    knowledge-ocr-enabled: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_ENABLED:true}
+    knowledge-ocr-language: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_LANGUAGE:chi_sim+eng}
+    knowledge-ocr-dpi: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_DPI:200}
+    knowledge-ocr-min-text-chars: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_MIN_TEXT_CHARS:80}
+    knowledge-ocr-max-pages: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_MAX_PAGES:20}
+    knowledge-ocr-tesseract-command: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_TESSERACT_COMMAND:tesseract}
+    # 最终 prompt 兜底预算：历史、摘要和知识库都会在进入模型前统一裁剪。
+    prompt-max-chars: ${ECHOMIND_MEMORY_PROMPT_MAX_CHARS:24000}
+    prompt-max-system-message-chars: ${ECHOMIND_MEMORY_PROMPT_MAX_SYSTEM_MESSAGE_CHARS:12000}
+    prompt-max-history-message-chars: ${ECHOMIND_MEMORY_PROMPT_MAX_HISTORY_MESSAGE_CHARS:4000}
   skill:
     auto-load-path: ./skills/
     hot-reload: true
     marketplace-dir: ./data/marketplace/
+  storage:
+    # mode=oss 时写入阿里云 OSS；环境变量不完整时自动回退 local，避免开发/测试启动失败。
+    mode: ${ECHOMIND_STORAGE_MODE:oss}
+    local-dir: ${ECHOMIND_STORAGE_LOCAL_DIR:./data/objects/}
+    endpoint: ${ALIYUN_OSS_ENDPOINT:}
+    bucket: ${ALIYUN_OSS_BUCKET:my-dev-oss}
+    access-key-id: ${AccessKeyID:${ALIYUN_ACCESS_KEY_ID:}}
+    access-key-secret: ${AccessKeySecret:${ALIYUN_ACCESS_KEY_SECRET:}}
   mcp:
-    server-enabled: true
-    transport: stdio
+    external-servers:
+      - id: nowcoder-java-interview
+        enabled: true
+        transport: stdio
+        command:
+          - java
+          - -jar
+          - ${NOWCODER_MCP_JAR:D:\claudeWorkSpace\nowcoder-java-interview-mcp-server\target\nowcoder-java-interview-mcp-server-1.0.0.jar}
+        working-directory: ${NOWCODER_MCP_WORKDIR:D:\claudeWorkSpace\nowcoder-java-interview-mcp-server}
   agents:
     - agent-id: default
       name: EchoMind Assistant
-      system-prompt: "You are a helpful AI assistant with access to various skills, including weather lookup, calculator, web search, and filesystem operations."
-      model-id: anthropic:claude-sonnet-4-20250514
-      skill-ids: [weather-query, calculator, web-search, filesystem]
+      system-prompt: "You are a helpful AI assistant. You have access to tools for web search, weather, calculations, date/time queries, and Markdown code formatting. When the user asks about current dates, times, weekdays, or date offsets, use the date-query tool instead of guessing. When outputting code, use fenced Markdown code blocks with the correct language label."
+      model-id: deepseek:deepseek-v4-flash
+      skill-ids: [weather-query, calculator, web-search, markdown-code, date-query]
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn

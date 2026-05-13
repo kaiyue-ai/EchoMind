@@ -1,7 +1,6 @@
 package com.echomind.agent.team.messaging;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,10 +26,8 @@ import java.util.function.Consumer;
  *   <li>通过 DEBUG 级别日志记录每条消息，方便追踪通信链路。</li>
  * </ul>
  */
+@Slf4j
 public class TeamMessageBus {
-
-    /** 日志记录器 */
-    private static final Logger log = LoggerFactory.getLogger(TeamMessageBus.class);
 
     /** 无界阻塞队列，存储待处理的消息 */
     private final BlockingQueue<TeamMessage> queue = new LinkedBlockingQueue<>();

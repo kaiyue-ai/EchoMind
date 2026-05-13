@@ -74,7 +74,7 @@ public class ModelProviderRegistry {
     /**
      * 根据提供商 ID 获取对应的 {@link ModelProvider} 实例。
      *
-     * @param providerId 提供商唯一标识（如 "anthropic", "openai"）
+     * @param providerId 提供商唯一标识（如 "deepseek", "openai"）
      * @return 包装在 {@link Optional} 中的 ModelProvider，未找到时为空
      */
     public Optional<ModelProvider> getProvider(String providerId) {

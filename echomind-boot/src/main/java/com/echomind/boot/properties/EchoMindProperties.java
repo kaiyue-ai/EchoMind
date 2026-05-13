@@ -3,6 +3,7 @@ package com.echomind.boot.properties;
 import java.util.List;
 import java.util.Map;
 
+import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -12,23 +13,23 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <pre>{@code
  * echomind:
  *   models:
- *     default-provider: anthropic
+ *     default-provider: deepseek
  *     providers:
- *       anthropic:
+ *       deepseek:
  *         api-key: ...
  *         base-url: ...
  *         models: [...]
  *   memory:
  *     short-term-window: 20
- *     long-term-type: file
- *     file-path: ./data/memory/
+ *     redis-ttl-seconds: 604800
+ *     vector-store: redis-stack
+ *     embedding-model: tongyi-embedding-vision-plus
  *   skill:
  *     auto-load-path: ./skills/
  *     hot-reload: true
  *     marketplace-dir: ./data/marketplace/
  *   mcp:
- *     server-enabled: true
- *     transport: stdio
+ *     external-servers: [...]
  *   agents:
  *     - agent-id: default
  *       name: EchoMind Assistant
@@ -45,57 +46,46 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *   <li>Agent 定义列表 {@code agents} 允许在配置文件中声明式定义多 Agent。</li>
  * </ul>
  */
+@Data
 @ConfigurationProperties(prefix = "echomind")
 public class EchoMindProperties {
 
     /** 模型配置（提供商、默认模型等） */
     private Models models = new Models();
-    /** 记忆系统配置（短期窗口、长期存储等） */
+    /** 记忆系统配置（近期上下文、摘要、向量检索等） */
     private Memory memory = new Memory();
     /** 技能系统配置（自动加载路径、热重载等） */
     private Skill skill = new Skill();
-    /** MCP 协议配置（服务端开关、传输方式等） */
+    /** 对象存储配置（Skill JAR、聊天图片等二进制文件） */
+    private Storage storage = new Storage();
+    /** 外部MCP服务接入配置 */
     private Mcp mcp = new Mcp();
     /** 预定义 Agent 列表 */
     private List<AgentDef> agents = List.of();
 
-    public Models getModels() { return models; }
-    public void setModels(Models models) { this.models = models; }
-    public Memory getMemory() { return memory; }
-    public void setMemory(Memory memory) { this.memory = memory; }
-    public Skill getSkill() { return skill; }
-    public void setSkill(Skill skill) { this.skill = skill; }
-    public Mcp getMcp() { return mcp; }
-    public void setMcp(Mcp mcp) { this.mcp = mcp; }
-    public List<AgentDef> getAgents() { return agents; }
-    public void setAgents(List<AgentDef> agents) { this.agents = agents; }
-
     /**
      * 模型子系统配置 —— 管理 LLM 提供商及其模型定义。
      *
-     * <p>支持配置多个提供商（如 anthropic、openai），
+     * <p>支持配置多个提供商（如 deepseek、openai-compatible、aliyun-bailian），
      * 每个提供商可以绑定多个模型并设置默认模型。
      */
+    @Data
     public static class Models {
-        /** 默认提供商 ID，未指定时使用 "anthropic" */
-        private String defaultProvider = "anthropic";
-        /** 提供商配置映射，key 为提供商 ID（如 "anthropic"），value 为提供商配置 */
+        /** 默认提供商 ID，未指定时使用 "deepseek" */
+        private String defaultProvider = "deepseek";
+        /** 提供商配置映射，key 为提供商 ID（如 "deepseek"），value 为提供商配置 */
         private Map<String, ProviderConfig> providers = Map.of();
-
-        public String getDefaultProvider() { return defaultProvider; }
-        public void setDefaultProvider(String v) { this.defaultProvider = v; }
-        public Map<String, ProviderConfig> getProviders() { return providers; }
-        public void setProviders(Map<String, ProviderConfig> v) { this.providers = v; }
     }
 
     /**
      * 单个 LLM 提供商的配置。
      *
      * <p>包含 API 密钥、基础 URL 以及该提供商下可用的模型列表。
-     * API 密钥也可以通过环境变量（如 {@code ANTHROPIC_API_KEY}）提供，
+     * API 密钥也可以通过环境变量（如 {@code DEEPSEEK_API_KEY}）提供，
      * 配置文件和环境变量二者的优先级由 {@link com.echomind.boot.autoconfigure.EchoMindAutoConfiguration}
      * 中的 Bean 创建逻辑决定。
      */
+    @Data
     public static class ProviderConfig {
         /** API 密钥（可被环境变量覆盖） */
         private String apiKey;
@@ -103,13 +93,6 @@ public class EchoMindProperties {
         private String baseUrl;
         /** 该提供商下的模型列表 */
         private List<ModelConfig> models = List.of();
-
-        public String getApiKey() { return apiKey; }
-        public void setApiKey(String v) { this.apiKey = v; }
-        public String getBaseUrl() { return baseUrl; }
-        public void setBaseUrl(String v) { this.baseUrl = v; }
-        public List<ModelConfig> getModels() { return models; }
-        public void setModels(List<ModelConfig> v) { this.models = v; }
     }
 
     /**
@@ -118,48 +101,87 @@ public class EchoMindProperties {
      * <p>定义模型名称、能力集合（如 TEXT、FUNCTION、VISION 等）
      * 以及是否作为该提供商的默认模型。
      */
+    @Data
     public static class ModelConfig {
-        /** 模型名称，如 "claude-sonnet-4-20250514" */
+        /** 模型名称，如 "deepseek-v4-flash" */
         private String name;
         /** 模型能力标签列表，如 ["TEXT", "FUNCTION"] */
         private List<String> capabilities = List.of();
         /** 是否为该提供商的默认模型 */
         private boolean isDefault;
-
-        public String getName() { return name; }
-        public void setName(String v) { this.name = v; }
-        public List<String> getCapabilities() { return capabilities; }
-        public void setCapabilities(List<String> v) { this.capabilities = v; }
-        public boolean isDefault() { return isDefault; }
-        public void setDefault(boolean v) { this.isDefault = v; }
     }
 
     /**
-     * 记忆子系统配置 —— 控制短期窗口和长期持久化行为。
+     * 记忆子系统配置 —— 控制近期上下文、摘要和向量检索行为。
      */
+    @Data
     public static class Memory {
-        /** 短期窗口最大消息数，默认 20 条 */
+        /** 近期上下文最大消息数，默认 20 条。完整历史保存在 MySQL 中。 */
         private int shortTermWindow = 20;
-        /** 长期存储类型：file 或 redis，默认 "file" */
-        private String longTermType = "file";
-        /** 文件模式下的持久化目录，默认 "./data/memory/" */
-        private String filePath = "./data/memory/";
-        /** Redis 模式下会话记忆的 TTL（秒），默认 604800（7 天）；0 或负数表示永不过期 */
+        /** Redis 近期缓存的 TTL（秒），默认 604800（7 天）；0 或负数表示永不过期 */
         private long redisTtlSeconds = 604800;
-
-        public int getShortTermWindow() { return shortTermWindow; }
-        public void setShortTermWindow(int v) { this.shortTermWindow = v; }
-        public String getLongTermType() { return longTermType; }
-        public void setLongTermType(String v) { this.longTermType = v; }
-        public String getFilePath() { return filePath; }
-        public void setFilePath(String v) { this.filePath = v; }
-        public long getRedisTtlSeconds() { return redisTtlSeconds; }
-        public void setRedisTtlSeconds(long v) { this.redisTtlSeconds = v; }
+        /** 向量检索开关。 */
+        private boolean embeddingEnabled = true;
+        /** 向量索引实现：redis-stack 或 mysql-linear。 */
+        private String vectorStore = "redis-stack";
+        /** Redis Stack RediSearch 索引名。 */
+        private String vectorIndexName = "idx:echomind:memory:vectors";
+        /** Redis Stack 向量 Hash key 前缀。 */
+        private String vectorKeyPrefix = "echomind:memory:vector:";
+        /** 百炼向量接口 Base URL，默认使用 DashScope 原生地址。 */
+        private String embeddingBaseUrl = "https://dashscope.aliyuncs.com";
+        /** 百炼向量 API Key，默认从 ALIYUN_BAILIAN_API_KEY 读取。 */
+        private String embeddingApiKey;
+        /** 向量模型，按需求默认使用 tongyi-embedding-vision-plus。 */
+        private String embeddingModel = "tongyi-embedding-vision-plus";
+        /** 相关历史召回条数。 */
+        private int retrievalTopK = 3;
+        /** 摘要最大字符数。 */
+        private int summaryMaxChars = 3000;
+        /** 每隔多少条消息刷新一次摘要。 */
+        private int summaryRefreshInterval = 6;
+        /** Agent 私有知识库召回条数。 */
+        private int knowledgeTopK = 4;
+        /** Agent 私有知识库单片最大字符数。 */
+        private int knowledgeChunkSize = 1000;
+        /** Agent 私有知识库切片重叠字符数。 */
+        private int knowledgeChunkOverlap = 150;
+        /** Agent 私有知识库向量召回最小相似度，低于该值的片段不注入提示词。 */
+        private double knowledgeMinVectorSimilarity = 0.25;
+        /** Agent 私有知识库混合召回中向量相似度的权重。 */
+        private double knowledgeVectorWeight = 0.75;
+        /** Agent 私有知识库混合召回中关键词匹配的权重。 */
+        private double knowledgeKeywordWeight = 0.25;
+        /** Agent 私有知识库关键词粗召回最大候选数。 */
+        private int knowledgeKeywordCandidateLimit = 40;
+        /** Agent 私有知识库 Redis Stack 索引名。 */
+        private String knowledgeVectorIndexName = "idx:echomind:agent:knowledge:vectors";
+        /** Agent 私有知识库 Redis Stack Hash key 前缀。 */
+        private String knowledgeVectorKeyPrefix = "echomind:agent:knowledge:vector:";
+        /** 是否启用扫描版 PDF OCR。 */
+        private boolean knowledgeOcrEnabled = true;
+        /** OCR 语言包，chi_sim+eng 表示简体中文和英文混合识别。 */
+        private String knowledgeOcrLanguage = "chi_sim+eng";
+        /** OCR 渲染 DPI；越高越准但越慢。 */
+        private int knowledgeOcrDpi = 200;
+        /** PDFBox 抽取文本少于该字符数时才触发 OCR。 */
+        private int knowledgeOcrMinTextChars = 80;
+        /** 单个 PDF 最多 OCR 页数，防止超大文件拖垮服务。 */
+        private int knowledgeOcrMaxPages = 20;
+        /** Tesseract 命令名或绝对路径。 */
+        private String knowledgeOcrTesseractCommand = "tesseract";
+        /** 最终发给模型的用户 prompt 最大字符数，给不同来源上下文做统一兜底。 */
+        private int promptMaxChars = 24000;
+        /** 知识库、摘要等 system 注入消息单条最大字符数。 */
+        private int promptMaxSystemMessageChars = 12000;
+        /** 普通历史消息单条最大字符数。 */
+        private int promptMaxHistoryMessageChars = 4000;
     }
 
     /**
      * 技能子系统配置 —— 控制技能自动加载和热重载行为。
      */
+    @Data
     public static class Skill {
         /** 技能 JAR 自动加载目录，默认 "./skills/" */
         private String autoLoadPath = "./skills/";
@@ -167,28 +189,56 @@ public class EchoMindProperties {
         private boolean hotReload = true;
         /** 技能市场持久化目录，默认 "./data/marketplace/" */
         private String marketplaceDir = "./data/marketplace/";
-
-        public String getAutoLoadPath() { return autoLoadPath; }
-        public void setAutoLoadPath(String v) { this.autoLoadPath = v; }
-        public boolean isHotReload() { return hotReload; }
-        public void setHotReload(boolean v) { this.hotReload = v; }
-        public String getMarketplaceDir() { return marketplaceDir; }
-        public void setMarketplaceDir(String v) { this.marketplaceDir = v; }
     }
 
     /**
-     * MCP 协议子系统配置 —— 控制 MCP 服务端行为。
+     * 对象存储配置。
+     *
+     * <p>生产环境建议 mode=oss，并通过环境变量注入 endpoint、AccessKeyID、
+     * AccessKeySecret 和 bucket；开发测试环境可以保持 local。</p>
      */
-    public static class Mcp {
-        /** 是否启用 MCP 服务端，默认 true */
-        private boolean serverEnabled = true;
-        /** 传输方式：stdio 或 http，默认 "stdio" */
-        private String transport = "stdio";
+    @Data
+    public static class Storage {
+        /** 存储模式：oss 或 local。 */
+        private String mode = "local";
+        /** 本地兜底目录。 */
+        private String localDir = "./data/objects/";
+        /** OSS Endpoint，例如 https://oss-cn-hangzhou.aliyuncs.com。 */
+        private String endpoint;
+        /** OSS Bucket，默认按用户要求使用 my-dev-oss。 */
+        private String bucket = "my-dev-oss";
+        /** OSS AccessKey ID。 */
+        private String accessKeyId;
+        /** OSS AccessKey Secret。 */
+        private String accessKeySecret;
+    }
 
-        public boolean isServerEnabled() { return serverEnabled; }
-        public void setServerEnabled(boolean v) { this.serverEnabled = v; }
-        public String getTransport() { return transport; }
-        public void setTransport(String v) { this.transport = v; }
+    /**
+     * 外部 MCP 接入配置。
+     */
+    @Data
+    public static class Mcp {
+        /** 外部 MCP Server 列表，启动时会注册进 Agent 工具中心。 */
+        private List<ExternalMcpServer> externalServers = List.of();
+    }
+
+    /**
+     * 外部 MCP Server 配置。
+     *
+     * <p>当前支持 stdio 方式：主项目启动一个本地命令，把它当 MCP 子进程通信。</p>
+     */
+    @Data
+    public static class ExternalMcpServer {
+        /** 服务器唯一标识，用于日志和工具来源追踪。 */
+        private String id;
+        /** 是否启用该外部 MCP Server。 */
+        private boolean enabled = true;
+        /** 传输方式，当前实现 stdio。 */
+        private String transport = "stdio";
+        /** 启动命令，例如 ["java", "-jar", "/app/mcp/nowcoder.jar"]。 */
+        private List<String> command = List.of();
+        /** 子进程工作目录，可为空。 */
+        private String workingDirectory;
     }
 
     /**
@@ -197,6 +247,7 @@ public class EchoMindProperties {
      * <p>每个 Agent 定义包括：唯一标识、显示名称、系统提示词、
      * 绑定的模型 ID 以及可调用的技能 ID 列表。
      */
+    @Data
     public static class AgentDef {
         /** Agent 唯一标识 */
         private String agentId;
@@ -208,16 +259,5 @@ public class EchoMindProperties {
         private String modelId;
         /** 可调用的技能 ID 列表 */
         private List<String> skillIds = List.of();
-
-        public String getAgentId() { return agentId; }
-        public void setAgentId(String v) { this.agentId = v; }
-        public String getName() { return name; }
-        public void setName(String v) { this.name = v; }
-        public String getSystemPrompt() { return systemPrompt; }
-        public void setSystemPrompt(String v) { this.systemPrompt = v; }
-        public String getModelId() { return modelId; }
-        public void setModelId(String v) { this.modelId = v; }
-        public List<String> getSkillIds() { return skillIds; }
-        public void setSkillIds(List<String> v) { this.skillIds = v; }
     }
 }

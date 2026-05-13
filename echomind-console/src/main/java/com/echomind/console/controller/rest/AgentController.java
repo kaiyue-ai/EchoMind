@@ -1,16 +1,20 @@
 package com.echomind.console.controller.rest;
 
-import com.echomind.agent.Agent;
-import com.echomind.agent.AgentConfig;
-import com.echomind.agent.AgentFactory;
-import com.echomind.agent.orchestration.AgentOrchestrator;
-import com.echomind.agent.pipeline.PipelineContext;
+import com.echomind.console.dto.AgentExecuteRequest;
+import com.echomind.console.dto.AgentSaveRequest;
+import com.echomind.console.dto.AgentView;
+import com.echomind.console.service.AgentApplicationService;
+import com.echomind.memory.knowledge.AgentKnowledgeDocument;
+import com.echomind.memory.knowledge.AgentKnowledgeService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
-import java.util.Collection;
+import java.io.IOException;
+import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+
+import lombok.RequiredArgsConstructor;
 
 /**
  * Agent 管理控制器 —— 提供 Agent 的创建、查询与执行 API。
@@ -31,32 +35,22 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/agents")
+@RequiredArgsConstructor
 public class AgentController {
 
-    /** Agent 工厂，负责根据配置创建和管理 Agent 实例 */
-    private final AgentFactory factory;
-    /** Agent 编排器，驱动完整的执行管线 */
-    private final AgentOrchestrator orchestrator;
-
-    /**
-     * 构造 Agent 管理控制器。
-     *
-     * @param factory      Agent 工厂
-     * @param orchestrator Agent 编排器
-     */
-    public AgentController(AgentFactory factory, AgentOrchestrator orchestrator) {
-        this.factory = factory;
-        this.orchestrator = orchestrator;
-    }
+    /** Agent应用服务，收口HTTP层之外的校验、持久化和运行时同步逻辑。 */
+    private final AgentApplicationService agentService;
+    /** Agent 私有知识库服务，负责文件切片、向量化和检索索引。 */
+    private final AgentKnowledgeService knowledgeService;
 
     /**
      * 列出所有 Agent。
      *
-     * @return 当前系统中所有 Agent 实例的集合
+     * @return 当前系统中所有 Agent 的前端展示信息
      */
     @GetMapping
-    public ResponseEntity<Collection<Agent>> listAgents() {
-        return ResponseEntity.ok(factory.allAgents().values());
+    public ResponseEntity<List<AgentView>> listAgents() {
+        return ResponseEntity.ok(agentService.listAgents());
     }
 
     /**
@@ -66,11 +60,11 @@ public class AgentController {
      * 创建并注册一个新的 Agent 实例。
      *
      * @param config Agent 配置对象
-     * @return 创建成功的 Agent 实例
+     * @return 创建成功的 Agent 展示信息
      */
     @PostMapping
-    public ResponseEntity<Agent> create(@RequestBody AgentConfig config) {
-        return ResponseEntity.ok(factory.create(config));
+    public ResponseEntity<AgentView> create(@RequestBody AgentSaveRequest request) {
+        return ResponseEntity.ok(agentService.createOrUpdate(request));
     }
 
     /**
@@ -89,13 +83,37 @@ public class AgentController {
      */
     @PostMapping("/{agentId}/execute")
     public ResponseEntity<Map<String, Object>> execute(
-            @PathVariable String agentId, @RequestBody Map<String, String> body) {
-        String sessionId = body.getOrDefault("sessionId", UUID.randomUUID().toString());
-        String message = body.get("message");
-        PipelineContext result = orchestrator.execute(agentId, sessionId, message);
-        return ResponseEntity.ok(Map.of(
-            "sessionId", result.getSessionId(),
-            "response", result.getFinalResponse()
+            @PathVariable String agentId, @RequestBody AgentExecuteRequest request) {
+        return ResponseEntity.ok(agentService.execute(agentId, request));
+    }
+
+    /** 查询指定 Agent 的知识库文档列表。 */
+    @GetMapping("/{agentId}/knowledge")
+    public ResponseEntity<List<AgentKnowledgeDocument>> listKnowledge(@PathVariable String agentId) {
+        return ResponseEntity.ok(knowledgeService.listDocuments(agentId));
+    }
+
+    /** 上传 txt/pdf 到指定 Agent 的私有知识库。 */
+    @PostMapping("/{agentId}/knowledge")
+    public ResponseEntity<AgentKnowledgeDocument> uploadKnowledge(
+            @PathVariable String agentId, @RequestParam("file") MultipartFile file) throws IOException {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("知识库文件不能为空");
+        }
+        return ResponseEntity.ok(knowledgeService.upload(
+            agentId,
+            file.getOriginalFilename(),
+            file.getSize(),
+            file.getBytes()
         ));
     }
+
+    /** 删除指定 Agent 的一份知识库文档。 */
+    @DeleteMapping("/{agentId}/knowledge/{documentId}")
+    public ResponseEntity<Map<String, Object>> deleteKnowledge(
+            @PathVariable String agentId, @PathVariable Long documentId) {
+        knowledgeService.deleteDocument(agentId, documentId);
+        return ResponseEntity.ok(Map.of("deleted", true));
+    }
+
 }

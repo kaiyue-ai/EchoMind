@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:3306/echomind?useSSL=true&characterEncoding=UTF-8
+    username: ${MYSQL_USER:echomind}
+    password: ${MYSQL_PASSWORD:echomind_secret}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    database-platform: org.hibernate.dialect.MySQLDialect
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+
+echomind:
+  skill:
+    hot-reload: false
+
+logging:
+  level:
+    com.echomind: INFO
+    org.springframework.ai: WARN

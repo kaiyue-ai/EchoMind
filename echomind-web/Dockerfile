@@ -21,10 +21,11 @@ RUN npm run build
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html/
 
-# Nginx 配置：API 代理到后端
+# Nginx 配置：API 代理到后端 + SSE 支持
 RUN echo 'server { \
     listen 80; \
     server_name localhost; \
+    client_max_body_size 12m; \
     location / { \
         root /usr/share/nginx/html; \
         index index.html; \
@@ -34,7 +35,12 @@ RUN echo 'server { \
         proxy_pass http://echomind-backend:8080/api/; \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
-        proxy_read_timeout 120s; \
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+        proxy_read_timeout 300s; \
+        proxy_http_version 1.1; \
+        proxy_set_header Connection ""; \
+        proxy_buffering off; \
+        chunked_transfer_encoding on; \
     } \
 }' > /etc/nginx/conf.d/default.conf
 

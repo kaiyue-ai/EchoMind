@@ -3,112 +3,94 @@ package com.echomind.boot.autoconfigure;
 import com.echomind.agent.AgentConfig;
 import com.echomind.agent.AgentFactory;
 import com.echomind.agent.orchestration.AgentOrchestrator;
-import com.echomind.agent.orchestration.TaskRouter;
 import com.echomind.agent.pipeline.ExecutionPipeline;
 import com.echomind.agent.pipeline.PipelineStage;
+import com.echomind.agent.pipeline.PromptBudget;
 import com.echomind.agent.pipeline.stages.*;
+import com.echomind.agent.store.AgentPersistenceService;
+import com.echomind.agent.store.AgentRepository;
+import com.echomind.agent.tool.CapabilityRegistry;
+import com.echomind.agent.tool.ExternalMcpRuntimeService;
+import com.echomind.agent.tool.ExternalMcpServerConfig;
+import com.echomind.agent.tool.SkillCapabilityService;
 import com.echomind.boot.properties.EchoMindProperties;
 import com.echomind.llm.provider.AnthropicProvider;
+import com.echomind.llm.provider.DeepSeekProvider;
 import com.echomind.llm.provider.MockModelProvider;
-import com.echomind.llm.provider.ModelProvider;
-import com.echomind.llm.provider.OpenAiProvider;
+import com.echomind.llm.provider.OpenAICompatibleProvider;
 import com.echomind.llm.router.*;
-import com.echomind.common.model.SkillState;
-import com.echomind.mcp.server.MCPServer;
-import com.echomind.mcp.server.SkillToolProvider;
+import org.springframework.ai.anthropic.AnthropicChatModel;
+import org.springframework.ai.anthropic.api.AnthropicApi;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.api.OpenAiApi;
 import com.echomind.memory.MemoryManager;
-import com.echomind.memory.longterm.FileLongTermStore;
-import com.echomind.memory.longterm.LongTermMemoryStore;
-import com.echomind.memory.longterm.RedisLongTermStore;
-import com.echomind.memory.session.SessionConfig;
-import com.echomind.memory.session.SessionManager;
+import com.echomind.memory.cache.InMemoryRecentMemoryCache;
+import com.echomind.memory.cache.RecentMemoryCache;
+import com.echomind.memory.cache.RedisRecentMemoryCache;
+import com.echomind.memory.embedding.DashScopeEmbeddingClient;
+import com.echomind.memory.embedding.DisabledEmbeddingClient;
+import com.echomind.memory.embedding.EmbeddingClient;
+import com.echomind.memory.embedding.MemoryEmbeddingService;
+import com.echomind.memory.embedding.MemoryVectorStore;
+import com.echomind.memory.embedding.MysqlMemoryVectorStore;
+import com.echomind.memory.embedding.RedisStackMemoryVectorStore;
+import com.echomind.memory.persistence.ChatMessageRepository;
+import com.echomind.memory.persistence.ChatSessionRepository;
+import com.echomind.memory.persistence.MemoryEmbeddingRepository;
+import com.echomind.memory.persistence.PersistentChatMemoryStore;
+import com.echomind.memory.knowledge.AgentKnowledgeChunkRepository;
+import com.echomind.memory.knowledge.AgentKnowledgeDocumentRepository;
+import com.echomind.memory.knowledge.AgentKnowledgeService;
 import com.echomind.memory.shortterm.WindowConfig;
+import com.echomind.memory.summary.MemorySummaryService;
 import com.echomind.skill.loader.SkillDirectoryWatcher;
 import com.echomind.skill.loader.SkillJarLoader;
 import com.echomind.skill.marketplace.MarketplaceService;
 import com.echomind.skill.marketplace.SkillEntityRepository;
-import com.echomind.skill.orchestrator.SkillOrchestrator;
 import com.echomind.skill.registry.SkillRegistry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.echomind.skill.storage.AliyunOssObjectStorageService;
+import com.echomind.skill.storage.LocalObjectStorageService;
+import com.echomind.skill.storage.ObjectStorageService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.nio.file.Paths;
 import java.util.*;
 
 /**
- * EchoMind 自动配置类 —— Spring Boot 自动装配的核心入口。
+ * EchoMind 的 Spring Boot 自动装配入口。
  *
- * <p>本配置类负责创建 EchoMind 平台所有核心 Bean，按模块分为以下几组：
- * <ol>
- *   <li><b>配置属性</b>：{@link EchoMindProperties} 作为统一配置持有者</li>
- *   <li><b>LLM 层</b>：模型提供商（Anthropic、OpenAI、Mock）、注册中心、动态路由器</li>
- *   <li><b>记忆层</b>：窗口配置、长期存储、会话管理、记忆管理器</li>
- *   <li><b>技能层</b>：注册中心、JAR 加载器、编排器、目录监视器、市场服务</li>
- *   <li><b>Agent 层</b>：执行管线（5 阶段）、Agent 工厂、编排器、任务路由器</li>
- *   <li><b>Agent Team 层</b>：消息总线、跟踪记录器、团队协调器</li>
- *   <li><b>MCP 层</b>：MCP 服务端（条件启用）</li>
- * </ol>
- *
- * <p>设计要点：
- * <ul>
- *   <li>使用 {@link ConditionalOnProperty} 实现可选模块的条件装配（如 OpenAI、MCP）。</li>
- *   <li>所有 LLM 模型注册集中在 {@code llmInitializer} Bean 中完成，
- *       确保启动时模型配置已就绪。</li>
- *   <li>Agent 自动注册：从配置文件读取 Agent 定义并批量创建；
- *       若无配置则自动创建默认 Agent。</li>
- *   <li>技能热重载：通过 {@link SkillDirectoryWatcher#start()} 按需启动目录监听。</li>
- * </ul>
+ * <p>这里把 LLM、Memory、Skill、Tool、Agent、Team 和外部 MCP 接入串成运行时 Bean 图。
+ * 复杂逻辑应下沉到各模块，本类只负责装配和少量配置分支。</p>
  */
 @Configuration
 @EnableConfigurationProperties(EchoMindProperties.class)
+@Slf4j
 public class EchoMindAutoConfiguration {
 
-    /** 日志记录器 */
-    private static final Logger log = LoggerFactory.getLogger(EchoMindAutoConfiguration.class);
+    private static final String MARKDOWN_CODE_SKILL = "markdown-code";
+    private static final String DATE_QUERY_SKILL = "date-query";
 
-    // --- LLM ---
+    // --- 大模型装配 ---
 
-    /**
-     * 创建模型提供商注册中心。
-     *
-     * <p>管理所有已注册的 LLM 提供商及其模型列表。
-     *
-     * @return 模型提供商注册中心实例
-     */
     @Bean
     public ModelProviderRegistry modelProviderRegistry() {
         return new ModelProviderRegistry();
     }
 
-    /**
-     * 创建动态模型路由器。
-     *
-     * <p>根据会话上下文中的模型偏好，动态选择最合适的模型。
-     *
-     * @param registry 模型提供商注册中心
-     * @return 动态模型路由器实例
-     */
     @Bean
     public DynamicModelRouter dynamicModelRouter(ModelProviderRegistry registry) {
         return new DynamicModelRouter(registry);
     }
 
-    /**
-     * 创建 Anthropic 模型提供商。
-     *
-     * <p>API 密钥优先从配置文件读取，其次从环境变量 {@code ANTHROPIC_API_KEY} 获取。
-     * Base URL 同理，默认使用 {@code https://api.anthropic.com}。
-     *
-     * @param props EchoMind 配置属性
-     * @return Anthropic 提供商实例
-     */
+    /** Anthropic Provider，API key/base URL 来自配置或环境变量。 */
     @Bean
     public AnthropicProvider anthropicProvider(EchoMindProperties props) {
         var providers = props.getModels().getProviders();
@@ -116,92 +98,105 @@ public class EchoMindAutoConfiguration {
         String key = config.getApiKey() != null ? config.getApiKey() : System.getenv("ANTHROPIC_API_KEY");
         String url = config.getBaseUrl() != null ? config.getBaseUrl() : System.getenv("ANTHROPIC_BASE_URL");
         if (url == null) url = "https://api.anthropic.com";
-        return new AnthropicProvider(key, url);
+        var api = new AnthropicApi(url, key);
+        var chatModel = new AnthropicChatModel(api);
+        return new AnthropicProvider(chatModel);
+    }
+
+    /** DeepSeek Provider，优先读取 DEEPSEEK_*，并兼容旧环境里误填的 ANTHROPIC_*。 */
+    @Bean
+    public DeepSeekProvider deepSeekProvider(EchoMindProperties props) {
+        var providers = props.getModels().getProviders();
+        var config = providers.getOrDefault("deepseek", new EchoMindProperties.ProviderConfig());
+        String key = firstNonBlank(config.getApiKey(), System.getenv("DEEPSEEK_API_KEY"), System.getenv("ANTHROPIC_API_KEY"));
+        String url = firstNonBlank(config.getBaseUrl(), System.getenv("DEEPSEEK_BASE_URL"), System.getenv("ANTHROPIC_BASE_URL"));
+        if (isBlank(url)) {
+            url = "https://api.deepseek.com/anthropic";
+        }
+        if (!url.contains("/anthropic")) {
+            url = url.endsWith("/") ? url + "anthropic" : url + "/anthropic";
+        }
+        return new DeepSeekProvider(url, key);
     }
 
     /**
-     * 创建 OpenAI 模型提供商（条件装配）。
+     * 所有 OpenAI 兼容协议的 Provider。
      *
-     * <p>仅当配置属性 {@code echomind.models.providers.openai.api-key} 存在时才创建此 Bean。
-     *
-     * @param props EchoMind 配置属性
-     * @return OpenAI 提供商实例；若条件不满足则不创建
+     * <p>遍历 echomind.models.providers 中除 anthropic 以外的所有 Provider 配置，
+     * 为一个配置创建 OpenAICompatibleProvider。无 API key 的项自动跳过。</p>
      */
     @Bean
-    @ConditionalOnProperty(name = "echomind.models.providers.openai.api-key")
-    public OpenAiProvider openAiProvider(EchoMindProperties props) {
-        var config = props.getModels().getProviders().get("openai");
-        String key = config.getApiKey();
-        String url = config.getBaseUrl() != null ? config.getBaseUrl() : "https://api.openai.com";
-        return new OpenAiProvider(key, url);
+    public List<OpenAICompatibleProvider> openAiCompatibleProviders(EchoMindProperties props) {
+        List<OpenAICompatibleProvider> result = new ArrayList<>();
+        var providers = props.getModels().getProviders();
+        if (providers == null) return result;
+        for (var entry : providers.entrySet()) {
+            String pid = entry.getKey();
+            if ("anthropic".equals(pid) || "deepseek".equals(pid)) continue;
+            var config = entry.getValue();
+            String key = config.getApiKey();
+            if (key == null || key.isBlank()) {
+                log.info("Skipping OpenAI-compatible provider '{}': no API key configured", pid);
+                continue;
+            }
+            String url = config.getBaseUrl() != null ? config.getBaseUrl() : "https://api.openai.com";
+            var api = new OpenAiApi(url, key);
+            var chatModel = new OpenAiChatModel(api);
+            result.add(new OpenAICompatibleProvider(pid, chatModel, url, key));
+            log.info("Created OpenAI-compatible provider: {} (url={})", pid, url);
+        }
+        return result;
     }
 
-    /**
-     * 创建 Mock 模型提供商 —— 用于开发和测试环境。
-     *
-     * <p>无需真实 API 密钥即可响应请求，返回模拟的 LLM 输出。
-     *
-     * @return Mock 提供商实例
-     */
     @Bean
     public MockModelProvider mockModelProvider() {
         return new MockModelProvider();
     }
 
     /**
-     * LLM 初始化器 —— 注册所有模型提供商及其模型列表。
+     * 注册模型列表。
      *
-     * <p>此方法在启动时执行以下操作：
-     * <ol>
-     *   <li>注册 Anthropic 模型（从配置或默认使用 claude-sonnet-4-20250514）</li>
-     *   <li>如果 OpenAI 可用，注册其模型列表</li>
-     *   <li>注册 Mock 模型（mock-model）</li>
-     * </ol>
-     *
-     * <p>返回一个 Object 哨兵值以确保 Spring 容器中注册了此初始化 Bean。
-     *
-     * @param registry  模型提供商注册中心
-     * @param anthropic Anthropic 提供商
-     * @param openAi    OpenAI 提供商（可选）
-     * @param mock      Mock 提供商
-     * @param props     EchoMind 配置属性
-     * @return 初始化哨兵对象（仅用于确保 Bean 被创建）
+     * <p>使用 Object 作为初始化哨兵，保证 Provider Bean 创建后立刻进入注册中心。</p>
      */
     @Bean
     public Object llmInitializer(ModelProviderRegistry registry, AnthropicProvider anthropic,
-                                 Optional<OpenAiProvider> openAi, MockModelProvider mock,
-                                 EchoMindProperties props) {
-        // 注册 Anthropic 模型
-        var anthropicConfig = props.getModels().getProviders().get("anthropic");
-        List<ModelSpec> anthropicModels = new ArrayList<>();
-        if (anthropicConfig != null && anthropicConfig.getModels() != null) {
-            for (var mc : anthropicConfig.getModels()) {
-                anthropicModels.add(new ModelSpec("anthropic", mc.getName(),
-                    parseCapabilities(mc.getCapabilities()), mc.isDefault()));
-            }
-        }
-        if (anthropicModels.isEmpty()) {
-            anthropicModels.add(new ModelSpec("anthropic", "claude-sonnet-4-20250514",
+                                 DeepSeekProvider deepSeek,
+                                 List<OpenAICompatibleProvider> compatibleProviders,
+                                 MockModelProvider mock, EchoMindProperties props) {
+        // DeepSeek 是当前默认文本/工具模型；兼容此前误放在 ANTHROPIC_* 中的配置。
+        var deepSeekConfig = props.getModels().getProviders().get("deepseek");
+        List<ModelSpec> deepSeekModels = configuredModels("deepseek", deepSeekConfig);
+        if (deepSeekModels.isEmpty()) {
+            deepSeekModels.add(new ModelSpec("deepseek", "deepseek-v4-flash",
                 Set.of(ModelCapability.TEXT, ModelCapability.FUNCTION), true));
         }
-        registry.registerProvider(anthropic, anthropicModels);
+        registry.registerProvider(deepSeek, deepSeekModels);
 
-        // 注册 OpenAI 模型
-        openAi.ifPresent(oa -> {
-            var oaConfig = props.getModels().getProviders().get("openai");
-            List<ModelSpec> oaModels = new ArrayList<>();
-            if (oaConfig != null && oaConfig.getModels() != null) {
-                for (var mc : oaConfig.getModels()) {
-                    oaModels.add(new ModelSpec("openai", mc.getName(),
+        // 仅当配置了真正的 Anthropic 模型时注册 Anthropic，避免把 DeepSeek 兼容地址误展示成 Claude。
+        var anthropicConfig = props.getModels().getProviders().get("anthropic");
+        List<ModelSpec> anthropicModels = configuredModels("anthropic", anthropicConfig);
+        if (!anthropicModels.isEmpty() && !isDeepSeekAnthropicUrl(anthropicConfig)) {
+            registry.registerProvider(anthropic, anthropicModels);
+        }
+
+        // 动态注册所有 OpenAI 兼容协议 Provider，一个 YAML 配置驱动，无需新增 Java 类。
+        var providerConfigs = props.getModels().getProviders();
+        for (var provider : compatibleProviders) {
+            String pid = provider.providerId();
+            var pConfig = providerConfigs != null ? providerConfigs.get(pid) : null;
+            List<ModelSpec> models = new ArrayList<>();
+            if (pConfig != null && pConfig.getModels() != null) {
+                for (var mc : pConfig.getModels()) {
+                    models.add(new ModelSpec(pid, mc.getName(),
                         parseCapabilities(mc.getCapabilities()), mc.isDefault()));
                 }
             }
-            if (!oaModels.isEmpty()) {
-                registry.registerProvider(oa, oaModels);
+            if (!models.isEmpty()) {
+                registry.registerProvider(provider, models);
             }
-        });
+        }
 
-        // 注册 Mock 提供商
+        // Mock Provider 始终可用，便于本地开发和兜底测试。
         registry.registerProvider(mock, List.of(
             new ModelSpec("mock", "mock-model", Set.of(ModelCapability.TEXT, ModelCapability.FUNCTION), false)
         ));
@@ -210,15 +205,26 @@ public class EchoMindAutoConfiguration {
         return new Object();
     }
 
-    /**
-     * 将字符串形式的能力标签解析为 {@link ModelCapability} 枚举集合。
-     *
-     * <p>忽略无效的能力标签（不影响其他有效标签的解析）。
-     * 若所有标签均无效或列表为空，默认返回 {@link ModelCapability#TEXT}。
-     *
-     * @param caps 能力标签字符串列表（如 ["TEXT", "FUNCTION"]）
-     * @return 模型能力枚举集合，至少包含 TEXT
-     */
+    private List<ModelSpec> configuredModels(String providerId, EchoMindProperties.ProviderConfig config) {
+        List<ModelSpec> models = new ArrayList<>();
+        if (config != null && config.getModels() != null) {
+            for (var mc : config.getModels()) {
+                models.add(new ModelSpec(providerId, mc.getName(),
+                    parseCapabilities(mc.getCapabilities()), mc.isDefault()));
+            }
+        }
+        return models;
+    }
+
+    private boolean isDeepSeekAnthropicUrl(EchoMindProperties.ProviderConfig config) {
+        String url = firstNonBlank(
+            config == null ? null : config.getBaseUrl(),
+            System.getenv("ANTHROPIC_BASE_URL")
+        );
+        return url != null && url.toLowerCase().contains("deepseek");
+    }
+
+    /** 解析模型能力标签，非法值会被忽略。 */
     private Set<ModelCapability> parseCapabilities(List<String> caps) {
         if (caps == null || caps.isEmpty()) return Set.of(ModelCapability.TEXT);
         Set<ModelCapability> result = EnumSet.noneOf(ModelCapability.class);
@@ -228,120 +234,208 @@ public class EchoMindAutoConfiguration {
         return result.isEmpty() ? Set.of(ModelCapability.TEXT) : result;
     }
 
-    // --- Memory ---
+    // --- 记忆装配 ---
 
-    /**
-     * 创建短期窗口配置。
-     *
-     * <p>控制对话短期记忆窗口的最大消息数。
-     *
-     * @param props EchoMind 配置属性
-     * @return 窗口配置实例
-     */
     @Bean
     public WindowConfig windowConfig(EchoMindProperties props) {
-        return new WindowConfig(props.getMemory().getShortTermWindow(), 10);
+        return new WindowConfig(props.getMemory().getShortTermWindow());
     }
 
-    /**
-     * 创建长期记忆存储 —— 根据配置选择文件或 Redis 实现。
-     *
-     * <p>当 {@code echomind.memory.long-term-type=redis} 且 Redis 可用时，
-     * 创建 {@link RedisLongTermStore}；否则默认使用 {@link FileLongTermStore}。
-     *
-     * @param props EchoMind 配置属性
-     * @param redisConnectionFactory Redis 连接工厂（由 Spring Boot 自动配置提供，可为 null）
-     * @return 长期记忆存储实例
-     */
+    /** Redis 近期缓存；Redis 不可用时回退到进程内缓存。 */
     @Bean
-    public LongTermMemoryStore longTermMemoryStore(EchoMindProperties props,
-                                                   ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
-        if ("redis".equalsIgnoreCase(props.getMemory().getLongTermType())) {
-            RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
-            if (factory != null) {
-                log.info("Using RedisLongTermStore with TTL={}s", props.getMemory().getRedisTtlSeconds());
-                return new RedisLongTermStore(factory, props.getMemory().getRedisTtlSeconds());
-            }
-            log.warn("long-term-type=redis but no RedisConnectionFactory available, falling back to FileLongTermStore");
+    public RecentMemoryCache recentMemoryCache(EchoMindProperties props,
+                                               ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
+        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
+        if (factory != null) {
+            log.info("Using RedisRecentMemoryCache with window={} TTL={}s",
+                props.getMemory().getShortTermWindow(), props.getMemory().getRedisTtlSeconds());
+            return new RedisRecentMemoryCache(
+                factory,
+                props.getMemory().getShortTermWindow(),
+                props.getMemory().getRedisTtlSeconds()
+            );
         }
-        return new FileLongTermStore(props.getMemory().getFilePath());
+        log.warn("No RedisConnectionFactory available, falling back to in-memory recent cache");
+        return new InMemoryRecentMemoryCache(props.getMemory().getShortTermWindow());
     }
 
-    /**
-     * 创建会话管理器。
-     *
-     * <p>管理多会话的生命周期和状态。
-     *
-     * @return 会话管理器实例
-     */
     @Bean
-    public SessionManager sessionManager() {
-        return new SessionManager(new SessionConfig());
+    public PersistentChatMemoryStore persistentChatMemoryStore(ChatSessionRepository sessionRepository,
+                                                               ChatMessageRepository messageRepository,
+                                                               ObjectMapper mapper) {
+        return new PersistentChatMemoryStore(sessionRepository, messageRepository, mapper);
     }
 
-    /**
-     * 创建记忆管理器 —— 统一短期窗口和长期存储的访问层。
-     *
-     * @param wc 短期窗口配置
-     * @param lts 长期记忆存储
-     * @param sm 会话管理器
-     * @return 记忆管理器实例
-     */
     @Bean
-    public MemoryManager memoryManager(WindowConfig wc, LongTermMemoryStore lts, SessionManager sm) {
-        return new MemoryManager(wc, lts, sm);
+    public EmbeddingClient embeddingClient(EchoMindProperties props, ObjectMapper mapper) {
+        var memory = props.getMemory();
+        String apiKey = firstNonBlank(
+            memory.getEmbeddingApiKey(),
+            System.getenv("ALIYUN_BAILIAN_API_KEY"),
+            System.getenv("DASHSCOPE_API_KEY")
+        );
+        if (!memory.isEmbeddingEnabled() || isBlank(apiKey)) {
+            log.warn("Memory embedding disabled: no ALIYUN_BAILIAN_API_KEY/DASHSCOPE_API_KEY configured");
+            return new DisabledEmbeddingClient();
+        }
+        log.info("Using DashScope embedding model: {}", memory.getEmbeddingModel());
+        return new DashScopeEmbeddingClient(
+            memory.getEmbeddingBaseUrl(),
+            apiKey,
+            memory.getEmbeddingModel(),
+            mapper
+        );
     }
 
-    // --- Skill ---
+    @Bean
+    public MysqlMemoryVectorStore mysqlMemoryVectorStore(MemoryEmbeddingRepository repository,
+                                                         ObjectMapper mapper) {
+        return new MysqlMemoryVectorStore(repository, mapper);
+    }
 
-    /**
-     * 创建技能注册中心。
-     *
-     * <p>维护所有已加载技能实例的映射。
-     *
-     * @return 技能注册中心实例
-     */
+    @Bean
+    @Primary
+    public MemoryVectorStore memoryVectorStore(EchoMindProperties props,
+                                               MysqlMemoryVectorStore mysqlStore,
+                                               ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
+        String type = props.getMemory().getVectorStore();
+        if ("mysql-linear".equalsIgnoreCase(type)) {
+            log.info("Using MySQL linear memory vector store");
+            return mysqlStore;
+        }
+        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
+        if (factory == null) {
+            log.warn("Redis Stack vector store requested but RedisConnectionFactory is unavailable; using MySQL linear fallback");
+            return mysqlStore;
+        }
+        log.info("Using Redis Stack memory vector store with MySQL fallback");
+        return new RedisStackMemoryVectorStore(
+            factory,
+            mysqlStore,
+            props.getMemory().getVectorIndexName(),
+            props.getMemory().getVectorKeyPrefix()
+        );
+    }
+
+    @Bean
+    public MemoryEmbeddingService memoryEmbeddingService(EmbeddingClient embeddingClient,
+                                                         MemoryVectorStore vectorStore,
+                                                         EchoMindProperties props) {
+        return new MemoryEmbeddingService(
+            embeddingClient,
+            vectorStore,
+            props.getMemory().isEmbeddingEnabled()
+        );
+    }
+
+    @Bean
+    public MemorySummaryService memorySummaryService(EchoMindProperties props) {
+        return new MemorySummaryService(
+            props.getMemory().getShortTermWindow(),
+            props.getMemory().getSummaryMaxChars()
+        );
+    }
+
+    @Bean
+    public MemoryManager memoryManager(WindowConfig wc,
+                                       PersistentChatMemoryStore chatStore,
+                                       RecentMemoryCache recentCache,
+                                       MemoryEmbeddingService embeddingService,
+                                       MemorySummaryService summaryService,
+                                       EchoMindProperties props) {
+        return new MemoryManager(
+            wc,
+            chatStore,
+            recentCache,
+            embeddingService,
+            summaryService,
+            props.getMemory().getRetrievalTopK(),
+            props.getMemory().getSummaryRefreshInterval()
+        );
+    }
+
+    @Bean
+    public AgentKnowledgeService agentKnowledgeService(AgentKnowledgeDocumentRepository documentRepository,
+                                                       AgentKnowledgeChunkRepository chunkRepository,
+                                                       EmbeddingClient embeddingClient,
+                                                       ObjectMapper mapper,
+                                                       EchoMindProperties props,
+                                                       ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
+        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
+        return new AgentKnowledgeService(
+            documentRepository,
+            chunkRepository,
+            embeddingClient,
+            mapper,
+            factory,
+            props.getMemory().isEmbeddingEnabled(),
+            props.getMemory().getKnowledgeVectorIndexName(),
+            props.getMemory().getKnowledgeVectorKeyPrefix(),
+            props.getMemory().getKnowledgeChunkSize(),
+            props.getMemory().getKnowledgeChunkOverlap(),
+            props.getMemory().getKnowledgeMinVectorSimilarity(),
+            props.getMemory().getKnowledgeVectorWeight(),
+            props.getMemory().getKnowledgeKeywordWeight(),
+            props.getMemory().getKnowledgeKeywordCandidateLimit(),
+            props.getMemory().isKnowledgeOcrEnabled(),
+            props.getMemory().getKnowledgeOcrLanguage(),
+            props.getMemory().getKnowledgeOcrDpi(),
+            props.getMemory().getKnowledgeOcrMinTextChars(),
+            props.getMemory().getKnowledgeOcrMaxPages(),
+            props.getMemory().getKnowledgeOcrTesseractCommand()
+        );
+    }
+
+    @Bean
+    public PromptBudget promptBudget(EchoMindProperties props) {
+        return new PromptBudget(
+            props.getMemory().getPromptMaxChars(),
+            props.getMemory().getPromptMaxSystemMessageChars(),
+            props.getMemory().getPromptMaxHistoryMessageChars()
+        );
+    }
+
+    // --- Skill 装配 ---
+
     @Bean
     public SkillRegistry skillRegistry() {
         return new SkillRegistry();
     }
 
-    /**
-     * 创建技能 JAR 加载器。
-     *
-     * <p>负责从 JAR 文件加载技能类，支持类加载器隔离。
-     *
-     * @return 技能 JAR 加载器实例
-     */
     @Bean
     public SkillJarLoader skillJarLoader() {
         return new SkillJarLoader();
     }
 
     /**
-     * 创建技能编排器。
+     * 对象存储服务。
      *
-     * <p>协调多个技能的并发调用和结果聚合。
-     *
-     * @param registry 技能注册中心
-     * @return 技能编排器实例
+     * <p>配置为 OSS 且凭证完整时写入阿里云 OSS；配置缺失时退回本地目录，
+     * 这样本地开发、自动测试和 Docker 首次启动不会被云凭证卡死。</p>
      */
     @Bean
-    public SkillOrchestrator skillOrchestrator(SkillRegistry registry) {
-        return new SkillOrchestrator(registry);
+    public ObjectStorageService objectStorageService(EchoMindProperties props) {
+        EchoMindProperties.Storage storage = props.getStorage();
+        LocalObjectStorageService local = new LocalObjectStorageService(Paths.get(storage.getLocalDir()));
+        if (!"oss".equalsIgnoreCase(storage.getMode())) {
+            log.info("Using local object storage at {}", storage.getLocalDir());
+            return local;
+        }
+        if (isBlank(storage.getEndpoint()) || isBlank(storage.getBucket())
+            || isBlank(storage.getAccessKeyId()) || isBlank(storage.getAccessKeySecret())) {
+            log.warn("OSS storage requested but endpoint/bucket/accessKey is incomplete; falling back to local storage");
+            return local;
+        }
+        log.info("Using Aliyun OSS object storage bucket={} endpoint={}", storage.getBucket(), storage.getEndpoint());
+        return new AliyunOssObjectStorageService(
+            storage.getEndpoint(),
+            storage.getBucket(),
+            storage.getAccessKeyId(),
+            storage.getAccessKeySecret()
+        );
     }
 
-    /**
-     * 创建技能目录监视器。
-     *
-     * <p>监听技能自动加载目录的变更，实现技能 JAR 的热重载。
-     * 若配置启用热重载（{@code echomind.skill.hot-reload=true}），则立即启动监听。
-     *
-     * @param props    EchoMind 配置属性
-     * @param loader   技能 JAR 加载器
-     * @param registry 技能注册中心
-     * @return 技能目录监视器实例（根据配置决定是否已启动）
-     */
+    /** 监听 Skill 目录并按需启动热加载。 */
     @Bean
     public SkillDirectoryWatcher skillDirectoryWatcher(EchoMindProperties props,
                                                         SkillJarLoader loader, SkillRegistry registry) {
@@ -349,171 +443,233 @@ public class EchoMindAutoConfiguration {
             Paths.get(props.getSkill().getAutoLoadPath()), loader, registry);
         if (props.getSkill().isHotReload()) {
             watcher.start();
+        } else {
+            watcher.scanExistingJars();
         }
         return watcher;
     }
 
-    /**
-     * 创建技能实体仓库（条件装配）。
-     *
-     * <p>若容器中尚无此类型的 Bean，则返回 null，由 Spring Data JPA 自动配置提供。
-     *
-     * @return null（委托 Spring Data JPA 自动配置）
-     */
+    /** 占位给 Spring Data JPA 仓库代理，避免调用方缺 Bean。 */
     @Bean
     @ConditionalOnMissingBean
     public SkillEntityRepository skillEntityRepository() {
         return null; // 将由 Spring Data JPA 自动配置提供
     }
 
-    /**
-     * 创建技能市场服务。
-     *
-     * <p>管理技能的持久化、上传/下载以及技能元数据的 CRUD。
-     *
-     * @param repository JPA 仓库
-     * @param loader     技能 JAR 加载器
-     * @param registry   技能注册中心
-     * @param props      EchoMind 配置属性
-     * @return 技能市场服务实例
-     */
     @Bean
     public MarketplaceService marketplaceService(SkillEntityRepository repository,
                                                   SkillJarLoader loader, SkillRegistry registry,
-                                                  EchoMindProperties props) {
-        return new MarketplaceService(repository, loader, registry, props.getSkill().getMarketplaceDir());
+                                                  EchoMindProperties props,
+                                                  ObjectStorageService storageService) {
+        return new MarketplaceService(repository, loader, registry,
+            props.getSkill().getMarketplaceDir(), storageService);
     }
 
-    // --- Agent ---
+    // --- Agent 装配 ---
 
-    /**
-     * 创建执行管线 —— 由 5 个阶段组成的处理链。
-     *
-     * <p>管线阶段按顺序执行：
-     * <ol>
-     *   <li>{@link ContextEnrichStage} —— 上下文增强（加载记忆、会话信息）</li>
-     *   <li>{@link ToolResolutionStage} —— 工具解析（确定需要调用的技能）</li>
-     *   <li>{@link SkillInvocationStage} —— 技能调用（并发执行选中的技能）</li>
-     *   <li>{@link ResultAggregationStage} —— 结果聚合（LLM 整合技能返回）</li>
-     *   <li>{@link MemoryPersistStage} —— 记忆持久化（保存对话记录）</li>
-     * </ol>
-     *
-     * @param memory      记忆管理器
-     * @param skillOrch   技能编排器
-     * @param router      动态模型路由器
-     * @param providerReg 模型提供商注册中心
-     * @return 执行管线实例
-     */
+    /** 统一能力注册中心，同时承载Agent工具和外部MCP工具。 */
     @Bean
-    public ExecutionPipeline executionPipeline(MemoryManager memory, SkillOrchestrator skillOrch,
-                                                DynamicModelRouter router, ModelProviderRegistry providerReg) {
+    public CapabilityRegistry capabilityRegistry() {
+        return new CapabilityRegistry();
+    }
+
+    @Bean
+    public SkillCapabilityService skillCapabilityService(SkillRegistry registry,
+                                                          CapabilityRegistry capabilityRegistry) {
+        return new SkillCapabilityService(registry, capabilityRegistry);
+    }
+
+    /** 将已启用Skill同步到统一能力注册中心。 */
+    @Bean
+    public Object skillCapabilityInitializer(SkillCapabilityService capabilityService,
+                                             SkillDirectoryWatcher watcher) {
+        capabilityService.syncEnabledSkills();
+        return new Object();
+    }
+
+    /** Agent 请求管线：上下文 → 模型路由 → LLM 聚合（模型自主工具调用）→ 记忆保存。 */
+    @Bean
+    public ExecutionPipeline executionPipeline(MemoryManager memory,
+                                                AgentKnowledgeService knowledgeService,
+                                                CapabilityRegistry capabilityRegistry,
+                                                DynamicModelRouter router, ModelProviderRegistry providerReg,
+                                                ObjectStorageService storageService,
+                                                PromptBudget promptBudget,
+                                                EchoMindProperties props) {
         List<PipelineStage> stages = List.of(
             new ContextEnrichStage(memory),
+            new KnowledgeRetrievalStage(knowledgeService, props.getMemory().getKnowledgeTopK()),
             new ToolResolutionStage(router),
-            new SkillInvocationStage(skillOrch),
-            new ResultAggregationStage(router, providerReg),
+            new MultimodalGuardStage(providerReg),
+            new AttachmentPreparationStage(storageService),
+            new ResultAggregationStage(router, providerReg, capabilityRegistry, promptBudget),
             new MemoryPersistStage(memory)
         );
         return new ExecutionPipeline(stages);
     }
 
     /**
-     * 创建 Agent 工厂 —— 负责 Agent 实例的创建和生命周期管理。
+     * 外部 MCP 运行时管理服务。
      *
-     * <p>启动时从配置文件读取 Agent 定义并批量创建；若未配置任何 Agent，
-     * 则自动创建一个默认的 "EchoMind Assistant" Agent。
-     *
-     * @param pipeline 执行管线
-     * @param props    EchoMind 配置属性
-     * @return Agent 工厂实例（含所有预配置的 Agent）
+     * <p>该服务只负责“接入别人的 MCP Server”，不再把本项目暴露成 MCP Server。</p>
      */
     @Bean
-    public AgentFactory agentFactory(ExecutionPipeline pipeline, EchoMindProperties props) {
+    public ExternalMcpRuntimeService externalMcpRuntimeService(CapabilityRegistry capabilityRegistry) {
+        return new ExternalMcpRuntimeService(capabilityRegistry);
+    }
+
+    /**
+     * 启动并挂载配置里的外部 stdio MCP Server。
+     */
+    @Bean
+    public Object externalMcpInitializer(EchoMindProperties props, ExternalMcpRuntimeService mcpRuntimeService) {
+        for (EchoMindProperties.ExternalMcpServer server : props.getMcp().getExternalServers()) {
+            if (!server.isEnabled()) {
+                continue;
+            }
+            try {
+                mcpRuntimeService.mount(new ExternalMcpServerConfig(
+                    server.getId(),
+                    server.getTransport(),
+                    server.getCommand(),
+                    server.getWorkingDirectory()
+                ));
+            } catch (Exception ex) {
+                log.warn("External MCP server {} skipped: {}", server.getId(), ex.getMessage());
+            }
+        }
+        return new Object();
+    }
+
+    /** Agent持久化服务，负责把用户创建的Agent配置写入MySQL。 */
+    @Bean
+    public AgentPersistenceService agentPersistenceService(AgentRepository repository) {
+        return new AgentPersistenceService(repository);
+    }
+
+    /**
+     * 从MySQL恢复Agent，再补齐配置文件里的默认Agent。
+     *
+     * <p>Agent是用户配置，数据库是事实来源；内存中的AgentFactory只是运行时索引。</p>
+     */
+    @Bean
+    public AgentFactory agentFactory(ExecutionPipeline pipeline, EchoMindProperties props,
+                                     AgentPersistenceService persistenceService) {
         AgentFactory factory = new AgentFactory(pipeline);
+        for (AgentConfig persisted : persistenceService.loadAll()) {
+            if (mergeDefaultAgentSkills(persisted, props)) {
+                persistenceService.save(persisted);
+            }
+            factory.create(persisted);
+        }
         for (var def : props.getAgents()) {
+            if (persistenceService.exists(def.getAgentId())) {
+                continue;
+            }
             AgentConfig config = new AgentConfig();
             config.setAgentId(def.getAgentId());
             config.setName(def.getName());
             config.setSystemPrompt(def.getSystemPrompt());
             config.setModelId(def.getModelId());
             config.setSkillIds(def.getSkillIds());
+            persistenceService.save(config);
             factory.create(config);
         }
-        // 若无配置则创建默认 Agent
+        // 没有配置任何 Agent 时，补一个可直接使用的默认 Agent。
         if (factory.allAgents().isEmpty()) {
             AgentConfig config = new AgentConfig();
             config.setAgentId("default");
             config.setName("EchoMind Assistant");
-            config.setSystemPrompt("You are a helpful AI assistant with access to various skills.");
-            config.setModelId("anthropic:claude-sonnet-4-20250514");
-            config.setSkillIds(List.of("weather-query", "calculator", "web-search", "filesystem"));
+            config.setSystemPrompt("You are a helpful AI assistant. You have access to tools for web search, weather, calculations, and date/time queries. Always use these tools when the user asks for real-time information, current data, weather, math, dates, times, or weekdays — never guess when a tool can give a better answer.");
+            config.setModelId("deepseek:deepseek-v4-flash");
+            config.setSkillIds(List.of("weather-query", "calculator", "web-search", "markdown-code", "date-query"));
+            persistenceService.save(config);
             factory.create(config);
         }
         return factory;
     }
 
     /**
-     * 创建 Agent 编排器。
+     * 对已存在于 MySQL 的默认 Agent 做轻量迁移。
      *
-     * <p>接收用户请求，选择合适的 Agent，驱动执行管线完成全流程处理。
-     *
-     * @param factory Agent 工厂
-     * @return Agent 编排器实例
+     * <p>数据库是事实来源，因此不会用 YAML 覆盖用户编辑过的名称、提示词、模型，
+     * 也不会把用户曾经移除的旧 Skill 强行加回来。这里只补平台默认配置中新加入的 Skill。</p>
      */
+    private boolean mergeDefaultAgentSkills(AgentConfig persisted, EchoMindProperties props) {
+        if (persisted == null || props.getAgents() == null) {
+            return false;
+        }
+        for (var def : props.getAgents()) {
+            if (!Objects.equals(def.getAgentId(), persisted.getAgentId())) {
+                continue;
+            }
+            List<String> configuredSkillIds = def.getSkillIds();
+            if (configuredSkillIds == null || configuredSkillIds.isEmpty()) {
+                return false;
+            }
+            LinkedHashSet<String> merged = new LinkedHashSet<>(
+                persisted.getSkillIds() == null ? List.of() : persisted.getSkillIds());
+            boolean changed = false;
+            for (String skillId : defaultSkillsToMerge(configuredSkillIds)) {
+                if (merged.add(skillId)) {
+                    changed = true;
+                    log.info("Merged default skill {} into persisted agent {}", skillId, persisted.getAgentId());
+                }
+            }
+            if (changed) {
+                persisted.setSkillIds(List.copyOf(merged));
+            }
+            if (isLegacyAnthropicDeepSeekModel(persisted.getModelId())) {
+                persisted.setModelId(def.getModelId());
+                log.info("Migrated persisted agent {} model to {}", persisted.getAgentId(), def.getModelId());
+                changed = true;
+            }
+            return changed;
+        }
+        return false;
+    }
+
+    private List<String> defaultSkillsToMerge(List<String> configuredSkillIds) {
+        List<String> mergeCandidates = List.of(MARKDOWN_CODE_SKILL, DATE_QUERY_SKILL);
+        return mergeCandidates.stream()
+            .filter(configuredSkillIds::contains)
+            .toList();
+    }
+
+    private boolean isLegacyAnthropicDeepSeekModel(String modelId) {
+        return modelId != null && modelId.startsWith("anthropic:claude-");
+    }
+
     @Bean
     public AgentOrchestrator agentOrchestrator(AgentFactory factory) {
         return new AgentOrchestrator(factory);
     }
 
-    /**
-     * 创建任务路由器。
-     *
-     * <p>根据用户输入意图匹配最合适的技能或 Agent。
-     *
-     * @param orchestrator 技能编排器
-     * @return 任务路由器实例
-     */
-    @Bean
-    public TaskRouter taskRouter(SkillOrchestrator orchestrator) {
-        return new TaskRouter(orchestrator);
-    }
+    // --- Agent Team 装配 ---
 
-    // --- Agent Team ---
-
-    /**
-     * 创建团队消息总线 —— Agent Team 内部通信通道。
-     *
-     * <p>基于内存阻塞队列实现，支持发布/订阅模式。
-     *
-     * @return 团队消息总线实例
-     */
     @Bean
     public com.echomind.agent.team.messaging.TeamMessageBus teamMessageBus() {
         return new com.echomind.agent.team.messaging.TeamMessageBus();
     }
 
-    /**
-     * 创建团队跟踪记录器 —— 记录 Team 协作流程事件。
-     *
-     * <p>用于生成 Mermaid 流程图和调试分析。
-     *
-     * @return 团队跟踪记录器实例
-     */
     @Bean
     public com.echomind.agent.team.visualization.TeamTraceRecorder teamTraceRecorder() {
         return new com.echomind.agent.team.visualization.TeamTraceRecorder();
     }
 
-    /**
-     * 创建团队协调器 —— 驱动 Planner→Executor→Reviewer 协作流程。
-     *
-     * <p>设置最大轮次为 3，防止无限循环。
-     *
-     * @param orchestrator Agent 编排器
-     * @param bus          团队消息总线
-     * @param recorder     团队跟踪记录器
-     * @return 团队协调器实例
-     */
+    @Bean
+    public org.springframework.core.task.TaskExecutor teamTaskExecutor() {
+        org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor executor =
+            new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("team-run-");
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(100);
+        executor.initialize();
+        return executor;
+    }
+
+    /** Team 默认最多协作 3 轮，防止任务循环失控。 */
     @Bean
     public com.echomind.agent.team.TeamCoordinator teamCoordinator(AgentOrchestrator orchestrator,
                                                                      com.echomind.agent.team.messaging.TeamMessageBus bus,
@@ -521,49 +677,16 @@ public class EchoMindAutoConfiguration {
         return new com.echomind.agent.team.TeamCoordinator(orchestrator, bus, recorder, 3);
     }
 
-    // --- MCP ---
-
-    /**
-     * 创建 MCP 服务端（条件装配）。
-     *
-     * <p>仅当 {@code echomind.mcp.server-enabled=true}（默认为 true）时启用。
-     *
-     * @return MCP 服务端实例
-     */
-    @Bean
-    @ConditionalOnProperty(name = "echomind.mcp.server-enabled", havingValue = "true", matchIfMissing = true)
-    public MCPServer mcpServer() {
-        return new MCPServer("EchoMind-MCP", "1.0.0");
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
-    /**
-     * 将所有已注册的 Skill 自动包装为 MCP ToolProvider 并注册到 MCPServer。
-     *
-     * <p>此 Bean 依赖 {@code skillDirectoryWatcher}，确保在 Skill 目录自动加载完成后再注册 MCP 工具。
-     * 每个 Skill 通过 {@link SkillToolProvider} 适配器包装为 MCP 工具提供者。
-     *
-     * @param mcpServer MCP 服务端
-     * @param registry  技能注册中心（包含所有已加载的 Skill）
-     * @param watcher   技能目录监视器（仅用于声明依赖顺序）
-     * @param props     EchoMind 配置属性
-     * @return 初始化哨兵对象
-     */
-    @Bean
-    public Object mcpSkillRegistrar(MCPServer mcpServer, SkillRegistry registry,
-                                    SkillDirectoryWatcher watcher, EchoMindProperties props) {
-        if (!props.getMcp().isServerEnabled()) {
-            return new Object();
-        }
-        int count = 0;
-        for (var reg : registry.listAll()) {
-            if (reg.getState() == SkillState.ENABLED) {
-                SkillToolProvider adapter = new SkillToolProvider(reg.getSkill(), reg.getSkillId());
-                mcpServer.registerToolProvider(adapter);
-                count++;
-                log.info("Registered Skill as MCP tool: {}", reg.getSkillId());
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (!isBlank(value)) {
+                return value;
             }
         }
-        log.info("MCP auto-registration complete: {} skills registered as MCP tools", count);
-        return new Object();
+        return null;
     }
 }

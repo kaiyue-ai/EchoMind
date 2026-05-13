@@ -1,4 +1,12 @@
-**/target/
+**/target/*
+!echomind-app/target/echomind-app-*.jar
+!external-mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
+!skills/skill-weather/target/*-jar-with-dependencies.jar
+!skills/skill-calculator/target/*-jar-with-dependencies.jar
+!skills/skill-websearch/target/*-jar-with-dependencies.jar
+!skills/skill-markdown-code/target/*-jar-with-dependencies.jar
+!skills/skill-date-query/target/*-jar-with-dependencies.jar
+!skills/filesystem-1.0.0.jar
 **/node_modules/
 **/dist/
 **/.git/

@@ -22,14 +22,12 @@ package com.echomind.common.exception;
  * EchoMindException
  *   ├── SkillLoadException         技能加载失败
  *   ├── ModelRoutingException      LLM 模型路由失败
- *   ├── MemoryPersistenceException  记忆持久化失败
  *   └── MCPTransportException       MCP 协议传输失败
  * }</pre>
  * 每个子类对应平台上特定模块的异常场景，便于日志分类、监控告警和针对性处理。
  *
  * @see SkillLoadException
  * @see ModelRoutingException
- * @see MemoryPersistenceException
  * @see MCPTransportException
  */
 public class EchoMindException extends RuntimeException {

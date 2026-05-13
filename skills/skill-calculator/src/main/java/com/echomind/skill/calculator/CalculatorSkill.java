@@ -62,7 +62,12 @@ public class CalculatorSkill implements Skill {
             ),
             List.of(),
             "EchoMind",
-            List.of("math", "calculate", "compute", "evaluate", "计算", "数学", "算式", "等于", "算术", "求值")
+            List.of("math", "calculate", "compute", "evaluate", "计算", "数学", "算式", "等于", "算术", "求值"),
+            List.of("计算", "算一下", "求值", "等于多少", "calculate", "math expression"),
+            Map.of(
+                "calculate", List.of("计算", "算", "求值", "运算"),
+                "expression", List.of("算式", "表达式", "公式")
+            )
         );
     }
 

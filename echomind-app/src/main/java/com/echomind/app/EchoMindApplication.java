@@ -14,10 +14,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * <ul>
  *   <li>{@link SpringBootApplication}{@code (scanBasePackages = "com.echomind")}：
  *       启用自动配置并扫描 {@code com.echomind} 包下的所有 Spring 组件</li>
- *   <li>{@link EnableJpaRepositories}{@code (basePackages = "com.echomind.skill.marketplace")}：
- *       启用 Spring Data JPA 仓库扫描，仅扫描技能市场模块的持久层</li>
- *   <li>{@link EntityScan}{@code (basePackages = "com.echomind.skill.marketplace")}：
- *       扫描 JPA 实体类，仅扫描技能市场模块</li>
+ *   <li>{@link EnableJpaRepositories}{@code (basePackages = "com.echomind")}：
+ *       启用 Spring Data JPA 仓库扫描，覆盖 Skill、Agent 等需要持久化的模块</li>
+ *   <li>{@link EntityScan}{@code (basePackages = "com.echomind")}：
+ *       扫描所有 EchoMind 模块中的 JPA 实体类</li>
  *   <li>{@link EnableAsync}：启用 Spring 异步执行能力，支持
  *       {@code @Async} 注解的异步方法（如技能并发调用）</li>
  *   <li>{@link EnableScheduling}：启用 Spring 定时任务调度，
@@ -31,13 +31,13 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *
  * <p>必要环境变量：
  * <ul>
- *   <li>{@code ANTHROPIC_API_KEY} —— Anthropic API 密钥</li>
- *   <li>{@code ANTHROPIC_BASE_URL} —— Anthropic API 基础 URL</li>
+ *   <li>{@code DEEPSEEK_API_KEY} —— DeepSeek API 密钥</li>
+ *   <li>{@code DEEPSEEK_BASE_URL} —— DeepSeek 兼容 API 基础 URL</li>
  * </ul>
  */
 @SpringBootApplication(scanBasePackages = "com.echomind")
-@EnableJpaRepositories(basePackages = "com.echomind.skill.marketplace")
-@EntityScan(basePackages = "com.echomind.skill.marketplace")
+@EnableJpaRepositories(basePackages = "com.echomind")
+@EntityScan(basePackages = "com.echomind")
 @EnableAsync
 @EnableScheduling
 public class EchoMindApplication {

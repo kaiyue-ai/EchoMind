@@ -10,7 +10,7 @@
     </parent>
     <artifactId>echomind-agent</artifactId>
     <name>EchoMind Agent Core</name>
-    <description>Agent orchestration, execution pipeline, and task routing</description>
+    <description>Agent orchestration, execution pipeline, model routing, and tool capability integration</description>
 
     <dependencies>
         <dependency>
@@ -40,6 +40,15 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

@@ -34,7 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * @see ModelProvider
  * @see AnthropicProvider
- * @see OpenAiProvider
+ * @see OpenAICompatibleProvider
  */
 public class MockModelProvider implements ModelProvider {
 

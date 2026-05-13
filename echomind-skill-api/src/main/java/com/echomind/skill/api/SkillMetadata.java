@@ -23,8 +23,8 @@ import java.util.Map;
  * </p>
  *
  * <h3>紧凑构造函数</h3>
- * record 的紧凑构造函数对 {@code parameterSchema}、{@code dependencies} 和 {@code tags}
- * 三个集合类字段进行了空值防护，将 null 替换为空集合，避免下游出现 NPE。
+ * record 的紧凑构造函数对 {@code parameterSchema}、{@code dependencies}、{@code tags}、
+ * {@code keywords} 和 {@code aliases} 进行了空值防护，将 null 替换为空集合，避免下游出现 NPE。
  *
  * @see Skill#metadata() 技能接口中返回此元数据的方法
  * @see com.echomind.common.model.SkillMetadata 通用模型层的对应类型
@@ -65,7 +65,23 @@ public record SkillMetadata(
      * 建议标签包括领域关键词（如 {@code "weather"}、{@code "data"}、{@code "api"}）
      * 和能力关键词（如 {@code "text-generation"}、{@code "image-analysis"}）。
      */
-    List<String> tags
+    List<String> tags,
+    /**
+     * 技能作者显式声明的触发关键词。
+     *
+     * <p>平台工具路由会优先使用此字段做强匹配。新 Skill JAR 建议把中文、英文、
+     * 行业术语和常见用户说法都放在这里，例如 {@code ["报销", "发票审核", "invoice"]}。
+     * 旧版 Skill 不提供此字段时会自动使用空列表。</p>
+     */
+    List<String> keywords,
+    /**
+     * 关键词别名表。
+     *
+     * <p>key 可以是规范能力词，value 是用户可能说出的别名。例如：
+     * {@code {"invoice": ["发票", "票据"], "audit": ["审核", "检查"]}}。
+     * 该字段用于让新 JAR 自描述关键词，不需要平台为每个新技能改硬编码别名。</p>
+     */
+    Map<String, List<String>> aliases
 ) {
     /**
      * 紧凑构造函数：对集合类字段进行空值防护。
@@ -81,11 +97,27 @@ public record SkillMetadata(
      * @param dependencies     依赖列表（null 时自动变为空 List）
      * @param author           作者名称
      * @param tags             标签列表（null 时自动变为空 List）
+     * @param keywords         显式触发关键词（null 时自动变为空 List）
+     * @param aliases          关键词别名表（null 时自动变为空 Map）
      */
     public SkillMetadata {
         parameterSchema = parameterSchema == null ? Map.of() : parameterSchema;
         dependencies = dependencies == null ? List.of() : dependencies;
         tags = tags == null ? List.of() : tags;
+        keywords = keywords == null ? List.of() : keywords;
+        aliases = aliases == null ? Map.of() : aliases;
+    }
+
+    /**
+     * 兼容旧版 Skill JAR 的构造器。
+     *
+     * <p>旧 JAR 的字节码会调用 7 参数构造器。保留此构造器后，即使平台升级了
+     * {@code keywords/aliases} 字段，旧 JAR 也可以继续加载和执行。</p>
+     */
+    public SkillMetadata(String name, String version, String description,
+                         Map<String, Object> parameterSchema, List<String> dependencies,
+                         String author, List<String> tags) {
+        this(name, version, description, parameterSchema, dependencies, author, tags, List.of(), Map.of());
     }
 
     /**

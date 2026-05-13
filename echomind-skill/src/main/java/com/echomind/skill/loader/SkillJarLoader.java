@@ -2,8 +2,7 @@ package com.echomind.skill.loader;
 
 import com.echomind.common.exception.SkillLoadException;
 import com.echomind.skill.api.Skill;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.net.URL;
@@ -43,10 +42,8 @@ import java.util.jar.Manifest;
  * @see SkillClassLoader
  * @see SkillLoadResult
  */
+@Slf4j
 public class SkillJarLoader {
-
-    /** SLF4J日志记录器，用于记录JAR加载事件和异常 */
-    private static final Logger log = LoggerFactory.getLogger(SkillJarLoader.class);
 
     /**
      * MANIFEST.MF中的属性名，用于指定Skill实现类的全限定名。

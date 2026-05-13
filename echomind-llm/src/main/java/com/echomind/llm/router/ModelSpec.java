@@ -16,8 +16,8 @@ import java.util.Set;
  *   <li>{@code isDefault} 标志允许在未明确指定模型时自动回退到默认模型。</li>
  * </ul>
  *
- * @param providerId   模型所属提供商的唯一标识（如 "anthropic", "openai", "mock"）
- * @param modelName    模型名称（如 "claude-sonnet-4-20250514", "gpt-4o"）
+ * @param providerId   模型所属提供商的唯一标识（如 "deepseek", "openai", "mock"）
+ * @param modelName    模型名称（如 "deepseek-v4-flash", "gpt-4o"）
  * @param capabilities 该模型支持的能力集合，参见 {@link ModelCapability}
  * @param isDefault    是否为该提供商的默认模型（当用户未指定具体模型时使用）
  *

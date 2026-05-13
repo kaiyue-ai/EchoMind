@@ -2,6 +2,7 @@ package com.echomind.common.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -11,8 +12,8 @@ import java.util.Map;
  * <h3>核心设计</h3>
  * <p>
  * 使用 Java {@code record} 实现不可变消息对象，通过工厂方法创建不同类型的消息。
- * 每条消息包含四个基本元素：角色（区分说话者身份）、内容（消息正文）、
- * 时间戳（精确到纳秒级别的时间标记）以及可选的元数据映射（承载附加的上下文信息）。
+ * 每条消息包含五个基本元素：角色（区分说话者身份）、内容（消息正文）、
+ * 时间戳（精确到纳秒级别的时间标记）、可选的元数据映射，以及可选附件列表。
  * </p>
  *
  * <h3>消息角色语义</h3>
@@ -27,10 +28,10 @@ import java.util.Map;
  * 通过 {@code @JsonInclude(NON_NULL)} 注解确保 null 字段不会出现在序列化输出中，
  * 减少网络传输负担并保持 JSON 结构的简洁性。
  *
- * @see com.echomind.memory.ConversationWindow 用于存储消息序列的短期记忆窗口
+ * @see com.echomind.memory.MemoryManager 用于组织会话消息、摘要和相关历史
  * @see com.echomind.agent.Agent 使用本消息进行上下文构建的智能体实体
  */
-@JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonInclude(JsonInclude.Include.NON_NULL) // 加了这个注解，为null的字段不会出现在序列化输出中
 public record AgentMessage(
     /**
      * 消息角色标识，用于区分消息的发送者类型。
@@ -51,8 +52,18 @@ public record AgentMessage(
      * 消息的附加元数据映射（可为 null）。
      * 例如 tool 消息中存放 {@code "toolCallId"} 以关联原始工具调用请求。
      */
-    Map<String, Object> metadata
+    Map<String, Object> metadata,
+    /**
+     * 消息附件列表（可为 null）。
+     * 图片上传后这里只保存对象存储引用和访问 URL，不保存二进制内容。
+     */
+    List<MessageAttachment> attachments
 ) {
+    /** 兼容旧代码和旧 JSON：没有附件时仍可按四字段方式创建消息。 */
+    public AgentMessage(String role, String content, Instant timestamp, Map<String, Object> metadata) {
+        this(role, content, timestamp, metadata, null);
+    }
+
     /**
      * 创建一个 {@code "user"} 角色的消息，表示用户的原始输入。
      *
@@ -61,6 +72,12 @@ public record AgentMessage(
      */
     public static AgentMessage user(String content) {
         return new AgentMessage("user", content, Instant.now(), null);
+    }
+
+    /** 创建带附件的 {@code "user"} 角色消息。 */
+    public static AgentMessage user(String content, List<MessageAttachment> attachments) {
+        return new AgentMessage("user", content, Instant.now(), null,
+            attachments == null || attachments.isEmpty() ? null : List.copyOf(attachments));
     }
 
     /**
@@ -105,6 +122,6 @@ public record AgentMessage(
      * @return 带有新元数据的 AgentMessage 副本
      */
     public AgentMessage withMetadata(Map<String, Object> metadata) {
-        return new AgentMessage(role, content, timestamp, metadata);
+        return new AgentMessage(role, content, timestamp, metadata, attachments);
     }
 }

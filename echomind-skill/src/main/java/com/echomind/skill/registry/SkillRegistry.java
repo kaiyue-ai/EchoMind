@@ -2,8 +2,7 @@ package com.echomind.skill.registry;
 
 import com.echomind.common.model.SkillState;
 import com.echomind.skill.api.Skill;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,10 +35,8 @@ import java.util.stream.Collectors;
  * @see SkillRegistration
  * @see SkillState
  */
+@Slf4j
 public class SkillRegistry {
-
-    /** SLF4J日志记录器，用于记录Skill注册、启用、禁用和注销等操作事件 */
-    private static final Logger log = LoggerFactory.getLogger(SkillRegistry.class);
 
     /**
      * Skill注册表，以skillId为键、SkillRegistration为值的线程安全映射。
@@ -136,6 +133,36 @@ public class SkillRegistry {
         SkillRegistration reg = registrations.get(skillId);
         return (reg != null && reg.getState() == SkillState.ENABLED)
             ? Optional.of(reg.getSkill()) : Optional.empty();
+    }
+
+    /**
+     * 根据skillId获取注册记录，不过滤状态。
+     *
+     * <p>运行时生命周期同步需要读取已禁用Skill的元数据，例如从ToolRouter
+     * 里移除对应工具时，需要知道工具名。</p>
+     *
+     * @param skillId Skill的唯一标识符
+     * @return 注册记录；如果Skill不存在则为空
+     */
+    public Optional<SkillRegistration> getRegistration(String skillId) {
+        return Optional.ofNullable(registrations.get(skillId));
+    }
+
+    /**
+     * 判断指定Skill实例是否仍是注册中心里的已启用实例。
+     *
+     * <p>此方法用于工具适配器的执行兜底：即使旧适配器没有被及时注销，
+     * 只要注册中心里对应Skill已禁用或已被新实例替换，旧适配器也不能继续执行。</p>
+     *
+     * @param skillId Skill的唯一标识符
+     * @param skill   需要校验的Skill实例
+     * @return true表示该实例仍处于启用状态
+     */
+    public boolean isEnabled(String skillId, Skill skill) {
+        SkillRegistration reg = registrations.get(skillId);
+        return reg != null
+            && reg.getState() == SkillState.ENABLED
+            && reg.getSkill() == skill;
     }
 
     /**

@@ -17,9 +17,9 @@ package com.echomind.common.exception;
  * MCP 客户端在捕获此异常后会尝试重连和重试（指数退避），超过最大重试次数后
  * 将异常向上传播，由 {@code AgentOrchestrator} 决定是否使用本地后备工具替代远程工具。
  *
- * @see com.echomind.mcp.MCPClient MCP 客户端
- * @see com.echomind.mcp.MCPServer MCP 服务端
- * @see com.echomind.mcp.JsonRpcMessage JSON-RPC 消息定义
+ * @see com.echomind.mcp.client.StdioMCPClient stdio MCP 客户端
+ * @see com.echomind.mcp.client.MCPClient HTTP MCP 客户端
+ * @see com.echomind.mcp.jsonrpc.JsonRpcMessage JSON-RPC 消息定义
  */
 public class MCPTransportException extends EchoMindException {
     /**
