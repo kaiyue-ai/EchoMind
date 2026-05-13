@@ -21,7 +21,7 @@ class ToolRouterTest {
         ToolRouter router = new ToolRouter();
         router.register(tool("calculator", "skill", "calculator@1.0.0", List.of("calculate", "math")));
         router.register(tool("web-search", "skill", "web-search@1.0.0", List.of("search", "web")));
-        router.register(tool("filesystem", "skill", "filesystem@1.0.0", List.of("file", "read", "write")));
+        router.register(tool("date-query", "skill", "date-query@1.0.0", List.of("date", "time", "weekday")));
 
         List<Tool> matched = router.matchForAgentSkillIds(
             "帮我计算一下 1+2",
@@ -34,11 +34,11 @@ class ToolRouterTest {
     @Test
     void matchForAgentSkillIdsDoesNotExposeDisallowedSkillEvenWhenKeywordMatches() {
         ToolRouter router = new ToolRouter();
-        router.register(tool("filesystem", "skill", "filesystem@1.0.0", List.of("file", "read", "write")));
+        router.register(tool("weather-query", "skill", "weather-query@1.0.0", List.of("weather", "forecast")));
         router.register(tool("calculator", "skill", "calculator@1.0.0", List.of("calculate", "math")));
 
         List<Tool> matched = router.matchForAgentSkillIds(
-            "读取 readme.md 文件",
+            "查询一下杭州天气",
             List.of("calculator")
         );
 

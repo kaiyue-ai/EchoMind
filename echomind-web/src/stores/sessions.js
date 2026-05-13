@@ -10,6 +10,7 @@ export const useSessionStore = defineStore('sessions', {
   state: () => ({
     sessions: [],
     loading: false,
+    deletingId: null,
     activeSessionId: null,
     error: null
   }),
@@ -26,6 +27,24 @@ export const useSessionStore = defineStore('sessions', {
         throw error
       } finally {
         this.loading = false
+      }
+    },
+    async deleteSession(sessionId) {
+      if (!sessionId) return null
+      this.deletingId = sessionId
+      this.error = null
+      try {
+        const result = await api.chat.delete(sessionId)
+        this.sessions = this.sessions.filter(session => session.sessionId !== sessionId)
+        if (this.activeSessionId === sessionId) {
+          this.activeSessionId = null
+        }
+        return result
+      } catch (error) {
+        this.error = api.parseError(error, '删除会话失败')
+        throw error
+      } finally {
+        this.deletingId = null
       }
     },
     setActive(sessionId) {

@@ -36,6 +36,15 @@
 ]
 ```
 
+### DELETE `/api/chat/{sessionId}` — 删除单条会话历史
+```json
+// 响应
+{
+  "status": "deleted",
+  "sessionId": "a1b2c3d4-..."
+}
+```
+
 ---
 
 ## 2. 模型接口 `/api/models`

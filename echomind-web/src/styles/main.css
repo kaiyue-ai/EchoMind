@@ -318,12 +318,9 @@ textarea {
 .session-item {
   display: flex;
   width: 100%;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 4px;
-  padding: 10px;
-  cursor: pointer;
-  text-align: left;
   color: var(--text-secondary);
   border: 1px solid transparent;
   border-radius: 8px;
@@ -334,6 +331,24 @@ textarea {
 .session-item.active {
   border-color: var(--border);
   background: var(--surface);
+}
+
+.session-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  border: 0;
+  background: transparent;
+}
+
+.session-delete {
+  margin-right: 4px;
 }
 
 .session-preview {

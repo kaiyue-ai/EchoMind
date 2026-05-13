@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
 Cpu,
-Box,
 Terminal,
+Box,
 Plus,
 ArrowUpRight,
 Search,
-FolderTree,
 ChevronRight,
 Activity,
 ShieldCheck,
@@ -57,8 +56,8 @@ const INITIAL_AGENTS = [
 ];
 
 const INITIAL_SKILLS = [
-{ id: 'skill-1', name: '本地文件系统', type: 'MCP标准', tools: ['read_file', 'list_dir', 'write_file'], description: '基于 MCP 协议的安全本地文件读写与目录解析能力。', active: true, icon: <FolderTree size={18}/> },
-    { id: 'skill-2', name: '全网信息检索', type: '原生插件', tools: ['google_search', 'news_aggregator'], description: '接入搜索引擎 API，提供实时信息的 RAG 增强聚合。', active: true, icon: <Search size={18}/> },
+{ id: 'skill-1', name: '全网信息检索', type: '原生插件', tools: ['web_search'], description: '接入搜索引擎 API，提供实时信息的 RAG 增强聚合。', active: true, icon: <Search size={18}/> },
+    { id: 'skill-2', name: '日期时间查询', type: '原生插件', tools: ['date_query'], description: '查询当前日期、时间、星期和日期偏移。', active: true, icon: <Activity size={18}/> },
         { id: 'skill-3', name: '企业数据库直连', type: 'MCP标准', tools: ['sql_query', 'schema_read'], description: '只读模式下的 MySQL/PostgreSQL 数据库结构分析与查询。', active: false, icon: <DatabaseZap size={18}/> },
             ];
 

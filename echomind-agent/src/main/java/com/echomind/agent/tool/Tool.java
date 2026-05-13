@@ -14,7 +14,7 @@ import java.util.concurrent.CompletableFuture;
  */
 public interface Tool {
 
-    /** 工具唯一名称，例如 weather、filesystem、web-search。 */
+    /** 工具唯一名称，例如 weather-query、calculator、web-search。 */
     String name();
 
     /** 人类可读的描述，用于关键词匹配和模型函数说明。 */

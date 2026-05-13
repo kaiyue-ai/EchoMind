@@ -149,6 +149,12 @@ public class ChatController {
             .toList());
     }
 
+    /** 删除指定对话的完整历史、向量缓存以及关联附件对象。 */
+    @DeleteMapping("/{sessionId}")
+    public ResponseEntity<Map<String, String>> deleteSession(@PathVariable String sessionId) {
+        return ResponseEntity.ok(chatService.deleteSession(sessionId));
+    }
+
     private AgentMessage refreshAttachmentUrls(AgentMessage message) {
         if (message.attachments() == null || message.attachments().isEmpty()) {
             return message;

@@ -113,6 +113,17 @@ POST /api/chat/stream
   -> MemoryPersistStage 在流结束后写回
 ```
 
+删除单条会话：
+
+```text
+DELETE /api/chat/{sessionId}
+  -> ChatController
+  -> ChatApplicationService.deleteSession
+  -> MemoryManager.getFullContext
+  -> MemoryManager.clearSession
+  -> ObjectStorageService.deleteObject (尽力回收聊天附件)
+```
+
 ## 工具调用链路
 
 本地 Skill：

@@ -36,7 +36,7 @@ public record ToolCall(
     String id,
     /**
      * 工具名称，对应已注册的技能或 MCP 工具的唯一标识。
-     * 例如 {@code "weather"}、{@code "calculator.add"}、{@code "filesystem.read_file"}。
+     * 例如 {@code "weather-query"}、{@code "calculator"}、{@code "fetch_nowcoder_java_interview_article"}。
      */
     String name,
     /**

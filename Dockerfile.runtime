@@ -27,7 +27,6 @@ COPY skills/skill-calculator/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-websearch/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-markdown-code/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-date-query/target/*-jar-with-dependencies.jar /app/skills/
-COPY skills/filesystem-1.0.0.jar /app/skills/
 
 RUN chown -R echomind:echomind /app
 USER echomind

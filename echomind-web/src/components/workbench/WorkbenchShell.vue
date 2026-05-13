@@ -26,10 +26,12 @@
         v-if="!sidebarCollapsed"
         :sessions="sessions"
         :loading="sessionsLoading"
+        :deleting-id="deletingSessionId"
         :active-session-id="activeSessionId"
         @refresh="$emit('refreshSessions')"
         @create="$emit('newSession')"
         @open="$emit('openSession', $event)"
+        @delete="$emit('deleteSession', $event)"
       />
 
       <button v-else class="collapsed-session-button" type="button" title="展开会话" @click="uiStore.setSidebarCollapsed(false)">
@@ -77,10 +79,11 @@ import SessionList from './SessionList.vue'
 defineProps({
   sessions: { type: Array, default: () => [] },
   sessionsLoading: { type: Boolean, default: false },
+  deletingSessionId: { type: String, default: null },
   activeSessionId: { type: String, default: null }
 })
 
-defineEmits(['refreshSessions', 'newSession', 'openSession'])
+defineEmits(['refreshSessions', 'newSession', 'openSession', 'deleteSession'])
 
 const route = useRoute()
 const router = useRouter()

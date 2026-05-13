@@ -55,7 +55,7 @@ class AgentPersistenceServiceTest {
         entity.setName("恢复Agent");
         entity.setSystemPrompt("从数据库恢复");
         entity.setModelId("deepseek:deepseek-v4-flash");
-        entity.setSkillIdsJson("[\"weather-query\",\"filesystem\"]");
+        entity.setSkillIdsJson("[\"weather-query\",\"date-query\"]");
         when(repository.findAll()).thenReturn(List.of(entity));
 
         AgentPersistenceService service = new AgentPersistenceService(repository);
@@ -68,6 +68,6 @@ class AgentPersistenceServiceTest {
         assertThat(restored.getName()).isEqualTo("恢复Agent");
         assertThat(restored.getSystemPrompt()).isEqualTo("从数据库恢复");
         assertThat(restored.getModelId()).isEqualTo("deepseek:deepseek-v4-flash");
-        assertThat(restored.getSkillIds()).containsExactly("weather-query", "filesystem");
+        assertThat(restored.getSkillIds()).containsExactly("weather-query", "date-query");
     }
 }

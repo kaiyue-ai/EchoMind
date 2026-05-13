@@ -10,7 +10,7 @@ import java.util.Map;
  *
  * <h3>字段说明</h3>
  * <ul>
- *   <li><b>name</b> —— 工具 的唯一名称（如 "weather"、"filesystem.read"）。
+ *   <li><b>name</b> —— 工具的唯一名称（如 "weather.current"、"search.web"）。
  *       在同一个 MCP Server 中必须唯一，是工具调用的标识符。</li>
  *   <li><b>description</b> —— 工具的人类可读描述，用于 AI 模型理解工具的用途。
  *       建议使用清晰的自然语言描述输入输出。</li>
@@ -29,7 +29,7 @@ import java.util.Map;
 public record ToolSpec(
     /**
      * 工具名称 —— 在 MCP Server 中唯一标识一个工具。
-     * 命名建议：使用小写字母和点号分隔，如 "weather.current"、"filesystem.read"。
+     * 命名建议：使用小写字母和点号分隔，如 "weather.current"、"search.web"。
      */
     String name,
 

@@ -115,7 +115,7 @@ public class DeepSeekProvider implements ModelProvider {
 
         List<LlmTool> activeTools = tools == null ? List.of() : tools;
         StringBuilder executedToolResults = new StringBuilder();
-        List<Map<String, Object>> messages = buildMessages(systemPrompt, userMessage);
+        List<Map<String, Object>> messages = buildMessages(systemPrompt, userMessage, activeTools);
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
             JsonNode response = send(buildRequestBody(model, messages, activeTools));
@@ -133,6 +133,12 @@ public class DeepSeekProvider implements ModelProvider {
             List<DsmlToolCall> dsmlToolCalls = dsmlToolCalls(text);
             if (!dsmlToolCalls.isEmpty()) {
                 appendDsmlToolResults(messages, text, dsmlToolCalls, activeTools, executedToolResults);
+                continue;
+            }
+
+            LlmTool degradedTool = ToolCallSupport.detectDegradedToolSelection(text, activeTools);
+            if (degradedTool != null) {
+                appendDegradedToolResult(messages, text, degradedTool, userMessage, executedToolResults);
                 continue;
             }
 
@@ -177,7 +183,7 @@ public class DeepSeekProvider implements ModelProvider {
 
     Map<String, Object> buildRequestBody(ModelSpec model, String systemPrompt, String userMessage,
                                          List<LlmTool> tools) {
-        return buildRequestBody(model, buildMessages(systemPrompt, userMessage), tools);
+        return buildRequestBody(model, buildMessages(systemPrompt, userMessage, tools), tools);
     }
 
     private Map<String, Object> buildRequestBody(ModelSpec model, List<Map<String, Object>> messages,
@@ -194,12 +200,34 @@ public class DeepSeekProvider implements ModelProvider {
         return body;
     }
 
-    private List<Map<String, Object>> buildMessages(String systemPrompt, String userMessage) {
+    private void appendDegradedToolResult(List<Map<String, Object>> messages, String assistantText,
+                                          LlmTool tool, String userMessage,
+                                          StringBuilder executedToolResults) {
+        String argumentsJson = ToolCallSupport.defaultArgumentsJson(tool, userMessage);
+        String result = tool.call(argumentsJson);
+        appendExecutedToolResult(executedToolResults, assistantText == null ? tool.name() : assistantText.trim(),
+            tool.name(), argumentsJson, result);
+        messages.add(Map.of("role", "assistant", "content", assistantText == null ? tool.name() : assistantText));
+        messages.add(Map.of("role", "user", "content", """
+            The runtime resolved your previous plain-text tool selection into a formal tool execution.
+            Requested tool: %s
+            Arguments: %s
+            Result:
+            %s
+
+            %s
+            """.formatted(tool.name(), argumentsJson, result, ToolCallSupport.finalAnswerInstruction())));
+    }
+
+    private List<Map<String, Object>> buildMessages(String systemPrompt, String userMessage, List<LlmTool> tools) {
         List<Map<String, Object>> messages = new ArrayList<>();
+        String fullPrompt = systemPrompt == null || systemPrompt.isBlank()
+            ? ToolCallSupport.toolUseInstruction(userMessage, tools)
+            : systemPrompt + "\n\n" + ToolCallSupport.toolUseInstruction(userMessage, tools);
         if (systemPrompt != null && !systemPrompt.isBlank()) {
-            messages.add(Map.of("role", "user", "content", systemPrompt + "\n\n" + (userMessage == null ? "" : userMessage)));
+            messages.add(Map.of("role", "user", "content", fullPrompt + "\n\n" + (userMessage == null ? "" : userMessage)));
         } else {
-            messages.add(Map.of("role", "user", "content", userMessage == null ? "" : userMessage));
+            messages.add(Map.of("role", "user", "content", fullPrompt + "\n\n" + (userMessage == null ? "" : userMessage)));
         }
         return messages;
     }

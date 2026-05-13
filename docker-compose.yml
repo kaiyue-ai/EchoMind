@@ -115,9 +115,8 @@ services:
       ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_1: -jar
       ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_2: /app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
       ECHOMIND_MCP_EXTERNAL_SERVERS_0_WORKING_DIRECTORY: /app/mcp
-      ECHOMIND_FS_EXTRA_ROOTS: ${ECHOMIND_FS_EXTRA_ROOTS:-/mnt/host}
       # JVM 配置
-      JAVA_OPTS: "-Xms512m -Xmx1024m -Dechomind.fs.extra-roots=${ECHOMIND_FS_EXTRA_ROOTS:-/mnt/host} -Dechomind.fs.path-mappings=${ECHOMIND_FS_PATH_MAPPINGS:-C:\\Users\\Jimmy->/mnt/host}"
+      JAVA_OPTS: "-Xms512m -Xmx1024m"
     ports:
       - "8080:8080"
     volumes:
@@ -137,7 +136,7 @@ services:
     image: ai-agent-frontend:latest
     build:
       context: ./echomind-web
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.runtime
     container_name: echomind-frontend
     restart: unless-stopped
     depends_on:

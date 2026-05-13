@@ -112,7 +112,10 @@ export default {
       api.get(`/chat/${sessionId}/history`).then(r => r.data),
     /** 获取所有会话列表 */
     sessions: () =>
-      api.get('/chat/sessions').then(r => r.data)
+      api.get('/chat/sessions').then(r => r.data),
+    /** 删除单条会话历史 */
+    delete: (sessionId) =>
+      api.delete(`/chat/${sessionId}`).then(r => r.data)
   },
 
   // ===== 存储接口 =====

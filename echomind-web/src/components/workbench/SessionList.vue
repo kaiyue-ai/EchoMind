@@ -12,19 +12,34 @@
       </div>
     </div>
     <div v-loading="loading" class="session-scroll">
-      <button
+      <div
         v-for="session in sessions"
         :key="session.sessionId"
         :class="['session-item', { active: activeSessionId === session.sessionId }]"
-        type="button"
-        @click="$emit('open', session.sessionId)"
       >
-        <span class="session-preview">{{ session.lastMessage || '(空对话)' }}</span>
-        <span class="session-meta">
-          <span>{{ session.messageCount || 0 }} 条</span>
-          <span v-if="session.lastActivity">{{ formatTime(session.lastActivity) }}</span>
-        </span>
-      </button>
+        <button
+          class="session-main"
+          type="button"
+          @click="$emit('open', session.sessionId)"
+        >
+          <span class="session-preview">{{ session.lastMessage || '(空对话)' }}</span>
+          <span class="session-meta">
+            <span>{{ session.messageCount || 0 }} 条</span>
+            <span v-if="session.lastActivity">{{ formatTime(session.lastActivity) }}</span>
+          </span>
+        </button>
+        <el-button
+          text
+          type="danger"
+          size="small"
+          class="session-delete"
+          :loading="deletingId === session.sessionId"
+          title="删除会话"
+          @click.stop="$emit('delete', session)"
+        >
+          删除
+        </el-button>
+      </div>
       <div v-if="!loading && sessions.length === 0" class="session-empty">
         暂无会话
       </div>
@@ -38,10 +53,11 @@ import { Plus, Refresh } from '@element-plus/icons-vue'
 defineProps({
   sessions: { type: Array, default: () => [] },
   activeSessionId: { type: String, default: null },
-  loading: { type: Boolean, default: false }
+  loading: { type: Boolean, default: false },
+  deletingId: { type: String, default: null }
 })
 
-defineEmits(['refresh', 'create', 'open'])
+defineEmits(['refresh', 'create', 'open', 'delete'])
 
 function formatTime(instant) {
   const d = new Date(instant)

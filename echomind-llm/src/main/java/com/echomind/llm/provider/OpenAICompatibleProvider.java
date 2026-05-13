@@ -157,8 +157,11 @@ public class OpenAICompatibleProvider implements ModelProvider {
                                        List<MessageAttachment> attachments,
                                        List<LlmTool> tools) throws IOException {
         List<Map<String, Object>> messages = new ArrayList<>();
+        String toolPrompt = ToolCallSupport.toolUseInstruction(userMessage, tools);
         if (systemPrompt != null && !systemPrompt.isBlank()) {
-            messages.add(Map.of("role", "system", "content", systemPrompt));
+            messages.add(Map.of("role", "system", "content", systemPrompt + "\n\n" + toolPrompt));
+        } else if (tools != null && !tools.isEmpty()) {
+            messages.add(Map.of("role", "system", "content", toolPrompt));
         }
 
         messages.add(userMessage(userMessage, attachments));
@@ -206,8 +209,37 @@ public class OpenAICompatibleProvider implements ModelProvider {
                 }
                 return continueAfterToolCalls(model, messages);
             }
-            return contentText(message.path("content"));
+            String content = contentText(message.path("content"));
+            LlmTool degradedTool = ToolCallSupport.detectDegradedToolSelection(content, tools);
+            if (degradedTool != null) {
+                appendDegradedToolExecution(messages, content, degradedTool, userMessage);
+                return continueAfterToolCalls(model, messages);
+            }
+            return content;
         }
+    }
+
+    private void appendDegradedToolExecution(List<Map<String, Object>> messages, String assistantText,
+                                             LlmTool tool, String userMessage) {
+        String argumentsJson = ToolCallSupport.defaultArgumentsJson(tool, userMessage);
+        messages.add(Map.of("role", "assistant", "content", assistantText == null ? tool.name() : assistantText));
+        messages.add(Map.of(
+            "role", "tool",
+            "tool_call_id", "degraded-" + tool.name(),
+            "content", """
+                Requested tool: %s
+                Arguments: %s
+                Result:
+                %s
+
+                %s
+                """.formatted(
+                tool.name(),
+                argumentsJson,
+                tool.call(argumentsJson),
+                ToolCallSupport.finalAnswerInstruction()
+            )
+        ));
     }
 
     private String continueAfterToolCalls(ModelSpec model, List<Map<String, Object>> messages) throws IOException {

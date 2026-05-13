@@ -9,8 +9,8 @@ import java.util.List;
  * 每个 ToolProvider 管理一个或多个相关的远端工具，例如：
  * <ul>
  *   <li>WeatherToolProvider —— 提供天气查询相关工具</li>
- *   <li>FileSystemToolProvider —— 提供文件操作相关工具</li>
- *   <li>DatabaseToolProvider —— 提供数据库操作相关工具</li>
+ *   <li>SearchToolProvider —— 提供网络搜索相关工具</li>
+ *   <li>DatabaseToolProvider —— 提供数据库查询相关工具</li>
  * </ul>
  *
  * <h3>实现要点</h3>

@@ -7,6 +7,9 @@
           <h1>智能对话</h1>
         </div>
         <div class="workspace-header-actions">
+          <el-button v-if="sessionId" text type="danger" title="删除当前会话" @click="deleteCurrentSession">
+            删除
+          </el-button>
           <el-button text title="新建会话" @click="newSession">
             <el-icon><Plus /></el-icon>
             新建
@@ -74,6 +77,7 @@ const uiStore = useUiStore()
 const route = useRoute()
 const router = useRouter()
 const refreshSessions = inject('refreshSessions', null)
+const deleteSession = inject('deleteSession', null)
 const messageListRef = ref(null)
 const uploadingImage = ref(false)
 
@@ -270,5 +274,10 @@ function removeAttachment(att) {
 function newSession() {
   chatStore.resetSession()
   router.replace({ path: '/chat' })
+}
+
+async function deleteCurrentSession() {
+  if (!sessionId.value || typeof deleteSession !== 'function') return
+  await deleteSession(sessionId.value)
 }
 </script>

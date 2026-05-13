@@ -131,4 +131,25 @@ class DeepSeekProviderTest {
         assertThat(fallback).contains("模型持续请求更多工具调用");
         assertThat(fallback).contains("场地A、场地B");
     }
+
+    @Test
+    void requestBodyIncludesStrongToolUseInstruction() {
+        DeepSeekProvider provider = new DeepSeekProvider("https://api.deepseek.com/anthropic", "test-key");
+
+        Map<String, Object> body = provider.buildRequestBody(
+            new ModelSpec("deepseek", "deepseek-v4-flash", Set.of(ModelCapability.TEXT), true),
+            "你是助手",
+            "查询 https://deepseek.com/",
+            List.of(new LlmTool(
+                "web_search",
+                "Search the web",
+                Map.of("properties", Map.of("query", Map.of("type", "string"))),
+                ignored -> "搜索结果"
+            ))
+        );
+
+        assertThat(body.toString()).contains("must emit a formal tool call");
+        assertThat(body.toString()).contains("web_search");
+        assertThat(body.toString()).contains("query");
+    }
 }
