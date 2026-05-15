@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -35,6 +36,11 @@ public class StdioMCPClient implements Closeable {
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
+    private static final List<String> OTEL_ENV_PREFIXES = List.of("OTEL_");
+    private static final List<String> STRIP_JAVA_TOOL_OPTIONS_TOKENS = List.of(
+        "-javaagent:/app/opentelemetry-javaagent.jar",
+        "opentelemetry-javaagent.jar"
+    );
 
     private final String serverId;
     private final List<String> command;
@@ -126,9 +132,42 @@ public class StdioMCPClient implements Closeable {
         if (workingDirectory != null) {
             builder.directory(workingDirectory.toFile());
         }
+        sanitizeTracingEnvironment(builder.environment());
         process = builder.start();
         writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
         reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+    }
+
+    private void sanitizeTracingEnvironment(Map<String, String> environment) {
+        if (environment == null || environment.isEmpty()) {
+            return;
+        }
+        List<String> keysToRemove = new ArrayList<>();
+        for (String key : environment.keySet()) {
+            for (String prefix : OTEL_ENV_PREFIXES) {
+                if (key.startsWith(prefix)) {
+                    keysToRemove.add(key);
+                    break;
+                }
+            }
+        }
+        for (String key : keysToRemove) {
+            environment.remove(key);
+        }
+        String javaToolOptions = environment.get("JAVA_TOOL_OPTIONS");
+        if (javaToolOptions == null || javaToolOptions.isBlank()) {
+            return;
+        }
+        String sanitized = javaToolOptions;
+        for (String token : STRIP_JAVA_TOOL_OPTIONS_TOKENS) {
+            sanitized = sanitized.replace(token, "");
+        }
+        sanitized = sanitized.trim().replaceAll("\\s{2,}", " ");
+        if (sanitized.isBlank()) {
+            environment.remove("JAVA_TOOL_OPTIONS");
+        } else {
+            environment.put("JAVA_TOOL_OPTIONS", sanitized);
+        }
     }
 
     // 发送 JSON-RPC 请求

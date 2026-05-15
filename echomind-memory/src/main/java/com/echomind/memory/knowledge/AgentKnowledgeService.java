@@ -2,7 +2,6 @@ package com.echomind.memory.knowledge;
 
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.redis.RedisKeyScanner;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lettuce.core.codec.ByteArrayCodec;
 import io.lettuce.core.output.ArrayOutput;
@@ -20,6 +19,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.Comparator;
@@ -44,7 +44,6 @@ import java.util.regex.Pattern;
 @Slf4j
 public class AgentKnowledgeService {
 
-    private static final TypeReference<List<Double>> DOUBLE_LIST = new TypeReference<>() {};
     private static final byte[] FIELD_AGENT_ID = bytes("agent_id");
     private static final byte[] FIELD_DOCUMENT_ID = bytes("document_id");
     private static final byte[] FIELD_CHUNK_ID = bytes("chunk_id");
@@ -147,14 +146,18 @@ public class AgentKnowledgeService {
             chunk.setFileName(document.getFileName());
             chunk.setChunkIndex(i);
             chunk.setContent(chunks.get(i));
-            chunk.setEmbeddingJson(toJson(embedding.get()));
+            chunk.setEmbeddingJson("[]");
             chunk = chunkRepository.save(chunk);
-            saveRedis(chunk, embedding.get());
-            indexed++;
+            if (saveRedis(chunk, embedding.get())) {
+                indexed++;
+            } else {
+                chunkRepository.delete(chunk);
+            }
         }
         if (indexed == 0) {
+            chunkRepository.deleteByDocumentId(document.getId());
             documentRepository.delete(document);
-            throw new IllegalStateException("文件切片向量化失败，请检查向量模型配置");
+            throw new IllegalStateException("文件切片写入 Redis Stack 向量索引失败，请检查 Redis Stack 和向量模型配置");
         }
         document.setChunkCount(indexed);
         document = documentRepository.save(document);
@@ -205,24 +208,31 @@ public class AgentKnowledgeService {
         if (queryVector.isEmpty()) {
             return List.of();
         }
+        return search(agentId, query, queryVector.get(), topK);
+    }
+
+    /** 使用已计算的查询向量召回 Agent 私有知识库片段。 */
+    @Transactional(readOnly = true)
+    public List<AgentKnowledgeHit> search(String agentId, String query, double[] queryVector, int topK) {
+        if (!enabled || topK <= 0 || query == null || query.isBlank()
+            || agentId == null || agentId.isBlank() || queryVector == null || queryVector.length == 0) {
+            return List.of();
+        }
         List<String> keywords = extractKeywords(query);
         Map<Long, HybridCandidate> candidates = new LinkedHashMap<>();
         try {
-            mergeVectorHits(candidates, searchRedis(agentId, queryVector.get(), expandedTopK(topK)), true);
+            mergeVectorHits(candidates, searchRedis(agentId, queryVector, expandedTopK(topK)), true);
         } catch (Exception e) {
-            log.warn("Redis Stack agent knowledge search failed; falling back to MySQL agentId={}: {}",
+            log.warn("Redis Stack agent knowledge search failed; skipping vector hits agentId={}: {}",
                 agentId, e.getMessage());
-        }
-        if (candidates.isEmpty()) {
-            mergeVectorHits(candidates, searchMysql(agentId, queryVector.get(), expandedTopK(topK)), true);
         }
         mergeKeywordHits(candidates, searchKeyword(agentId, keywords));
         return rankHybridCandidates(candidates.values(), topK);
     }
 
-    private void saveRedis(AgentKnowledgeChunkEntity chunk, double[] embedding) {
+    private boolean saveRedis(AgentKnowledgeChunkEntity chunk, double[] embedding) {
         if (redisConnectionFactory == null) {
-            return;
+            return false;
         }
         try {
             ensureIndex(embedding.length);
@@ -238,9 +248,11 @@ public class AgentKnowledgeService {
                     FIELD_EMBEDDING, vectorBytes(embedding)
                 );
             }
+            return true;
         } catch (Exception e) {
             log.warn("Failed to write agent knowledge vector to Redis agentId={} chunkId={}: {}",
                 chunk.getAgentId(), chunk.getId(), e.getMessage());
+            return false;
         }
     }
 
@@ -287,7 +299,8 @@ public class AgentKnowledgeService {
     private boolean indexExists() {
         try (RedisConnection connection = redisConnectionFactory.getConnection()) {
             Object raw = executeArrayCommand(connection, "FT._LIST");
-            if (!(raw instanceof List<?> indexes)) {
+            List<?> indexes = asList(raw);
+            if (indexes.isEmpty()) {
                 return false;
             }
             for (Object index : indexes) {
@@ -324,52 +337,71 @@ public class AgentKnowledgeService {
     }
 
     private List<AgentKnowledgeHit> parseSearchResult(Object raw) {
-        if (!(raw instanceof List<?> rows) || rows.size() <= 1) {
+        List<?> rows = asList(raw);
+        if (rows.size() <= 1) {
             return List.of();
+        }
+        List<?> structuredResults = findValue(rows, "results");
+        if (!structuredResults.isEmpty()) {
+            return parseStructuredResults(structuredResults);
         }
         List<AgentKnowledgeHit> hits = new ArrayList<>();
         for (int i = 1; i + 1 < rows.size(); i += 2) {
             Object fieldsRaw = rows.get(i + 1);
-            if (!(fieldsRaw instanceof List<?> fields)) {
+            List<?> fields = asList(fieldsRaw);
+            if (fields.isEmpty()) {
                 continue;
             }
-            Long documentId = null;
-            Long chunkId = null;
-            int chunkIndex = 0;
-            String fileName = null;
-            String content = null;
-            double score = 0;
-            for (int j = 0; j + 1 < fields.size(); j += 2) {
-                String name = text(fields.get(j));
-                Object value = fields.get(j + 1);
-                if ("document_id".equals(name)) {
-                    documentId = parseLong(value);
-                } else if ("chunk_id".equals(name)) {
-                    chunkId = parseLong(value);
-                } else if ("chunk_index".equals(name)) {
-                    chunkIndex = parseLong(value).intValue();
-                } else if ("file_name".equals(name)) {
-                    fileName = text(value);
-                } else if ("content".equals(name)) {
-                    content = text(value);
-                } else if ("score".equals(name)) {
-                    score = distanceToSimilarity(parseDouble(value));
-                }
-            }
-            if (documentId != null && chunkId != null && content != null) {
-                hits.add(new AgentKnowledgeHit(chunkId, documentId, fileName, chunkIndex, content, score));
+            AgentKnowledgeHit hit = parseFields(fields);
+            if (hit != null) {
+                hits.add(hit);
             }
         }
         return hits;
     }
 
-    private List<AgentKnowledgeHit> searchMysql(String agentId, double[] queryVector, int topK) {
-        return chunkRepository.findByAgentId(agentId).stream()
-            .map(entity -> toHit(entity, queryVector))
-            .filter(hit -> hit.score() > 0)
-            .sorted(Comparator.comparingDouble(AgentKnowledgeHit::score).reversed())
-            .limit(topK)
-            .toList();
+    private List<AgentKnowledgeHit> parseStructuredResults(List<?> results) {
+        List<AgentKnowledgeHit> hits = new ArrayList<>();
+        for (Object result : results) {
+            List<?> resultFields = asList(result);
+            if (resultFields.isEmpty()) {
+                continue;
+            }
+            AgentKnowledgeHit hit = parseFields(findValue(resultFields, "extra_attributes"));
+            if (hit != null) {
+                hits.add(hit);
+            }
+        }
+        return hits;
+    }
+
+    private AgentKnowledgeHit parseFields(List<?> fields) {
+        Long documentId = null;
+        Long chunkId = null;
+        int chunkIndex = 0;
+        String fileName = null;
+        String content = null;
+        double score = 0;
+        for (int j = 0; j + 1 < fields.size(); j += 2) {
+            String name = text(fields.get(j));
+            Object value = fields.get(j + 1);
+            if ("document_id".equals(name)) {
+                documentId = parseLong(value);
+            } else if ("chunk_id".equals(name)) {
+                chunkId = parseLong(value);
+            } else if ("chunk_index".equals(name)) {
+                chunkIndex = parseLong(value).intValue();
+            } else if ("file_name".equals(name)) {
+                fileName = text(value);
+            } else if ("content".equals(name)) {
+                content = text(value);
+            } else if ("score".equals(name)) {
+                score = distanceToSimilarity(parseDouble(value));
+            }
+        }
+        return documentId != null && chunkId != null && content != null
+            ? new AgentKnowledgeHit(chunkId, documentId, fileName, chunkIndex, content, score)
+            : null;
     }
 
     private List<AgentKnowledgeHit> searchKeyword(String agentId, List<String> keywords) {
@@ -436,17 +468,6 @@ public class AgentKnowledgeService {
             .toList();
     }
 
-    private AgentKnowledgeHit toHit(AgentKnowledgeChunkEntity entity, double[] queryVector) {
-        return new AgentKnowledgeHit(
-            entity.getId(),
-            entity.getDocumentId(),
-            entity.getFileName(),
-            entity.getChunkIndex(),
-            entity.getContent(),
-            cosine(queryVector, parseVector(entity.getEmbeddingJson()))
-        );
-    }
-
     private void deleteRedisDocument(String agentId, Long documentId) {
         if (keyScanner == null) {
             return;
@@ -457,49 +478,6 @@ public class AgentKnowledgeService {
             log.warn("Failed to delete Redis agent knowledge vectors agentId={} documentId={}: {}",
                 agentId, documentId, e.getMessage());
         }
-    }
-
-    private String toJson(double[] embedding) {
-        try {
-            return mapper.writeValueAsString(embedding);
-        } catch (Exception e) {
-            throw new IllegalStateException("向量序列化失败：" + e.getMessage());
-        }
-    }
-
-    private double[] parseVector(String json) {
-        if (json == null || json.isBlank()) {
-            return new double[0];
-        }
-        try {
-            List<Double> values = mapper.readValue(json, DOUBLE_LIST);
-            double[] vector = new double[values.size()];
-            for (int i = 0; i < values.size(); i++) {
-                vector[i] = values.get(i);
-            }
-            return vector;
-        } catch (Exception e) {
-            log.warn("Failed to parse agent knowledge vector json: {}", e.getMessage());
-            return new double[0];
-        }
-    }
-
-    private double cosine(double[] a, double[] b) {
-        if (a.length == 0 || a.length != b.length) {
-            return 0;
-        }
-        double dot = 0;
-        double normA = 0;
-        double normB = 0;
-        for (int i = 0; i < a.length; i++) {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-        if (normA == 0 || normB == 0) {
-            return 0;
-        }
-        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
     }
 
     private double keywordScore(AgentKnowledgeChunkEntity entity, List<String> keywords) {
@@ -671,6 +649,25 @@ public class AgentKnowledgeService {
             return new String(bytes, StandardCharsets.UTF_8);
         }
         return value == null ? null : String.valueOf(value);
+    }
+
+    private List<?> asList(Object raw) {
+        if (raw instanceof List<?> list) {
+            return list;
+        }
+        if (raw instanceof Object[] array) {
+            return Arrays.asList(array);
+        }
+        return List.of();
+    }
+
+    private List<?> findValue(List<?> fields, String name) {
+        for (int i = 0; i + 1 < fields.size(); i += 2) {
+            if (name.equals(text(fields.get(i)))) {
+                return asList(fields.get(i + 1));
+            }
+        }
+        return List.of();
     }
 
     private String truncate(String value, int maxChars) {

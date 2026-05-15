@@ -3,11 +3,16 @@ package com.echomind.llm.provider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.echomind.llm.router.ModelCapability;
 import com.echomind.llm.router.ModelSpec;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -151,5 +156,55 @@ class DeepSeekProviderTest {
         assertThat(body.toString()).contains("must emit a formal tool call");
         assertThat(body.toString()).contains("web_search");
         assertThat(body.toString()).contains("query");
+    }
+
+    @Test
+    void deepSeekStreamReadsAnthropicTextDeltas() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        AtomicReference<String> apiKey = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/anthropic/messages", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            apiKey.set(exchange.getRequestHeaders().getFirst("x-api-key"));
+            byte[] body = """
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你"}}
+
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好"}}
+
+                event: message_stop
+                data: {"type":"message_stop"}
+
+                """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+
+        try {
+            DeepSeekProvider provider = new DeepSeekProvider(
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/anthropic",
+                "test-key"
+            );
+
+            List<String> tokens = provider.stream(new ProviderRequest(
+                    new ModelSpec("deepseek", "deepseek-v4-flash", Set.of(ModelCapability.TEXT), true),
+                    "你是助手",
+                    "你好",
+                    List.of(),
+                    List.of()
+                ))
+                .collectList()
+                .block(Duration.ofSeconds(3));
+
+            assertThat(tokens).containsExactly("你", "好");
+            assertThat(requestBody.get()).contains("\"stream\":true");
+            assertThat(apiKey.get()).isEqualTo("test-key");
+        } finally {
+            server.stop(0);
+        }
     }
 }

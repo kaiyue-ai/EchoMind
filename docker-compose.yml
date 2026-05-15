@@ -22,6 +22,72 @@ services:
       timeout: 5s
       retries: 5
 
+  # ===== SkyWalking OAP（OTLP Trace 接收 + 查询）=====
+  skywalking-oap:
+    image: apache/skywalking-oap-server:10.0.1
+    container_name: echomind-skywalking-oap
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SW_STORAGE: mysql
+      SW_JDBC_URL: jdbc:mysql://mysql:3306/swtest?rewriteBatchedStatements=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SW_DATA_SOURCE_USER: root
+      SW_DATA_SOURCE_PASSWORD: echomind_root
+      SW_TELEMETRY: prometheus
+      SW_OTEL_RECEIVER_ENABLED_HANDLERS: otlp-traces
+      SW_RECEIVER_ZIPKIN: default
+      SW_QUERY_ZIPKIN: default
+      JAVA_OPTS: "-Xms512m -Xmx1024m"
+    ports:
+      - "11800:11800"
+      - "12800:12800"
+      - "9412:9412"
+    volumes:
+      - ./docker/skywalking/mysql-connector-j-8.3.0.jar:/skywalking/oap-libs/mysql-connector-j-8.3.0.jar:ro
+    networks:
+      - echomind-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:12800/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ===== OpenTelemetry Collector（OTLP 接收 + 转发 SkyWalking）=====
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.123.0
+    container_name: echomind-otel-collector
+    restart: unless-stopped
+    depends_on:
+      skywalking-oap:
+        condition: service_healthy
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./docker/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    networks:
+      - echomind-network
+
+  # ===== SkyWalking UI（Zipkin Lens）=====
+  skywalking-ui:
+    image: apache/skywalking-ui:10.0.1
+    container_name: echomind-skywalking-ui
+    restart: unless-stopped
+    depends_on:
+      skywalking-oap:
+        condition: service_healthy
+    environment:
+      SW_OAP_ADDRESS: http://skywalking-oap:12800
+      SW_ZIPKIN_ADDRESS: http://skywalking-oap:9412
+    ports:
+      - "8081:8080"
+    networks:
+      - echomind-network
+
   # ===== Redis Stack（近期上下文热缓存 + 向量检索） =====
   redis:
     image: redis/redis-stack-server:latest
@@ -40,6 +106,26 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+
+  # ===== SearXNG 元搜索引擎 =====
+  searxng:
+    image: searxng/searxng:latest
+    container_name: echomind-searxng
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8082/
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    networks:
+      - echomind-network
 
   # ===== RabbitMQ 消息队列 =====
   rabbitmq:
@@ -73,6 +159,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
     environment:
       # LLM API 配置
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${ANTHROPIC_API_KEY:-}}
@@ -102,10 +192,27 @@ services:
       SPRING_RABBITMQ_PORT: 5672
       SPRING_RABBITMQ_USERNAME: echomind
       SPRING_RABBITMQ_PASSWORD: echomind_secret
+      ECHOMIND_RABBITMQ_CHAT_REQUEST_CONSUMERS: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_CONSUMERS:-20}
+      ECHOMIND_RABBITMQ_CHAT_REQUEST_MAX_CONSUMERS: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_MAX_CONSUMERS:-20}
+      ECHOMIND_RABBITMQ_CHAT_REQUEST_PREFETCH: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_PREFETCH:-1}
+      ECHOMIND_RABBITMQ_CHAT_RESPONSE_CONSUMERS: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_CONSUMERS:-4}
+      ECHOMIND_RABBITMQ_CHAT_RESPONSE_MAX_CONSUMERS: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_MAX_CONSUMERS:-4}
+      ECHOMIND_RABBITMQ_CHAT_RESPONSE_PREFETCH: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_PREFETCH:-10}
+      ECHOMIND_RABBITMQ_CHAT_MEMORY_PERSIST_CONSUMERS: ${ECHOMIND_RABBITMQ_CHAT_MEMORY_PERSIST_CONSUMERS:-4}
+      ECHOMIND_RABBITMQ_CHAT_MEMORY_PERSIST_MAX_CONSUMERS: ${ECHOMIND_RABBITMQ_CHAT_MEMORY_PERSIST_MAX_CONSUMERS:-8}
+      ECHOMIND_RABBITMQ_CHAT_MEMORY_PERSIST_PREFETCH: ${ECHOMIND_RABBITMQ_CHAT_MEMORY_PERSIST_PREFETCH:-10}
       # EchoMind 配置
       ECHOMIND_MEMORY_VECTOR_STORE: redis-stack
+      ECHOMIND_MEMORY_SHORT_TERM_WINDOW: ${ECHOMIND_MEMORY_SHORT_TERM_WINDOW:-100}
+      ECHOMIND_MEMORY_RETRIEVAL_TOP_K: ${ECHOMIND_MEMORY_RETRIEVAL_TOP_K:-0}
+      ECHOMIND_MEMORY_PERSIST_QUEUE_NAME: echomind.chat-memory.persist.requests
+      ECHOMIND_MEMORY_ASYNC_PERSIST_ENABLED: ${ECHOMIND_MEMORY_ASYNC_PERSIST_ENABLED:-true}
       ECHOMIND_MEMORY_EMBEDDING_MODEL: tongyi-embedding-vision-plus
-      ECHOMIND_MEMORY_RETRIEVAL_TOP_K: 3
+      USER_MEMORY_ENABLED: ${USER_MEMORY_ENABLED:-true}
+      USER_MEMORY_QUEUE_NAME: echomind.user-memory.requests
+      USER_MEMORY_VECTOR_INDEX_NAME: "idx:user:memory:vectors"
+      USER_MEMORY_VECTOR_KEY_PREFIX: "user:memory:vector:"
+      SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
       ECHOMIND_SKILL_AUTO_LOAD_PATH: /app/skills/
       ECHOMIND_SKILL_MARKETPLACE_DIR: /app/data/marketplace/
       ECHOMIND_MCP_EXTERNAL_SERVERS_0_ID: nowcoder-java-interview
@@ -115,6 +222,16 @@ services:
       ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_1: -jar
       ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_2: /app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
       ECHOMIND_MCP_EXTERNAL_SERVERS_0_WORKING_DIRECTORY: /app/mcp
+      # OpenTelemetry Trace
+      OTEL_SERVICE_NAME: echomind-backend
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=echomind,deployment.environment=local
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_INSTRUMENTATION_HTTP_SERVER_CAPTURE_REQUEST_HEADERS: x-request-id
+      OTEL_INSTRUMENTATION_HTTP_SERVER_EXCLUDED_URLS: /actuator/health,/actuator/info
       # JVM 配置
       JAVA_OPTS: "-Xms512m -Xmx1024m"
     ports:
@@ -130,6 +247,40 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
+
+  # ===== EchoMind 用户长期记忆 Worker =====
+  user-memory:
+    image: ai-agent-user-memory:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.user-memory
+    container_name: echomind-user-memory
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: echomind
+      RABBITMQ_PASSWORD: echomind_secret
+      USER_MEMORY_ENABLED: ${USER_MEMORY_ENABLED:-true}
+      USER_MEMORY_QUEUE_NAME: echomind.user-memory.requests
+      USER_MEMORY_VECTOR_INDEX_NAME: "idx:user:memory:vectors"
+      USER_MEMORY_VECTOR_KEY_PREFIX: "user:memory:vector:"
+      USER_MEMORY_EXTRACTOR_MODEL_ID: ${USER_MEMORY_EXTRACTOR_MODEL_ID:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${ANTHROPIC_API_KEY:-}}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}}
+      ALIYUN_BAILIAN_API_KEY: ${ALIYUN_BAILIAN_API_KEY:-}
+      ALIYUN_BAILIAN_BASE_URL: ${ALIYUN_BAILIAN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      ALIYUN_BAILIAN_EMBEDDING_BASE_URL: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com}
+      JAVA_OPTS: "-Xms256m -Xmx512m"
+    networks:
+      - echomind-network
 
   # ===== EchoMind 前端（Vue 3） =====
   frontend:

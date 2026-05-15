@@ -85,4 +85,14 @@ public class AgentFactory {
     public Map<String, Agent> allAgents() {
         return Map.copyOf(agents);
     }
+
+    /**
+     * 从运行时注册表中移除指定Agent。
+     *
+     * @param agentId 要移除的Agent标识
+     * @return 被移除的Agent实例，若不存在则返回null
+     */
+    public Agent remove(String agentId) {
+        return agents.remove(agentId);
+    }
 }

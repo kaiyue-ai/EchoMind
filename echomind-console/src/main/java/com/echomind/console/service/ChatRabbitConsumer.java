@@ -17,7 +17,10 @@ public class ChatRabbitConsumer {
     private final ChatApplicationService chatService;
     private final RabbitTemplate template;
 
-    @RabbitListener(queues = RabbitMQConfig.QUEUE_CHAT_REQUESTS)
+    @RabbitListener(
+        queues = RabbitMQConfig.QUEUE_CHAT_REQUESTS,
+        containerFactory = RabbitMQConfig.CHAT_REQUEST_LISTENER_FACTORY
+    )
     public void onChatRequest(ChatRequest request) {
         log.info("Processing chat request: {}", request.requestId());
         ChatResponse response = chatService.executeQueued(request);

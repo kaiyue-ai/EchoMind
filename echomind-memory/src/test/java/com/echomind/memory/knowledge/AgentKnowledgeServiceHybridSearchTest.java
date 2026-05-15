@@ -18,7 +18,7 @@ import static org.mockito.Mockito.when;
 class AgentKnowledgeServiceHybridSearchTest {
 
     @Test
-    void mysqlVectorFallbackFiltersLowSimilarityHits() {
+    void doesNotFallBackToMysqlVectorSearchWhenRedisIsUnavailable() {
         AgentKnowledgeChunkRepository chunkRepository = mock(AgentKnowledgeChunkRepository.class);
         when(chunkRepository.findByAgentId("agent-1")).thenReturn(List.of(
             chunk(1L, "agent-1", "unrelated.pdf", "天气预报和城市温度", new double[] {0, 1}),
@@ -31,9 +31,7 @@ class AgentKnowledgeServiceHybridSearchTest {
 
         List<AgentKnowledgeHit> hits = service.search("agent-1", "进程退出", 3);
 
-        assertThat(hits).hasSize(1);
-        assertThat(hits.get(0).chunkId()).isEqualTo(2L);
-        assertThat(hits.get(0).score()).isGreaterThan(0.7);
+        assertThat(hits).isEmpty();
     }
 
     @Test

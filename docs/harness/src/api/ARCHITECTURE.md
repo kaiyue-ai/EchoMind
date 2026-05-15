@@ -113,6 +113,11 @@ POST /api/chat/stream
   -> MemoryPersistStage 在流结束后写回
 ```
 
+Provider 层会尽量使用厂商真流式能力：OpenAI 兼容协议（包括阿里云百炼/Qwen）使用
+Chat Completions `stream: true` 并解析 `choices[].delta.content`；DeepSeek 使用 Anthropic-compatible
+Messages `stream: true` 并解析 `content_block_delta` / `text_delta`。Mock Provider 仅用于开发和测试，
+仍是单段模拟输出。
+
 删除单条会话：
 
 ```text

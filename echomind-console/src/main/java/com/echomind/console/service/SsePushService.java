@@ -33,7 +33,10 @@ public class SsePushService {
         return emitter;
     }
 
-    @RabbitListener(queues = RabbitMQConfig.QUEUE_CHAT_RESPONSES)
+    @RabbitListener(
+        queues = RabbitMQConfig.QUEUE_CHAT_RESPONSES,
+        containerFactory = RabbitMQConfig.CHAT_RESPONSE_LISTENER_FACTORY
+    )
     public void onChatResponse(ChatResponse response) {
         SseEmitter emitter = emitters.remove(response.requestId());
         if (emitter != null) {

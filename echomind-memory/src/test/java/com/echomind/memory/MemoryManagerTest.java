@@ -4,10 +4,9 @@ import com.echomind.common.model.AgentMessage;
 import com.echomind.memory.cache.InMemoryRecentMemoryCache;
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.embedding.MemoryEmbeddingService;
-import com.echomind.memory.embedding.MysqlMemoryVectorStore;
+import com.echomind.memory.embedding.NoopMemoryVectorStore;
 import com.echomind.memory.persistence.ChatMessageRepository;
 import com.echomind.memory.persistence.ChatSessionRepository;
-import com.echomind.memory.persistence.MemoryEmbeddingRepository;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
@@ -30,8 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 记忆主链路测试。
  *
- * <p>验证 MySQL 是完整历史来源，近期上下文可以从缓存/数据库回源，
- * 向量命中会作为 system 片段注入提示词。</p>
+ * <p>验证 MySQL 是前端完整历史来源，LLM prompt 只使用近期缓存。</p>
  */
 @DataJpaTest
 @TestPropertySource(properties = "spring.jpa.hibernate.ddl-auto=create-drop")
@@ -44,10 +42,10 @@ class MemoryManagerTest {
     private ChatMessageRepository messageRepository;
 
     @Autowired
-    private MemoryEmbeddingRepository embeddingRepository;
+    private MemoryManager memoryManager;
 
     @Autowired
-    private MemoryManager memoryManager;
+    private PersistentChatMemoryStore persistentChatMemoryStore;
 
     @Test
     void savesFullHistoryToMysqlAndKeepsOnlyRecentMessagesInCache() {
@@ -68,25 +66,34 @@ class MemoryManagerTest {
     }
 
     @Test
-    void promptContextUsesSummaryRelevantHistoryAndRecentMessages() {
+    void promptContextUsesOnlyRecentCacheMessages() {
         for (int i = 1; i <= 7; i++) {
             memoryManager.addMessage("session-2", "agent-1", AgentMessage.user("偏好-" + i + "：我喜欢喝拿铁"));
         }
 
         List<AgentMessage> context = memoryManager.getPromptContext("session-2", "我喜欢喝什么");
 
-        assertThat(context).anySatisfy(message -> {
-            assertThat(message.role()).isEqualTo("system");
-            assertThat(message.content()).contains("会话摘要");
-        });
-        assertThat(context).anySatisfy(message -> {
-            assertThat(message.role()).isEqualTo("system");
-            assertThat(message.content()).contains("相关历史");
-        });
         assertThat(context)
-            .filteredOn(message -> "user".equals(message.role()))
             .extracting(AgentMessage::content)
             .containsExactly("偏好-6：我喜欢喝拿铁", "偏好-7：我喜欢喝拿铁");
+    }
+
+    @Test
+    void promptContextDoesNotBackfillFromMysqlWhenRecentCacheIsEmpty() {
+        memoryManager.addMessage("session-3", "agent-1", AgentMessage.user("不会进入新缓存"));
+        MemoryManager freshManager = new MemoryManager(
+            new WindowConfig(2),
+            persistentChatMemoryStore,
+            new InMemoryRecentMemoryCache(2),
+            new MemorySummaryService(2, 1000),
+            3,
+            null
+        );
+
+        assertThat(freshManager.getPromptContext("session-3", "继续")).isEmpty();
+        assertThat(freshManager.getFullContext("session-3"))
+            .extracting(AgentMessage::content)
+            .containsExactly("不会进入新缓存");
     }
 
     @SpringBootConfiguration
@@ -114,12 +121,10 @@ class MemoryManagerTest {
         }
 
         @org.springframework.context.annotation.Bean
-        MemoryEmbeddingService memoryEmbeddingService(MemoryEmbeddingRepository repository,
-                                                      EmbeddingClient embeddingClient,
-                                                      ObjectMapper mapper) {
+        MemoryEmbeddingService memoryEmbeddingService(EmbeddingClient embeddingClient) {
             return new MemoryEmbeddingService(
                 embeddingClient,
-                new MysqlMemoryVectorStore(repository, mapper),
+                new NoopMemoryVectorStore(),
                 true
             );
         }
@@ -131,16 +136,15 @@ class MemoryManagerTest {
 
         @org.springframework.context.annotation.Bean
         MemoryManager memoryManager(PersistentChatMemoryStore store,
-                                    MemoryEmbeddingService embeddingService,
-                                    MemorySummaryService summaryService) {
+                                    MemorySummaryService summaryService,
+                                    MemoryEmbeddingService embeddingService) {
             return new MemoryManager(
                 new WindowConfig(2),
                 store,
                 new InMemoryRecentMemoryCache(2),
-                embeddingService,
                 summaryService,
-                2,
-                3
+                3,
+                embeddingService
             );
         }
 

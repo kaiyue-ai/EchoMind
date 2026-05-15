@@ -4,20 +4,18 @@ import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
 import com.echomind.agent.pipeline.PromptBudget;
 import com.echomind.agent.tool.Tool;
-import com.echomind.agent.tool.ToolFunctionCallback;
+import com.echomind.agent.tool.ToolInvoker;
 import com.echomind.agent.tool.ToolRouter;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.llm.provider.LlmTool;
 import com.echomind.llm.provider.ModelProvider;
+import com.echomind.llm.provider.ProviderRequest;
 import com.echomind.llm.router.DynamicModelRouter;
 import com.echomind.llm.router.ModelProviderRegistry;
 import com.echomind.llm.router.ModelSpec;
 import com.echomind.llm.session.SessionContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.model.function.FunctionCallback;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,8 +25,8 @@ import reactor.core.publisher.Flux;
 /**
  * 生成最终回复。
  *
- * <p>这里把当前 Agent 可用的工具注册为 Spring AI 函数回调，
- * 由模型根据工具描述和参数 Schema 自主决定是否调用工具。</p>
+ * <p>这里把当前 Agent 可用的工具转换成中立的 {@link LlmTool} 列表，
+ * 交给底层 provider 以各自协议原生实现函数调用。</p>
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -62,40 +60,20 @@ public class ResultAggregationStage implements PipelineStage {
 
         String message = buildPrompt(ctx);
         try {
-            ChatModel chatModel = provider.getChatModel();
             List<Tool> tools = toolsFor(ctx);
-            if (!tools.isEmpty() && ctx.getAttachments().isEmpty()) {
-                if (supportsProviderNativeTools(provider)) {
-                    ctx.setFinalResponse(provider.chatWithTools(model, ctx.getSystemPrompt(), message, llmTools(tools, ctx)));
-                } else if (chatModel != null) {
-                    ctx.setFinalResponse(callWithFunctions(chatModel, ctx.getSystemPrompt(), message, ctx, tools));
-                } else {
-                    ctx.setFinalResponse(provider.chat(model, ctx.getSystemPrompt(), message));
-                }
-            } else {
-                ctx.setFinalResponse(provider.chat(model, ctx.getSystemPrompt(), message, ctx.attachmentsForModel()));
-            }
+            ProviderRequest request = new ProviderRequest(
+                model,
+                ctx.getSystemPrompt(),
+                message,
+                ctx.attachmentsForModel(),
+                llmTools(tools, ctx)
+            );
+            ctx.setFinalResponse(provider.chat(request));
         } catch (Exception e) {
             log.error("LLM call failed in aggregation stage", e);
             ctx.setFinalResponse("[Error] LLM call failed: " + e.getMessage());
         }
         return ctx;
-    }
-
-    /** 调用已挂载工具回调的模型。 */
-    private String callWithFunctions(ChatModel chatModel, String systemPrompt, String message,
-                                     PipelineContext ctx, List<Tool> tools) {
-        var spec = ChatClient.builder(chatModel).build().prompt().user(message);
-        if (systemPrompt != null && !systemPrompt.isEmpty()) {
-            spec = spec.system(systemPrompt);
-        }
-        List<FunctionCallback> callbacks = buildFunctionCallbacks(tools, ctx);
-        if (!callbacks.isEmpty()) {
-            spec = spec.functions(callbacks.toArray(new FunctionCallback[0]));
-            log.debug("Registered {} function callbacks for LLM call", callbacks.size());
-        }
-
-        return spec.call().content();
     }
 
     /** 流式生成文本片段，供 SSE 接口逐段推送。 */
@@ -116,43 +94,15 @@ public class ResultAggregationStage implements PipelineStage {
         }
 
         String message = buildPrompt(ctx);
-        ChatModel chatModel = provider.getChatModel();
         List<Tool> tools = toolsFor(ctx);
-        if (!tools.isEmpty() && ctx.getAttachments().isEmpty()) {
-            if (supportsProviderNativeTools(provider)) {
-                return provider.streamWithTools(model, ctx.getSystemPrompt(), message, llmTools(tools, ctx));
-            }
-            if (chatModel != null) {
-                return streamWithFunctions(chatModel, ctx.getSystemPrompt(), message, ctx, tools);
-            }
-            return provider.stream(model, ctx.getSystemPrompt(), message);
-        } else {
-            return provider.stream(model, ctx.getSystemPrompt(), message, ctx.attachmentsForModel());
-        }
-    }
-
-    private Flux<String> streamWithFunctions(ChatModel chatModel, String systemPrompt, String message,
-                                             PipelineContext ctx, List<Tool> tools) {
-        var spec = ChatClient.builder(chatModel).build().prompt().user(message);
-        if (systemPrompt != null && !systemPrompt.isEmpty()) {
-            spec = spec.system(systemPrompt);
-        }
-
-        List<FunctionCallback> callbacks = buildFunctionCallbacks(tools, ctx);
-        if (!callbacks.isEmpty()) {
-            spec = spec.functions(callbacks.toArray(new FunctionCallback[0]));
-            log.debug("Registered {} function callbacks for LLM stream", callbacks.size());
-        }
-
-        return spec.stream().content();
-    }
-
-    private List<FunctionCallback> buildFunctionCallbacks(List<Tool> tools, PipelineContext ctx) {
-        List<FunctionCallback> callbacks = new ArrayList<>();
-        for (Tool tool : tools) {
-            callbacks.add(new ToolFunctionCallback(tool, ctx));
-        }
-        return callbacks;
+        ProviderRequest request = new ProviderRequest(
+            model,
+            ctx.getSystemPrompt(),
+            message,
+            ctx.attachmentsForModel(),
+            llmTools(tools, ctx)
+        );
+        return provider.stream(request);
     }
 
     private List<LlmTool> llmTools(List<Tool> tools, PipelineContext ctx) {
@@ -161,18 +111,13 @@ public class ResultAggregationStage implements PipelineStage {
                 functionName(tool),
                 tool.description(),
                 tool.parameterSchema(),
-                argumentsJson -> new ToolFunctionCallback(tool, ctx).call(argumentsJson)
+                argumentsJson -> new ToolInvoker(tool, ctx).call(argumentsJson)
             ))
             .toList();
     }
 
     private String functionName(Tool tool) {
         return tool.name().replaceAll("[.\\-]", "_");
-    }
-
-    private boolean supportsProviderNativeTools(ModelProvider provider) {
-        String simpleName = provider.getClass().getSimpleName();
-        return simpleName.equals("OpenAICompatibleProvider") || simpleName.equals("DeepSeekProvider");
     }
 
     private List<Tool> toolsFor(PipelineContext ctx) {

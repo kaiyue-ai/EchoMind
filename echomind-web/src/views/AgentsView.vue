@@ -38,6 +38,9 @@
           <el-button size="small" @click="chatWithAgent(agent)">进入对话</el-button>
           <el-button size="small" @click="testAgent(agent)">测试</el-button>
           <el-button size="small" @click="manageKnowledge(agent)">知识库</el-button>
+          <el-button size="small" type="danger" text :loading="mutatingId === agent.agentId" @click="deleteAgent(agent)">
+            删除
+          </el-button>
         </template>
       </ResourceCard>
       <el-empty v-if="!loading && agents.length === 0" description="暂无 Agent" />
@@ -161,7 +164,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import DrawerForm from '../components/workbench/DrawerForm.vue'
 import ResourceCard from '../components/workbench/ResourceCard.vue'
 import StatusBadge from '../components/workbench/StatusBadge.vue'
@@ -179,6 +182,7 @@ const { agents, loading, saving, testing, error, knowledgeByAgent, knowledgeLoad
 const { models, loading: modelLoading, error: modelError } = storeToRefs(modelStore)
 const { skills, loading: skillLoading, error: skillError } = storeToRefs(skillStore)
 
+const mutatingId = ref(null)
 const showCreateDrawer = ref(false)
 const showKnowledgeDrawer = ref(false)
 const showTestDialog = ref(false)
@@ -322,6 +326,25 @@ async function deleteKnowledge(row) {
     ElMessage.success('知识库文档已删除')
   } catch (e) {
     ElMessage.error('删除失败: ' + (e.response?.data?.error || e.message))
+  }
+}
+
+async function deleteAgent(agent) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除 Agent「${agent.name}」吗？此操作不可撤销。`,
+      '确认删除',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' }
+    )
+    mutatingId.value = agent.agentId
+    await agentStore.deleteAgent(agent.agentId)
+    ElMessage.success('Agent 已删除')
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error('删除失败: ' + (e.response?.data?.error || e.message))
+    }
+  } finally {
+    mutatingId.value = null
   }
 }
 

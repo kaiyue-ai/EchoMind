@@ -120,4 +120,21 @@ public class AgentApplicationService {
             config.setSkillIds(List.of());
         }
     }
+
+    /**
+     * 删除指定Agent（运行时 + 持久化）。
+     *
+     * @param agentId Agent标识
+     * @throws IllegalArgumentException 如果Agent不存在
+     */
+    public void deleteAgent(String agentId) {
+        if (agentId == null || agentId.isBlank()) {
+            throw new IllegalArgumentException("agentId不能为空");
+        }
+        factory.remove(agentId);
+        boolean deleted = persistenceService.delete(agentId);
+        if (!deleted) {
+            throw new IllegalArgumentException("Agent不存在: " + agentId);
+        }
+    }
 }

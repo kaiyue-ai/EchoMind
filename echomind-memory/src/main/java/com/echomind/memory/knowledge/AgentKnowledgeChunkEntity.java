@@ -17,8 +17,8 @@ import java.time.Instant;
 /**
  * Agent 知识库切片表。
  *
- * <p>这里保存的是可召回的最小知识单元：每个切片拥有正文、顺序号和向量 JSON。
- * Redis Stack 是在线检索索引；MySQL 中的向量 JSON 用作持久备份和兜底。</p>
+ * <p>这里保存的是可召回的最小知识单元正文和顺序号。
+ * 向量只写 Redis Stack，不再把 embedding 作为 MySQL 事实来源。</p>
  */
 @Entity
 @Table(
@@ -58,10 +58,10 @@ public class AgentKnowledgeChunkEntity {
     @Column(nullable = false, columnDefinition = "LONGTEXT")
     private String content;
 
-    /** 向量 JSON 数组。 */
+    /** 兼容历史表结构的占位字段；新数据不再依赖它做向量检索。 */
     @Lob
-    @Column(name = "embedding_json", nullable = false, columnDefinition = "LONGTEXT")
-    private String embeddingJson;
+    @Column(name = "embedding_json", columnDefinition = "LONGTEXT")
+    private String embeddingJson = "[]";
 
     /** 创建时间。 */
     @Column(name = "created_at", nullable = false, updatable = false)

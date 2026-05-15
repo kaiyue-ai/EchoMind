@@ -120,6 +120,16 @@ export const useAgentStore = defineStore('agents', {
       } finally {
         this.knowledgeLoading = false
       }
+    },
+    async deleteAgent(agentId) {
+      this.error = null
+      try {
+        await api.agents.delete(agentId)
+        await this.loadAgents(true)
+      } catch (error) {
+        this.error = api.parseError(error, '删除Agent失败')
+        throw error
+      }
     }
   }
 })

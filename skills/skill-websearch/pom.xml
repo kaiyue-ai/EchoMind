@@ -11,7 +11,7 @@
     </parent>
     <artifactId>skill-websearch</artifactId>
     <name>Skill: Web Search</name>
-    <description>Web search using DuckDuckGo Instant Answer API</description>
+    <description>Web search via SearXNG metasearch engine (Google/Bing/DDG/Baidu/Wikipedia)</description>
 
     <dependencies>
         <dependency>

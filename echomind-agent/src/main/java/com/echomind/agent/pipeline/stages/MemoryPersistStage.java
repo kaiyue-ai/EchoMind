@@ -2,15 +2,30 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
+import com.echomind.agent.memory.ChatMemoryPersistPublisher;
+import com.echomind.agent.memory.NoopChatMemoryPersistPublisher;
 import com.echomind.common.model.AgentMessage;
-import com.echomind.memory.MemoryManager;
-import lombok.RequiredArgsConstructor;
 
-/** 将本轮用户消息、工具调用记录和最终回复写入当前对话的记忆。 */
-@RequiredArgsConstructor
+import java.util.ArrayList;
+import java.util.List;
+
+/** 将本轮用户消息、工具调用记录和最终回复发布到异步记忆写入队列。 */
 public class MemoryPersistStage implements PipelineStage {
 
-    private final MemoryManager memoryManager;
+    private final ChatMemoryPersistPublisher chatMemoryPublisher;
+
+    public MemoryPersistStage(ChatMemoryPersistPublisher chatMemoryPublisher) {
+        this.chatMemoryPublisher = chatMemoryPublisher == null
+            ? new NoopChatMemoryPersistPublisher()
+            : chatMemoryPublisher;
+    }
+
+    /** 兼容旧测试和旧装配路径，实际写入由异步发布器承担。 */
+    @Deprecated
+    public MemoryPersistStage(com.echomind.memory.MemoryManager ignoredMemoryManager,
+                              com.echomind.agent.usermemory.UserMemoryPersistPublisher ignoredPublisher) {
+        this(new NoopChatMemoryPersistPublisher());
+    }
 
     @Override
     public int order() { return 50; }
@@ -20,26 +35,27 @@ public class MemoryPersistStage implements PipelineStage {
         if (!ctx.isMemoryPersistenceEnabled()) {
             return ctx;
         }
-        String memoryKey = ctx.getMemoryKey();
+        List<AgentMessage> persisted = new ArrayList<>();
 
-        // 按真实对话顺序写入记忆：用户输入 -> 工具结果 -> 模型回复。
-        memoryManager.addMessage(memoryKey, ctx.getAgentId(),
-            AgentMessage.user(ctx.getUserMessage(), ctx.getAttachments()));
+        // 按真实对话顺序发布：用户输入 -> 工具结果 -> 模型回复。
+        AgentMessage userMessage = AgentMessage.user(ctx.getUserMessage(), ctx.getAttachments());
+        persisted.add(userMessage);
 
         if (!ctx.getSkillResults().isEmpty()) {
             for (String skillResult : ctx.getSkillResults()) {
                 String toolCallId = skillResult.startsWith("[") && skillResult.contains("]:")
                     ? skillResult.substring(1, skillResult.indexOf("]:"))
                     : "skill";
-                memoryManager.addMessage(memoryKey, ctx.getAgentId(),
-                    AgentMessage.tool(toolCallId, skillResult));
+                AgentMessage toolMessage = AgentMessage.tool(toolCallId, skillResult);
+                persisted.add(toolMessage);
             }
         }
 
         if (ctx.getFinalResponse() != null) {
-            memoryManager.addMessage(memoryKey, ctx.getAgentId(),
-                AgentMessage.assistant(ctx.getFinalResponse()));
+            AgentMessage assistantMessage = AgentMessage.assistant(ctx.getFinalResponse());
+            persisted.add(assistantMessage);
         }
+        chatMemoryPublisher.publish(ctx.getSessionId(), ctx.getAgentId(), List.copyOf(persisted));
         return ctx;
     }
 }

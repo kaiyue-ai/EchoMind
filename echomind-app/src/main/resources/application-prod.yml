@@ -20,4 +20,3 @@ echomind:
 logging:
   level:
     com.echomind: INFO
-    org.springframework.ai: WARN

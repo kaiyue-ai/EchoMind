@@ -33,7 +33,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * </ul>
  *
  * @see ModelProvider
- * @see AnthropicProvider
  * @see OpenAICompatibleProvider
  */
 public class MockModelProvider implements ModelProvider {
@@ -90,7 +89,11 @@ public class MockModelProvider implements ModelProvider {
      * @return 匹配的预设响应，或 "[Mock] Echo: " + 用户消息
      */
     @Override
-    public String chat(ModelSpec model, String systemPrompt, String userMessage) {
+    public String chat(ProviderRequest request) {
+        String userMessage = request.userMessage();
+        if (request.hasTools()) {
+            return "[Mock Tools] Would call tools for: " + userMessage;
+        }
         for (var entry : responses.entrySet()) {
             if (userMessage.contains(entry.getKey())) {
                 return entry.getValue();
@@ -108,21 +111,10 @@ public class MockModelProvider implements ModelProvider {
      * @return 包含 "[Mock Stream] " + 用户消息 的单元素 Flux
      */
     @Override
-    public Flux<String> stream(ModelSpec model, String systemPrompt, String userMessage) {
-        return Flux.just("[Mock Stream] " + userMessage);
-    }
-
-    /**
-     * 模拟带工具调用的对话 —— 返回模拟的工具调用确认消息。
-     *
-     * @param model        模型规格（Mock 模式下可忽略）
-     * @param systemPrompt 系统提示词（Mock 模式下不使用）
-     * @param userMessage  用户消息
-     * @param toolsJson    工具定义 JSON（Mock 模式下不使用）
-     * @return "[Mock Tools] Would call tools for: " + 用户消息
-     */
-    @Override
-    public String chatWithTools(ModelSpec model, String systemPrompt, String userMessage, String toolsJson) {
-        return "[Mock Tools] Would call tools for: " + userMessage;
+    public Flux<String> stream(ProviderRequest request) {
+        if (request.hasTools()) {
+            return Flux.just("[Mock Tools Stream] Would call tools for: " + request.userMessage());
+        }
+        return Flux.just("[Mock Stream] " + request.userMessage());
     }
 }

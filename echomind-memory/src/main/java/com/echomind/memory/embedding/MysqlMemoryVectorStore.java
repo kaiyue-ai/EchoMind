@@ -12,10 +12,10 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * MySQL 线性向量检索实现。
+ * 历史 MySQL 线性向量检索实现。
  *
- * <p>这是开发环境和 Redis Stack 不可用时的兜底实现：向量以 JSON 形式落库，
- * 查询时加载一个会话内的全部向量并在 Java 内存里计算余弦相似度。</p>
+ * <p>当前普通聊天向量正式路径是 Redis Stack-only，本类不再由主应用自动装配，
+ * 仅为旧数据迁移或显式测试保留。</p>
  */
 @Slf4j
 @RequiredArgsConstructor

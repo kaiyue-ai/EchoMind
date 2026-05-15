@@ -9,4 +9,3 @@ spring:
 logging:
   level:
     com.echomind: DEBUG
-    org.springframework.ai: DEBUG

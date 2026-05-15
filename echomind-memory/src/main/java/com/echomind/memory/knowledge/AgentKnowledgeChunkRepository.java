@@ -10,7 +10,7 @@ import java.util.List;
 /** Agent 知识库切片 Repository。 */
 public interface AgentKnowledgeChunkRepository extends JpaRepository<AgentKnowledgeChunkEntity, Long> {
 
-    /** 查询指定 Agent 的全部切片，用于 MySQL 兜底检索。 */
+    /** 查询指定 Agent 的全部切片。 */
     List<AgentKnowledgeChunkEntity> findByAgentId(String agentId);
 
     /** 按关键词粗召回候选切片，用于和向量召回做混合排序。 */

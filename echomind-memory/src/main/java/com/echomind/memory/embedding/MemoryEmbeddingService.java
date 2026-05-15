@@ -10,8 +10,8 @@ import java.util.Optional;
 /**
  * 记忆向量索引与检索服务。
  *
- * <p>保存消息时为可检索文本建立向量；聊天前根据当前用户问题召回相关历史。
- * 向量调用失败只会让相关历史为空，不影响正常聊天和正式历史入库。</p>
+ * <p>后台消费聊天持久化事件时，为 user/assistant 消息建立 Redis Stack 向量索引。
+ * 主聊天链路不调用本服务，也不等待普通聊天向量写入。</p>
  */
 @Slf4j
 @RequiredArgsConstructor

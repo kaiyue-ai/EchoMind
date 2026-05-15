@@ -1,5 +1,6 @@
 **/target/*
 !echomind-app/target/echomind-app-*.jar
+!echomind-user-memory/target/echomind-user-memory-*.jar
 !external-mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
 !skills/skill-weather/target/*-jar-with-dependencies.jar
 !skills/skill-calculator/target/*-jar-with-dependencies.jar

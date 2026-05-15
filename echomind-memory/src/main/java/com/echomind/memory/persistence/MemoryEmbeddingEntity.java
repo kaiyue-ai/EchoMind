@@ -15,10 +15,10 @@ import lombok.Setter;
 import java.time.Instant;
 
 /**
- * 会话消息向量表。
+ * 历史会话消息向量表。
  *
- * <p>MySQL 中的向量 JSON 是持久备份和开发兜底。生产检索优先走 Redis Stack，
- * 这里的数据用于 Redis Stack 不可用、旧数据未重建索引或需要重建索引时兜底。</p>
+ * <p>当前正式架构中，普通聊天向量只写 Redis Stack；MySQL 保留完整聊天消息给前端展示和审计。
+ * 该表仅为旧数据和旧线性实现保留，不作为 LLM 上下文事实来源。</p>
  */
 @Entity
 @Table(

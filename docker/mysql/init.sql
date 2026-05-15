@@ -1,5 +1,6 @@
 -- EchoMind MySQL 初始化脚本
 CREATE DATABASE IF NOT EXISTS echomind CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS swtest CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- 创建 Skill 表（如果 JPA 未自动创建）
 CREATE TABLE IF NOT EXISTS echomind.echomind_skills (

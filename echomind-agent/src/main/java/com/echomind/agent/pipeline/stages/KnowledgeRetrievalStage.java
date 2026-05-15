@@ -3,6 +3,8 @@ package com.echomind.agent.pipeline.stages;
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
 import com.echomind.common.model.AgentMessage;
+import com.echomind.memory.embedding.EmbeddingClient;
+import com.echomind.memory.embedding.QueryEmbeddingCache;
 import com.echomind.memory.knowledge.AgentKnowledgeHit;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,7 @@ import java.util.stream.Collectors;
 public class KnowledgeRetrievalStage implements PipelineStage {
 
     private final AgentKnowledgeService knowledgeService;
+    private final EmbeddingClient embeddingClient;
     private final int topK;
 
     @Override
@@ -29,12 +32,17 @@ public class KnowledgeRetrievalStage implements PipelineStage {
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
-        List<AgentKnowledgeHit> hits = knowledgeService.search(ctx.getAgentId(), ctx.getUserMessage(), topK);
-        if (hits.isEmpty()) {
-            return ctx;
+        return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, ctx.getUserMessage())
+            .map(vector -> knowledgeService.search(ctx.getAgentId(), ctx.getUserMessage(), vector, topK))
+            .map(hits -> injectHits(ctx, hits))
+            .orElse(ctx);
+    }
+
+    private PipelineContext injectHits(PipelineContext ctx, List<AgentKnowledgeHit> hits) {
+        if (!hits.isEmpty()) {
+            ctx.getAttributes().put("knowledgeHits", hits);
+            ctx.getMessages().add(0, AgentMessage.system(buildKnowledgePrompt(hits)));
         }
-        ctx.getAttributes().put("knowledgeHits", hits);
-        ctx.getMessages().add(0, AgentMessage.system(buildKnowledgePrompt(hits)));
         return ctx;
     }
 

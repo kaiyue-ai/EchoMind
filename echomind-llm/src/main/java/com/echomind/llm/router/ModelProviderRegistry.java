@@ -7,26 +7,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 模型提供商注册表 —— LLM 层的中央注册中心。
- *
- * <p>管理所有已注册的 {@link ModelProvider} 实例及其对应的 {@link ModelSpec} 列表。
- * 作为 {@link DynamicModelRouter} 的数据源，提供按提供商、模型名称、能力维度的
- * 查询能力。支持线程安全的动态注册和默认模型管理。
- *
- * <p><b>核心职责：</b>
- * <ul>
- *   <li>维护 providerId → ModelProvider 的映射</li>
- *   <li>维护 providerId → List&lt;ModelSpec&gt; 的映射</li>
- *   <li>管理全局默认提供商和默认模型</li>
- *   <li>提供多维度的模型查找接口</li>
- * </ul>
- *
- * <p><b>并发安全设计：</b>
- * <ul>
- *   <li>使用 {@link ConcurrentHashMap} 保证多线程下的读写安全。</li>
- *   <li>{@code defaultProviderId} 和 {@code defaultModelId} 使用 {@code volatile} 保证可见性。</li>
- *   <li>注册时使用 {@link List#copyOf} 生成不可变快照，防止外部修改。</li>
- * </ul>
- *
  * @see ModelProvider
  * @see ModelSpec
  * @see DynamicModelRouter

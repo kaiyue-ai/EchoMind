@@ -20,7 +20,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *         base-url: ...
  *         models: [...]
  *   memory:
- *     short-term-window: 20
+ *     short-term-window: 100
  *     redis-ttl-seconds: 604800
  *     vector-store: redis-stack
  *     embedding-model: tongyi-embedding-vision-plus
@@ -58,6 +58,8 @@ public class EchoMindProperties {
     private Skill skill = new Skill();
     /** 对象存储配置（Skill JAR、聊天图片等二进制文件） */
     private Storage storage = new Storage();
+    /** 用户长期画像配置。 */
+    private UserMemory userMemory = new UserMemory();
     /** 外部MCP服务接入配置 */
     private Mcp mcp = new Mcp();
     /** 预定义 Agent 列表 */
@@ -116,13 +118,13 @@ public class EchoMindProperties {
      */
     @Data
     public static class Memory {
-        /** 近期上下文最大消息数，默认 20 条。完整历史保存在 MySQL 中。 */
-        private int shortTermWindow = 20;
+        /** LLM prompt 使用的 Redis 近期上下文最大消息数，默认 100 条。完整历史保存在 MySQL 中。 */
+        private int shortTermWindow = 100;
         /** Redis 近期缓存的 TTL（秒），默认 604800（7 天）；0 或负数表示永不过期 */
         private long redisTtlSeconds = 604800;
         /** 向量检索开关。 */
         private boolean embeddingEnabled = true;
-        /** 向量索引实现：redis-stack 或 mysql-linear。 */
+        /** 向量索引实现，正式路径为 redis-stack；mysql-linear 仅保留为弃用兼容值。 */
         private String vectorStore = "redis-stack";
         /** Redis Stack RediSearch 索引名。 */
         private String vectorIndexName = "idx:echomind:memory:vectors";
@@ -134,8 +136,12 @@ public class EchoMindProperties {
         private String embeddingApiKey;
         /** 向量模型，按需求默认使用 tongyi-embedding-vision-plus。 */
         private String embeddingModel = "tongyi-embedding-vision-plus";
-        /** 相关历史召回条数。 */
-        private int retrievalTopK = 3;
+        /** 已弃用：普通聊天历史不再在主链路做向量召回。 */
+        private int retrievalTopK = 0;
+        /** 普通聊天记忆持久化 RabbitMQ 队列名。 */
+        private String persistQueueName = "echomind.chat-memory.persist.requests";
+        /** 是否启用普通聊天记忆异步持久化发布。 */
+        private boolean asyncPersistEnabled = true;
         /** 摘要最大字符数。 */
         private int summaryMaxChars = 3000;
         /** 每隔多少条消息刷新一次摘要。 */
@@ -176,6 +182,29 @@ public class EchoMindProperties {
         private int promptMaxSystemMessageChars = 12000;
         /** 普通历史消息单条最大字符数。 */
         private int promptMaxHistoryMessageChars = 4000;
+    }
+
+    /** 用户长期画像配置。 */
+    @Data
+    public static class UserMemory {
+        /** 是否启用用户长期画像检索和异步写入。 */
+        private boolean enabled = true;
+        /** RabbitMQ 队列名。 */
+        private String queueName = "echomind.user-memory.requests";
+        /** 画像召回条数。 */
+        private int topK = 5;
+        /** 注入画像的最低置信度。 */
+        private double minConfidence = 0.3;
+        /** Redis Stack 用户画像索引名。 */
+        private String vectorIndexName = "idx:user:memory:vectors";
+        /** Redis Stack 用户画像 Hash key 前缀。 */
+        private String vectorKeyPrefix = "user:memory:vector:";
+        /** 微服务提取时最多读取多少条既有画像作为上下文。 */
+        private int existingProfileLimit = 30;
+        /** 单次提取最多写入多少条画像。 */
+        private int maxExtractedEntries = 10;
+        /** 微服务提取画像使用的模型 ID，为空时使用默认模型。 */
+        private String extractorModelId;
     }
 
     /**

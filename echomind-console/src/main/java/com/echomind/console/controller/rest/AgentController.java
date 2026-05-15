@@ -116,4 +116,16 @@ public class AgentController {
         return ResponseEntity.ok(Map.of("deleted", true));
     }
 
+    /**
+     * 删除指定 Agent（运行时 + 持久化）。
+     *
+     * @param agentId Agent 标识
+     * @return 204 No Content
+     */
+    @DeleteMapping("/{agentId}")
+    public ResponseEntity<Void> deleteAgent(@PathVariable String agentId) {
+        agentService.deleteAgent(agentId);
+        return ResponseEntity.noContent().build();
+    }
+
 }

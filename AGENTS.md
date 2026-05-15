@@ -21,14 +21,14 @@ EchoMind 是一个 Java 17 / Spring Boot 3.3 + Vue 3 的 AI Agent 平台。
 - 管理面：MVC Controller + Application Service。
 - 智能执行：`AgentOrchestrator -> Agent -> ExecutionPipeline`。
 - 工具能力：已启用 Skill 和已挂载外部 MCP 工具统一进入 `CapabilityRegistry`。
-- 记忆和知识库：MySQL 保存事实，Redis Stack 做近期上下文和向量检索。
+- 记忆和知识库：MySQL 保存普通聊天历史和知识库元数据；Redis Stack 做近期上下文、向量检索和用户长期画像。
 - 前端：Vue 3 + Pinia，跨页面状态必须放 store，不要只放组件局部变量。
 
 ## 最高优先级规则
 
 - 不要把 `AgentFactory`、`SkillRegistry`、`CapabilityRegistry`、`ConcurrentHashMap` 当持久化来源。
 - MySQL 是 Agent、Skill 状态、完整会话历史、知识库元数据的事实来源。
-- Redis Stack 是缓存和向量索引，不是完整业务数据的唯一来源。
+- Redis Stack 是近期缓存、向量索引和用户长期画像事实来源；知识库向量和用户画像不落 MySQL。
 - 对话记忆按 `sessionId` 隔离，不要改回“每个 Agent 一份记忆”。
 - 主项目只接入外部 MCP Server，不恢复“主项目暴露 MCP Server”的旧功能。
 - Skill 只进入 Agent 工具视图，不要自动暴露成 MCP Server。
@@ -62,7 +62,7 @@ cd D:\claudeWorkSpace\ai-agent
 mvn.cmd -q clean package "-Dmaven.test.skip=true"
 docker build -f Dockerfile.runtime -t ai-agent-backend:latest .
 docker build -t ai-agent-frontend:latest .\echomind-web
-docker compose up -d backend frontend
+docker compose up -d skywalking-oap otel-collector skywalking-ui backend frontend
 ```
 
 部署后验证：
@@ -73,6 +73,18 @@ Invoke-RestMethod http://localhost:8080/api/models
 Invoke-RestMethod http://localhost:8080/api/mcp/servers
 Invoke-RestMethod http://localhost:8080/api/mcp/tools
 ```
+
+链路追踪验证：
+
+```powershell
+Invoke-RestMethod http://localhost:8081
+# 调一次 /api/chat/sync 后，在 SkyWalking UI 中搜索 service=echomind-backend
+```
+
+说明：
+
+- 当前 Compose 已集成 OpenTelemetry Collector 和 SkyWalking，默认只采集后端 Trace。
+- 这是本地演示型部署，不包含指标和日志，也不承诺长期保留 Trace 数据。
 
 也可以使用 harness 命令入口：
 
@@ -89,9 +101,8 @@ make deploy
 
 - 代码是否符合模块边界。
 - 是否误改无关文件。
-- 是否把事实数据落到了 MySQL。
+- 是否把事实数据落到了对应事实来源：普通业务进 MySQL，用户长期画像进 Redis Stack。
 - 是否清理或同步了运行时索引。
 - 是否更新了对应文档。
 - 是否跑了必要测试。
 - 是否需要重建前端或后端镜像。
-

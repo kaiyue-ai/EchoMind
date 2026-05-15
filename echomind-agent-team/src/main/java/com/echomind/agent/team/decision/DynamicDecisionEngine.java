@@ -2,6 +2,7 @@ package com.echomind.agent.team.decision;
 
 import com.echomind.agent.team.AgentTeam;
 import com.echomind.llm.provider.ModelProvider;
+import com.echomind.llm.provider.ProviderRequest;
 import com.echomind.llm.router.DynamicModelRouter;
 import com.echomind.llm.router.ModelSpec;
 import com.echomind.llm.session.SessionContext;
@@ -64,7 +65,13 @@ public class DynamicDecisionEngine {
                 String.join("\n", ctx.recentMessages())
             );
 
-        String response = provider.chat(model, "You are a decision engine.", prompt);
+        String response = provider.chat(new ProviderRequest(
+            model,
+            "You are a decision engine.",
+            prompt,
+            java.util.List.of(),
+            java.util.List.of()
+        ));
         return TeamAction.fromResponse(response);
     }
 

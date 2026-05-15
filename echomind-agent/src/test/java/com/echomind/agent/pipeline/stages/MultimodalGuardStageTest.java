@@ -2,6 +2,7 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.common.model.MessageAttachment;
+import com.echomind.llm.provider.ProviderRequest;
 import com.echomind.llm.router.ModelCapability;
 import com.echomind.llm.router.ModelProviderRegistry;
 import com.echomind.llm.router.ModelSpec;
@@ -63,18 +64,13 @@ class MultimodalGuardStageTest {
         }
 
         @Override
-        public String chat(ModelSpec model, String systemPrompt, String userMessage) {
+        public String chat(ProviderRequest request) {
             return "ok";
         }
 
         @Override
-        public reactor.core.publisher.Flux<String> stream(ModelSpec model, String systemPrompt, String userMessage) {
+        public reactor.core.publisher.Flux<String> stream(ProviderRequest request) {
             return reactor.core.publisher.Flux.just("ok");
-        }
-
-        @Override
-        public String chatWithTools(ModelSpec model, String systemPrompt, String userMessage, String toolsJson) {
-            return "ok";
         }
     }
 }

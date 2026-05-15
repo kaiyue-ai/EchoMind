@@ -1,14 +1,18 @@
 package com.echomind.llm.provider;
 
+import com.echomind.common.model.MessageAttachment;
 import com.echomind.llm.router.ModelSpec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.MediaType;
+import okhttp3.Call;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
+import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -16,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -24,8 +29,7 @@ import java.util.regex.Pattern;
  * DeepSeek Anthropic-compatible Provider.
  *
  * <p>DeepSeek 的 Anthropic 兼容接口可能返回 {@code thinking} content block。
- * 当前 Spring AI Anthropic M4 版本不认识这个 block 类型，因此这里直接用宽松 JSON
- * 调用，只抽取 {@code text} block，忽略推理块。</p>
+ * 这里直接走自研 JSON 协议实现，只抽取 {@code text} block，忽略推理块。</p>
  */
 @Slf4j
 public class DeepSeekProvider implements ModelProvider {
@@ -71,9 +75,12 @@ public class DeepSeekProvider implements ModelProvider {
     }
 
     @Override
-    public String chat(ModelSpec model, String systemPrompt, String userMessage) {
+    public String chat(ProviderRequest request) {
+        if (request.hasAttachments()) {
+            return unsupportedMultimodalMessage();
+        }
         try {
-            return callMessages(model, systemPrompt, userMessage);
+            return callMessages(request.model(), request.systemPrompt(), request.userMessage(), request.tools());
         } catch (Exception e) {
             log.error("DeepSeek API call failed", e);
             return "[Error] " + e.getMessage();
@@ -81,26 +88,72 @@ public class DeepSeekProvider implements ModelProvider {
     }
 
     @Override
-    public Flux<String> stream(ModelSpec model, String systemPrompt, String userMessage) {
-        return Flux.just(chat(model, systemPrompt, userMessage));
+    public Flux<String> stream(ProviderRequest request) {
+        if (request.hasAttachments()) {
+            return Flux.just(unsupportedMultimodalMessage());
+        }
+        return streamMessages(request.model(), request.systemPrompt(), request.userMessage(), request.tools());
     }
 
-    @Override
-    public String chatWithTools(ModelSpec model, String systemPrompt, String userMessage, String toolsJson) {
-        return chat(model, systemPrompt, userMessage);
-    }
+    private Flux<String> streamMessages(ModelSpec model, String systemPrompt, String userMessage,
+                                        List<LlmTool> tools) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return Flux.just("[Error] DeepSeek API key is not configured");
+        }
+        return Flux.<String>create(sink -> {
+            try {
+                List<LlmTool> activeTools = tools == null ? List.of() : tools;
+                StringBuilder executedToolResults = new StringBuilder();
+                List<Map<String, Object>> messages = buildMessages(systemPrompt, userMessage, activeTools);
+                boolean finished = false;
 
-    @Override
-    public String chatWithTools(ModelSpec model, String systemPrompt, String userMessage, List<LlmTool> tools) {
-        if (tools == null || tools.isEmpty()) {
-            return chat(model, systemPrompt, userMessage);
-        }
-        try {
-            return callMessages(model, systemPrompt, userMessage, tools);
-        } catch (Exception e) {
-            log.error("DeepSeek tool API call failed", e);
-            return "[Error] " + e.getMessage();
-        }
+                for (int round = 0; round < MAX_TOOL_ROUNDS && !sink.isCancelled(); round++) {
+                    StreamingDeepSeekResult result = streamMessagesBody(
+                        buildRequestBody(model, messages, activeTools), sink, !activeTools.isEmpty());
+                    if (activeTools.isEmpty()) {
+                        emitHeldText(result, sink);
+                        finished = true;
+                        break;
+                    }
+                    if (!result.toolUses().isEmpty()) {
+                        appendStreamedNativeToolResults(messages, result.toolUses(), activeTools, executedToolResults);
+                        continue;
+                    }
+                    List<DsmlToolCall> dsmlToolCalls = dsmlToolCalls(result.content());
+                    if (!dsmlToolCalls.isEmpty()) {
+                        appendDsmlToolResults(messages, result.content(), dsmlToolCalls, activeTools, executedToolResults);
+                        continue;
+                    }
+                    LlmTool degradedTool = ToolCallSupport.detectDegradedToolSelection(result.content(), activeTools);
+                    if (degradedTool != null) {
+                        appendDegradedToolResult(messages, result.content(), degradedTool, userMessage, executedToolResults);
+                        continue;
+                    }
+                    emitHeldText(result, sink);
+                    finished = true;
+                    break;
+                }
+
+                if (!finished && !sink.isCancelled()) {
+                    messages.add(Map.of("role", "user", "content", forcedFinalAnswerPrompt(executedToolResults)));
+                    StreamingDeepSeekResult result = streamMessagesBody(
+                        buildRequestBody(model, messages, List.of()), sink, false);
+                    emitHeldText(result, sink);
+                }
+
+                if (!sink.isCancelled()) {
+                    sink.complete();
+                }
+            } catch (Exception e) {
+                if (!sink.isCancelled()) {
+                    sink.error(e);
+                }
+            }
+        }).subscribeOn(Schedulers.boundedElastic())
+            .onErrorResume(e -> {
+                log.error("DeepSeek streaming API call failed", e);
+                return Flux.just("[Error] " + e.getMessage());
+            });
     }
 
     private String callMessages(ModelSpec model, String systemPrompt, String userMessage) throws IOException {
@@ -247,6 +300,179 @@ public class DeepSeekProvider implements ModelProvider {
                 throw new IOException("HTTP " + response.code() + ": " + responseBody);
             }
             return MAPPER.readTree(responseBody);
+        }
+    }
+
+    private StreamingDeepSeekResult streamMessagesBody(Map<String, Object> body,
+                                                       FluxSink<String> sink,
+                                                       boolean holdPossibleDsmlText) throws IOException {
+        Map<String, Object> streamingBody = new LinkedHashMap<>(body);
+        streamingBody.put("stream", true);
+        Request request = new Request.Builder()
+            .url(messagesUrl())
+            .header("x-api-key", apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .post(RequestBody.create(MAPPER.writeValueAsBytes(streamingBody), JSON))
+            .build();
+        Call call = httpClient.newCall(request);
+
+        StringBuilder content = new StringBuilder();
+        DeepSeekTextEmitter textEmitter = new DeepSeekTextEmitter(sink, content, holdPossibleDsmlText);
+        Map<Integer, DeepSeekToolUseBuilder> toolUseBuilders = new TreeMap<>();
+        try (var response = call.execute()) {
+            var responseBody = response.body();
+            if (!response.isSuccessful()) {
+                String errorBody = responseBody == null ? "" : responseBody.string();
+                throw new IOException("HTTP " + response.code() + ": " + errorBody);
+            }
+            if (responseBody == null) {
+                throw new IOException("Empty streaming response body");
+            }
+            var source = responseBody.source();
+            String event = null;
+            StringBuilder data = new StringBuilder();
+            String line;
+            while ((line = source.readUtf8Line()) != null) {
+                if (sink.isCancelled()) {
+                    break;
+                }
+                if (line.isEmpty()) {
+                    if (!data.isEmpty()) {
+                        handleDeepSeekStreamData(event, data.toString(), textEmitter, toolUseBuilders);
+                    }
+                    event = null;
+                    data.setLength(0);
+                    continue;
+                }
+                if (line.startsWith("event:")) {
+                    event = line.substring(6).trim();
+                } else if (line.startsWith("data:")) {
+                    String value = line.substring(5).trim();
+                    if ("[DONE]".equals(value)) {
+                        break;
+                    }
+                    data.append(value);
+                }
+            }
+            if (!data.isEmpty() && !sink.isCancelled()) {
+                handleDeepSeekStreamData(event, data.toString(), textEmitter, toolUseBuilders);
+            }
+        } catch (IOException e) {
+            if (sink.isCancelled()) {
+                return new StreamingDeepSeekResult(content.toString(), toolUses(toolUseBuilders),
+                    textEmitter.heldText());
+            }
+            throw e;
+        }
+        return new StreamingDeepSeekResult(content.toString(), toolUses(toolUseBuilders), textEmitter.heldText());
+    }
+
+    private void handleDeepSeekStreamData(String event, String data, DeepSeekTextEmitter textEmitter,
+                                          Map<Integer, DeepSeekToolUseBuilder> toolUseBuilders) throws IOException {
+        if (data == null || data.isBlank()) {
+            return;
+        }
+        JsonNode root = MAPPER.readTree(data);
+        String type = root.path("type").asText(event == null ? "" : event);
+        if ("error".equals(type)) {
+            JsonNode error = root.path("error");
+            throw new IOException(error.path("message").asText(error.toString()));
+        }
+        if ("content_block_start".equals(type)) {
+            JsonNode block = root.path("content_block");
+            int index = root.path("index").asInt(toolUseBuilders.size());
+            if ("tool_use".equals(block.path("type").asText(""))) {
+                DeepSeekToolUseBuilder builder = toolUseBuilders.computeIfAbsent(index,
+                    ignored -> new DeepSeekToolUseBuilder());
+                builder.id = block.path("id").asText("");
+                builder.name = block.path("name").asText("");
+                JsonNode input = block.path("input");
+                if (!input.isMissingNode() && !input.isNull() && !input.isEmpty()) {
+                    builder.input.append(MAPPER.writeValueAsString(MAPPER.convertValue(input, Object.class)));
+                }
+            }
+            return;
+        }
+        if (!"content_block_delta".equals(type)) {
+            return;
+        }
+
+        JsonNode delta = root.path("delta");
+        String deltaType = delta.path("type").asText("");
+        String text = delta.path("text").asText("");
+        if ("text_delta".equals(deltaType) || (!text.isEmpty() && delta.path("partial_json").isMissingNode())) {
+            if (!text.isEmpty()) {
+                textEmitter.emit(text);
+            }
+            return;
+        }
+        String partialJson = delta.path("partial_json").asText("");
+        if (!partialJson.isEmpty()) {
+            int index = root.path("index").asInt(toolUseBuilders.size());
+            DeepSeekToolUseBuilder builder = toolUseBuilders.computeIfAbsent(index,
+                ignored -> new DeepSeekToolUseBuilder());
+            builder.input.append(partialJson);
+        }
+    }
+
+    private List<DeepSeekToolUse> toolUses(Map<Integer, DeepSeekToolUseBuilder> builders) {
+        List<DeepSeekToolUse> calls = new ArrayList<>();
+        for (var entry : builders.entrySet()) {
+            DeepSeekToolUseBuilder builder = entry.getValue();
+            if (builder.name == null || builder.name.isBlank()) {
+                continue;
+            }
+            String id = builder.id == null || builder.id.isBlank() ? "toolu_" + entry.getKey() : builder.id;
+            String input = builder.input.isEmpty() ? "{}" : builder.input.toString();
+            calls.add(new DeepSeekToolUse(id, builder.name, input));
+        }
+        return calls;
+    }
+
+    private void appendStreamedNativeToolResults(List<Map<String, Object>> messages, List<DeepSeekToolUse> toolUses,
+                                                 List<LlmTool> tools, StringBuilder executedToolResults) {
+        List<Map<String, Object>> assistantContent = new ArrayList<>();
+        List<Map<String, Object>> resultBlocks = new ArrayList<>();
+        for (DeepSeekToolUse call : toolUses) {
+            Object input = parseToolInput(call.inputJson());
+            assistantContent.add(Map.of(
+                "type", "tool_use",
+                "id", call.id(),
+                "name", call.name(),
+                "input", input
+            ));
+
+            LlmTool tool = findTool(call.name(), tools);
+            String arguments = input instanceof Map<?, ?> ? toJson(input) : call.inputJson();
+            String content = tool == null ? "Error: tool not found: " + call.name() : tool.call(arguments);
+            appendExecutedToolResult(executedToolResults, call.name(), tool == null ? "(none)" : tool.name(),
+                arguments, content);
+            resultBlocks.add(Map.of(
+                "type", "tool_result",
+                "tool_use_id", call.id(),
+                "content", content
+            ));
+        }
+        messages.add(Map.of("role", "assistant", "content", assistantContent));
+        messages.add(Map.of("role", "user", "content", resultBlocks));
+    }
+
+    private Object parseToolInput(String inputJson) {
+        if (inputJson == null || inputJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return MAPPER.readValue(inputJson, Map.class);
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    private void emitHeldText(StreamingDeepSeekResult result, FluxSink<String> sink) {
+        if (result.heldText() != null && !result.heldText().isEmpty() && !sink.isCancelled()) {
+            sink.next(result.heldText());
         }
     }
 
@@ -475,6 +701,65 @@ public class DeepSeekProvider implements ModelProvider {
     record DsmlToolCall(String name, Map<String, Object> arguments) {
     }
 
+    private record StreamingDeepSeekResult(String content, List<DeepSeekToolUse> toolUses, String heldText) {
+    }
+
+    private record DeepSeekToolUse(String id, String name, String inputJson) {
+    }
+
+    private static class DeepSeekToolUseBuilder {
+        private String id;
+        private String name;
+        private final StringBuilder input = new StringBuilder();
+    }
+
+    private static class DeepSeekTextEmitter {
+        private static final List<String> DSML_PREFIXES = List.of("<｜｜DSML", "<||DSML");
+
+        private final FluxSink<String> sink;
+        private final StringBuilder content;
+        private final boolean holdPossibleDsmlText;
+        private final StringBuilder held = new StringBuilder();
+        private boolean passthrough;
+
+        private DeepSeekTextEmitter(FluxSink<String> sink, StringBuilder content, boolean holdPossibleDsmlText) {
+            this.sink = sink;
+            this.content = content;
+            this.holdPossibleDsmlText = holdPossibleDsmlText;
+        }
+
+        private void emit(String text) {
+            content.append(text);
+            if (!holdPossibleDsmlText || passthrough) {
+                sink.next(text);
+                return;
+            }
+
+            held.append(text);
+            String candidate = held.toString().stripLeading();
+            if (candidate.isEmpty() || isDsmlPrefixCandidate(candidate)) {
+                return;
+            }
+
+            sink.next(held.toString());
+            held.setLength(0);
+            passthrough = true;
+        }
+
+        private String heldText() {
+            return held.toString();
+        }
+
+        private boolean isDsmlPrefixCandidate(String text) {
+            for (String prefix : DSML_PREFIXES) {
+                if (prefix.startsWith(text) || text.startsWith(prefix)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     String extractText(JsonNode root) {
         StringBuilder output = new StringBuilder();
         JsonNode content = root.path("content");
@@ -508,5 +793,9 @@ public class DeepSeekProvider implements ModelProvider {
             return "https://api.deepseek.com/anthropic";
         }
         return value.trim();
+    }
+
+    private String unsupportedMultimodalMessage() {
+        return "[Error] 当前 DeepSeek Provider 暂不支持多模态图片输入";
     }
 }

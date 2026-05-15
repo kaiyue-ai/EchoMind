@@ -1,0 +1,13 @@
+# ============================
+# EchoMind 用户长期记忆 Worker 运行镜像
+# ============================
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+
+RUN groupadd -r echomind && useradd -r -g echomind echomind
+COPY echomind-user-memory/target/echomind-user-memory-*.jar /app/echomind-user-memory.jar
+RUN chown -R echomind:echomind /app
+USER echomind
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/echomind-user-memory.jar"]

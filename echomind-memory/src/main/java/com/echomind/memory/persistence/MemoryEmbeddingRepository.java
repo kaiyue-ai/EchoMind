@@ -4,10 +4,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
 
-/** MySQL 记忆向量备份 Repository。 */
+/** 历史兼容表 Repository。普通聊天向量的正式写入路径已经改为 Redis Stack。 */
 public interface MemoryEmbeddingRepository extends JpaRepository<MemoryEmbeddingEntity, Long> {
 
-    /** 加载一个会话内的全部向量，用于 MySQL 线性兜底检索。 */
+    /** 加载一个会话内的全部历史向量，仅供旧线性实现使用。 */
     List<MemoryEmbeddingEntity> findBySessionId(String sessionId);
 
     /** 清空会话向量。 */

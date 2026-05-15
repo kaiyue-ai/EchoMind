@@ -2,6 +2,9 @@ package com.echomind.boot.autoconfigure;
 
 import com.echomind.agent.AgentConfig;
 import com.echomind.agent.AgentFactory;
+import com.echomind.agent.memory.ChatMemoryPersistPublisher;
+import com.echomind.agent.memory.NoopChatMemoryPersistPublisher;
+import com.echomind.agent.memory.RabbitChatMemoryPersistPublisher;
 import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.pipeline.ExecutionPipeline;
 import com.echomind.agent.pipeline.PipelineStage;
@@ -13,16 +16,14 @@ import com.echomind.agent.tool.CapabilityRegistry;
 import com.echomind.agent.tool.ExternalMcpRuntimeService;
 import com.echomind.agent.tool.ExternalMcpServerConfig;
 import com.echomind.agent.tool.SkillCapabilityService;
+import com.echomind.agent.usermemory.NoopUserMemoryPersistPublisher;
+import com.echomind.agent.usermemory.RabbitUserMemoryPersistPublisher;
+import com.echomind.agent.usermemory.UserMemoryPersistPublisher;
 import com.echomind.boot.properties.EchoMindProperties;
-import com.echomind.llm.provider.AnthropicProvider;
 import com.echomind.llm.provider.DeepSeekProvider;
 import com.echomind.llm.provider.MockModelProvider;
 import com.echomind.llm.provider.OpenAICompatibleProvider;
 import com.echomind.llm.router.*;
-import org.springframework.ai.anthropic.AnthropicChatModel;
-import org.springframework.ai.anthropic.api.AnthropicApi;
-import org.springframework.ai.openai.OpenAiChatModel;
-import org.springframework.ai.openai.api.OpenAiApi;
 import com.echomind.memory.MemoryManager;
 import com.echomind.memory.cache.InMemoryRecentMemoryCache;
 import com.echomind.memory.cache.RecentMemoryCache;
@@ -32,15 +33,17 @@ import com.echomind.memory.embedding.DisabledEmbeddingClient;
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.embedding.MemoryEmbeddingService;
 import com.echomind.memory.embedding.MemoryVectorStore;
-import com.echomind.memory.embedding.MysqlMemoryVectorStore;
+import com.echomind.memory.embedding.NoopMemoryVectorStore;
 import com.echomind.memory.embedding.RedisStackMemoryVectorStore;
 import com.echomind.memory.persistence.ChatMessageRepository;
 import com.echomind.memory.persistence.ChatSessionRepository;
-import com.echomind.memory.persistence.MemoryEmbeddingRepository;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
 import com.echomind.memory.knowledge.AgentKnowledgeChunkRepository;
 import com.echomind.memory.knowledge.AgentKnowledgeDocumentRepository;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
+import com.echomind.memory.usermemory.NoopUserMemoryStore;
+import com.echomind.memory.usermemory.UserMemoryStore;
+import com.echomind.memory.usermemory.UserMemoryVectorStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
 import com.echomind.skill.loader.SkillDirectoryWatcher;
@@ -55,6 +58,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -88,19 +93,6 @@ public class EchoMindAutoConfiguration {
     @Bean
     public DynamicModelRouter dynamicModelRouter(ModelProviderRegistry registry) {
         return new DynamicModelRouter(registry);
-    }
-
-    /** Anthropic Provider，API key/base URL 来自配置或环境变量。 */
-    @Bean
-    public AnthropicProvider anthropicProvider(EchoMindProperties props) {
-        var providers = props.getModels().getProviders();
-        var config = providers.getOrDefault("anthropic", new EchoMindProperties.ProviderConfig());
-        String key = config.getApiKey() != null ? config.getApiKey() : System.getenv("ANTHROPIC_API_KEY");
-        String url = config.getBaseUrl() != null ? config.getBaseUrl() : System.getenv("ANTHROPIC_BASE_URL");
-        if (url == null) url = "https://api.anthropic.com";
-        var api = new AnthropicApi(url, key);
-        var chatModel = new AnthropicChatModel(api);
-        return new AnthropicProvider(chatModel);
     }
 
     /** DeepSeek Provider，优先读取 DEEPSEEK_*，并兼容旧环境里误填的 ANTHROPIC_*。 */
@@ -140,9 +132,7 @@ public class EchoMindAutoConfiguration {
                 continue;
             }
             String url = config.getBaseUrl() != null ? config.getBaseUrl() : "https://api.openai.com";
-            var api = new OpenAiApi(url, key);
-            var chatModel = new OpenAiChatModel(api);
-            result.add(new OpenAICompatibleProvider(pid, chatModel, url, key));
+            result.add(new OpenAICompatibleProvider(pid, url, key));
             log.info("Created OpenAI-compatible provider: {} (url={})", pid, url);
         }
         return result;
@@ -159,8 +149,7 @@ public class EchoMindAutoConfiguration {
      * <p>使用 Object 作为初始化哨兵，保证 Provider Bean 创建后立刻进入注册中心。</p>
      */
     @Bean
-    public Object llmInitializer(ModelProviderRegistry registry, AnthropicProvider anthropic,
-                                 DeepSeekProvider deepSeek,
+    public Object llmInitializer(ModelProviderRegistry registry, DeepSeekProvider deepSeek,
                                  List<OpenAICompatibleProvider> compatibleProviders,
                                  MockModelProvider mock, EchoMindProperties props) {
         // DeepSeek 是当前默认文本/工具模型；兼容此前误放在 ANTHROPIC_* 中的配置。
@@ -171,13 +160,6 @@ public class EchoMindAutoConfiguration {
                 Set.of(ModelCapability.TEXT, ModelCapability.FUNCTION), true));
         }
         registry.registerProvider(deepSeek, deepSeekModels);
-
-        // 仅当配置了真正的 Anthropic 模型时注册 Anthropic，避免把 DeepSeek 兼容地址误展示成 Claude。
-        var anthropicConfig = props.getModels().getProviders().get("anthropic");
-        List<ModelSpec> anthropicModels = configuredModels("anthropic", anthropicConfig);
-        if (!anthropicModels.isEmpty() && !isDeepSeekAnthropicUrl(anthropicConfig)) {
-            registry.registerProvider(anthropic, anthropicModels);
-        }
 
         // 动态注册所有 OpenAI 兼容协议 Provider，一个 YAML 配置驱动，无需新增 Java 类。
         var providerConfigs = props.getModels().getProviders();
@@ -214,14 +196,6 @@ public class EchoMindAutoConfiguration {
             }
         }
         return models;
-    }
-
-    private boolean isDeepSeekAnthropicUrl(EchoMindProperties.ProviderConfig config) {
-        String url = firstNonBlank(
-            config == null ? null : config.getBaseUrl(),
-            System.getenv("ANTHROPIC_BASE_URL")
-        );
-        return url != null && url.toLowerCase().contains("deepseek");
     }
 
     /** 解析模型能力标签，非法值会被忽略。 */
@@ -288,30 +262,22 @@ public class EchoMindAutoConfiguration {
     }
 
     @Bean
-    public MysqlMemoryVectorStore mysqlMemoryVectorStore(MemoryEmbeddingRepository repository,
-                                                         ObjectMapper mapper) {
-        return new MysqlMemoryVectorStore(repository, mapper);
-    }
-
-    @Bean
     @Primary
     public MemoryVectorStore memoryVectorStore(EchoMindProperties props,
-                                               MysqlMemoryVectorStore mysqlStore,
                                                ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
         String type = props.getMemory().getVectorStore();
         if ("mysql-linear".equalsIgnoreCase(type)) {
-            log.info("Using MySQL linear memory vector store");
-            return mysqlStore;
+            log.warn("mysql-linear memory vector store is deprecated for chat memory; using no-op vector store");
+            return new NoopMemoryVectorStore();
         }
         RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
         if (factory == null) {
-            log.warn("Redis Stack vector store requested but RedisConnectionFactory is unavailable; using MySQL linear fallback");
-            return mysqlStore;
+            log.warn("Redis Stack vector store requested but RedisConnectionFactory is unavailable; using no-op vector store");
+            return new NoopMemoryVectorStore();
         }
-        log.info("Using Redis Stack memory vector store with MySQL fallback");
+        log.info("Using Redis Stack memory vector store");
         return new RedisStackMemoryVectorStore(
             factory,
-            mysqlStore,
             props.getMemory().getVectorIndexName(),
             props.getMemory().getVectorKeyPrefix()
         );
@@ -340,17 +306,16 @@ public class EchoMindAutoConfiguration {
     public MemoryManager memoryManager(WindowConfig wc,
                                        PersistentChatMemoryStore chatStore,
                                        RecentMemoryCache recentCache,
-                                       MemoryEmbeddingService embeddingService,
                                        MemorySummaryService summaryService,
+                                       MemoryEmbeddingService embeddingService,
                                        EchoMindProperties props) {
         return new MemoryManager(
             wc,
             chatStore,
             recentCache,
-            embeddingService,
             summaryService,
-            props.getMemory().getRetrievalTopK(),
-            props.getMemory().getSummaryRefreshInterval()
+            props.getMemory().getSummaryRefreshInterval(),
+            embeddingService
         );
     }
 
@@ -392,6 +357,61 @@ public class EchoMindAutoConfiguration {
             props.getMemory().getPromptMaxChars(),
             props.getMemory().getPromptMaxSystemMessageChars(),
             props.getMemory().getPromptMaxHistoryMessageChars()
+        );
+    }
+
+    @Bean
+    public UserMemoryStore userMemoryStore(EchoMindProperties props,
+                                           ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
+        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
+        if (factory == null) {
+            log.warn("RedisConnectionFactory unavailable; user memory retrieval disabled in main pipeline");
+            return new NoopUserMemoryStore();
+        }
+        return new UserMemoryVectorStore(
+            factory,
+            props.getUserMemory().getVectorIndexName(),
+            props.getUserMemory().getVectorKeyPrefix()
+        );
+    }
+
+    @Bean
+    public Queue userMemoryQueue(EchoMindProperties props) {
+        return new Queue(props.getUserMemory().getQueueName(), true);
+    }
+
+    @Bean
+    public Queue chatMemoryPersistQueue(EchoMindProperties props) {
+        return new Queue(props.getMemory().getPersistQueueName(), true);
+    }
+
+    @Bean
+    public UserMemoryPersistPublisher userMemoryPersistPublisher(EchoMindProperties props,
+                                                                 ObjectProvider<RabbitTemplate> rabbitTemplate) {
+        RabbitTemplate template = rabbitTemplate.getIfAvailable();
+        if (template == null) {
+            log.warn("RabbitTemplate unavailable; user memory async persistence disabled");
+            return new NoopUserMemoryPersistPublisher();
+        }
+        return new RabbitUserMemoryPersistPublisher(
+            template,
+            props.getUserMemory().getQueueName(),
+            props.getUserMemory().isEnabled()
+        );
+    }
+
+    @Bean
+    public ChatMemoryPersistPublisher chatMemoryPersistPublisher(EchoMindProperties props,
+                                                                 ObjectProvider<RabbitTemplate> rabbitTemplate) {
+        RabbitTemplate template = rabbitTemplate.getIfAvailable();
+        if (template == null) {
+            log.warn("RabbitTemplate unavailable; chat memory async persistence disabled");
+            return new NoopChatMemoryPersistPublisher();
+        }
+        return new RabbitChatMemoryPersistPublisher(
+            template,
+            props.getMemory().getPersistQueueName(),
+            props.getMemory().isAsyncPersistEnabled()
         );
     }
 
@@ -479,10 +499,12 @@ public class EchoMindAutoConfiguration {
         return new SkillCapabilityService(registry, capabilityRegistry);
     }
 
-    /** 将已启用Skill同步到统一能力注册中心。 */
+    /** 启动时恢复市场上传的Skill，然后同步到统一能力注册中心。 */
     @Bean
     public Object skillCapabilityInitializer(SkillCapabilityService capabilityService,
-                                             SkillDirectoryWatcher watcher) {
+                                             SkillDirectoryWatcher watcher,
+                                             MarketplaceService marketplaceService) {
+        marketplaceService.restoreFromDatabase();
         capabilityService.syncEnabledSkills();
         return new Object();
     }
@@ -490,7 +512,10 @@ public class EchoMindAutoConfiguration {
     /** Agent 请求管线：上下文 → 模型路由 → LLM 聚合（模型自主工具调用）→ 记忆保存。 */
     @Bean
     public ExecutionPipeline executionPipeline(MemoryManager memory,
-                                                AgentKnowledgeService knowledgeService,
+                                                 AgentKnowledgeService knowledgeService,
+                                                 EmbeddingClient embeddingClient,
+                                                 ObjectProvider<UserMemoryStore> userMemoryStore,
+                                                 ChatMemoryPersistPublisher chatMemoryPersistPublisher,
                                                 CapabilityRegistry capabilityRegistry,
                                                 DynamicModelRouter router, ModelProviderRegistry providerReg,
                                                 ObjectStorageService storageService,
@@ -498,12 +523,19 @@ public class EchoMindAutoConfiguration {
                                                 EchoMindProperties props) {
         List<PipelineStage> stages = List.of(
             new ContextEnrichStage(memory),
-            new KnowledgeRetrievalStage(knowledgeService, props.getMemory().getKnowledgeTopK()),
+            new UserMemoryRetrievalStage(
+                embeddingClient,
+                userMemoryStore.getIfAvailable(NoopUserMemoryStore::new),
+                props.getUserMemory().isEnabled(),
+                props.getUserMemory().getTopK(),
+                props.getUserMemory().getMinConfidence()
+            ),
+            new KnowledgeRetrievalStage(knowledgeService, embeddingClient, props.getMemory().getKnowledgeTopK()),
             new ToolResolutionStage(router),
             new MultimodalGuardStage(providerReg),
             new AttachmentPreparationStage(storageService),
             new ResultAggregationStage(router, providerReg, capabilityRegistry, promptBudget),
-            new MemoryPersistStage(memory)
+            new MemoryPersistStage(chatMemoryPersistPublisher)
         );
         return new ExecutionPipeline(stages);
     }

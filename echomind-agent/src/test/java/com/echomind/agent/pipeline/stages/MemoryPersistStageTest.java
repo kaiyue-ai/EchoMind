@@ -1,5 +1,6 @@
 package com.echomind.agent.pipeline.stages;
 
+import com.echomind.agent.memory.ChatMemoryPersistPublisher;
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.memory.MemoryManager;
@@ -9,7 +10,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class MemoryPersistStageTest {
@@ -17,7 +17,8 @@ class MemoryPersistStageTest {
     @Test
     void skipsPersistenceForInternalPipelineContext() {
         MemoryManager memoryManager = mock(MemoryManager.class);
-        MemoryPersistStage stage = new MemoryPersistStage(memoryManager);
+        ChatMemoryPersistPublisher publisher = mock(ChatMemoryPersistPublisher.class);
+        MemoryPersistStage stage = new MemoryPersistStage(publisher);
         PipelineContext ctx = new PipelineContext();
         ctx.setSessionId("team-run-1-reviewer");
         ctx.setAgentId("reviewer");
@@ -28,12 +29,14 @@ class MemoryPersistStageTest {
         stage.process(ctx);
 
         verify(memoryManager, never()).addMessage(any(), any(), any(AgentMessage.class));
+        verify(publisher, never()).publish(any(), any(), any());
     }
 
     @Test
-    void persistsNormalUserChat() {
+    void publishesNormalUserChatWithoutDirectMemoryWrite() {
         MemoryManager memoryManager = mock(MemoryManager.class);
-        MemoryPersistStage stage = new MemoryPersistStage(memoryManager);
+        ChatMemoryPersistPublisher publisher = mock(ChatMemoryPersistPublisher.class);
+        MemoryPersistStage stage = new MemoryPersistStage(publisher);
         PipelineContext ctx = new PipelineContext();
         ctx.setSessionId("session-1");
         ctx.setAgentId("default");
@@ -42,6 +45,7 @@ class MemoryPersistStageTest {
 
         stage.process(ctx);
 
-        verify(memoryManager, times(2)).addMessage(eq("session-1"), eq("default"), any(AgentMessage.class));
+        verify(memoryManager, never()).addMessage(any(), any(), any(AgentMessage.class));
+        verify(publisher).publish(eq("session-1"), eq("default"), any());
     }
 }

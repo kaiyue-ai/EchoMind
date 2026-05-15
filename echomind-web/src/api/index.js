@@ -175,7 +175,9 @@ export default {
     },
     /** 删除Agent私有知识库文档 */
     deleteKnowledge: (agentId, documentId) =>
-      api.delete(`/agents/${agentId}/knowledge/${documentId}`).then(r => r.data)
+      api.delete(`/agents/${agentId}/knowledge/${documentId}`).then(r => r.data),
+    /** 删除Agent（运行时 + 持久化） */
+    delete: (agentId) => api.delete(`/agents/${agentId}`)
   },
 
   // ===== MCP接口 =====

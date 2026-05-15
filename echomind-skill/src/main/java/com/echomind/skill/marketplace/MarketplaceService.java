@@ -16,6 +16,8 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Skill市场服务，提供Skill的上传、查询和删除等管理功能。
@@ -140,13 +142,13 @@ public class MarketplaceService {
             entity.setTagsJson(toJson(metadata.tags()));
             entity.setKeywordsJson(toJson(metadata.keywords()));
             entity.setAliasesJson(toJson(metadata.aliases()));
-            entity.setState(SkillState.LOADED);
             entity.setJarPath(storedJar.uri());
 
-            entity = repository.save(entity);
-
-            // 在运行时注册中心注册
+            // 先在运行时注册（内部会设 ENABLED），再同步状态写库
             registry.register(skill, result.classLoader());
+            entity.setState(SkillState.ENABLED);
+
+            entity = repository.save(entity);
 
             return entity;
         } catch (SkillLoadException e) {
@@ -163,6 +165,59 @@ public class MarketplaceService {
      */
     public List<SkillRepository> listAll() {
         return repository.findAll();
+    }
+
+    /**
+     * 更新已持久化 Skill 的生命周期状态。
+     *
+     * @param identifier 数据库ID或{@code name@version}
+     * @param state      目标状态
+     */
+    public Optional<SkillRepository> updateState(String identifier, SkillState state) {
+        return findByIdOrSkillId(identifier)
+            .map(entity -> {
+                entity.setState(state);
+                return repository.save(entity);
+            });
+    }
+
+    /**
+     * 启动时从数据库恢复所有已上传的Skill到运行时注册中心。
+     *
+     * <p>恢复逻辑：</p>
+     * <ol>
+     *   <li>查询数据库中所有Skill记录</li>
+     *   <li>跳过已在注册中心中的Skill（例如已通过autoLoadPath加载的）</li>
+     *   <li>从市场目录中定位JAR文件并重新加载</li>
+     *   <li>加载成功后在运行时注册中心注册</li>
+     * </ol>
+     *
+     * <p>此方法在应用启动时由自动装配调用，确保上传的Skill在重启后仍然可用。</p>
+     */
+    public void restoreFromDatabase() {
+        List<SkillRepository> allSkills = repository.findAll();
+        Set<String> existingIds = registry.listAll().stream()
+            .map(r -> r.getMetadata().skillId())
+            .collect(Collectors.toSet());
+
+        for (SkillRepository entity : allSkills) {
+            String skillId = toSkillId(entity);
+            if (existingIds.contains(skillId)) {
+                log.info("Skill {} already registered, skipping restore", skillId);
+                continue;
+            }
+            try {
+                Path jarPath = resolveRestoreJar(entity);
+                SkillJarLoader.SkillLoadResult result = jarLoader.load(jarPath);
+                registry.register(result.skill(), result.classLoader());
+                if (entity.getState() == SkillState.DISABLED) {
+                    registry.disable(skillId);
+                }
+                log.info("Restored skill from marketplace: {}", skillId);
+            } catch (Exception e) {
+                log.error("Failed to restore skill {}: {}", skillId, e.getMessage());
+            }
+        }
     }
 
     /**
@@ -225,6 +280,32 @@ public class MarketplaceService {
 
     private String toSkillId(SkillRepository skill) {
         return skill.getName() + "@" + skill.getVersion();
+    }
+
+    private Path resolveRestoreJar(SkillRepository entity) throws Exception {
+        String skillId = toSkillId(entity);
+        Path cachedJar = marketplaceDir.resolve(skillId.replace("@", "-") + ".jar");
+        if (Files.exists(cachedJar)) {
+            return cachedJar;
+        }
+
+        String storedPath = entity.getJarPath();
+        if (storedPath == null || storedPath.isBlank()) {
+            throw new SkillLoadException("JAR file not found for skill " + skillId);
+        }
+
+        if (!storageService.supports(storedPath)) {
+            Path directPath = Paths.get(storedPath);
+            if (Files.exists(directPath)) {
+                Files.copy(directPath, cachedJar, StandardCopyOption.REPLACE_EXISTING);
+                return cachedJar;
+            }
+            throw new SkillLoadException("JAR file not found for skill " + skillId + ": " + storedPath);
+        }
+
+        Files.createDirectories(cachedJar.getParent());
+        Files.write(cachedJar, storageService.readObject(storedPath));
+        return cachedJar;
     }
 
     /**

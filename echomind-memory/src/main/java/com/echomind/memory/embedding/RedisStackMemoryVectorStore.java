@@ -15,15 +15,14 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 
 /**
  * Redis Stack 向量检索实现。
  *
- * <p>Redis Stack 负责 KNN 检索，MySQL 线性实现作为兜底和持久备份。
- * 新消息会双写到 MySQL 向量表和 Redis Stack；检索时优先走 Redis Stack，
- * Redis Stack 不可用或旧数据尚未进入索引时回退到 MySQL。</p>
+ * <p>Redis Stack 负责 KNN 检索。普通聊天向量不再写 MySQL，也不做 MySQL 线性兜底。</p>
  */
 @Slf4j
 public class RedisStackMemoryVectorStore implements MemoryVectorStore {
@@ -36,7 +35,6 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
 
     private final RedisConnectionFactory connectionFactory;
     private final RedisKeyScanner keyScanner;
-    private final MysqlMemoryVectorStore fallback;
     private final String indexName;
     private final String keyPrefix;
 
@@ -44,21 +42,18 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
     private volatile int indexDimension;
 
     public RedisStackMemoryVectorStore(RedisConnectionFactory connectionFactory,
-                                       MysqlMemoryVectorStore fallback,
                                        String indexName,
                                        String keyPrefix) {
         this.connectionFactory = connectionFactory;
         StringRedisTemplate redis = new StringRedisTemplate(connectionFactory);
         redis.afterPropertiesSet();
         this.keyScanner = new RedisKeyScanner(redis);
-        this.fallback = fallback;
         this.indexName = blankToDefault(indexName, "idx:echomind:memory:vectors");
         this.keyPrefix = blankToDefault(keyPrefix, "echomind:memory:vector:");
     }
 
     @Override
     public void save(MemoryVectorRecord record) {
-        fallback.save(record);
         if (record == null || record.embedding() == null || record.embedding().length == 0) {
             return;
         }
@@ -75,7 +70,7 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
                 );
             }
         } catch (Exception e) {
-            log.warn("Redis Stack memory vector save failed; MySQL fallback kept session={} messageId={}: {}",
+            log.warn("Redis Stack memory vector save failed session={} messageId={}: {}",
                 record.sessionId(), record.messageId(), e.getMessage());
         }
     }
@@ -88,20 +83,15 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
         try {
             ensureIndex(queryVector.length);
             List<MemorySearchHit> hits = searchRedis(sessionId, queryVector, topK);
-            if (!hits.isEmpty()) {
-                return hits;
-            }
-            return fallback.search(sessionId, queryVector, topK);
+            return hits;
         } catch (Exception e) {
-            log.warn("Redis Stack memory vector search failed; falling back to MySQL session={}: {}",
-                sessionId, e.getMessage());
-            return fallback.search(sessionId, queryVector, topK);
+            log.warn("Redis Stack memory vector search failed session={}: {}", sessionId, e.getMessage());
+            return List.of();
         }
     }
 
     @Override
     public void deleteSession(String sessionId) {
-        fallback.deleteSession(sessionId);
         if (sessionId == null || sessionId.isBlank()) {
             return;
         }
@@ -170,7 +160,8 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
     private boolean indexExists() {
         try (RedisConnection connection = connectionFactory.getConnection()) {
             Object raw = executeArrayCommand(connection, "FT._LIST");
-            if (!(raw instanceof List<?> indexes)) {
+            List<?> indexes = asList(raw);
+            if (indexes.isEmpty()) {
                 return false;
             }
             for (Object index : indexes) {
@@ -185,37 +176,65 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
     }
 
     private List<MemorySearchHit> parseSearchResult(Object raw) {
-        if (!(raw instanceof List<?> rows) || rows.size() <= 1) {
+        List<?> rows = asList(raw);
+        if (rows.size() <= 1) {
             return List.of();
+        }
+        List<?> structuredResults = findValue(rows, "results");
+        if (!structuredResults.isEmpty()) {
+            return parseStructuredResults(structuredResults);
         }
         List<MemorySearchHit> hits = new ArrayList<>();
         for (int i = 1; i + 1 < rows.size(); i += 2) {
             Object fieldsRaw = rows.get(i + 1);
-            if (!(fieldsRaw instanceof List<?> fields)) {
+            List<?> fields = asList(fieldsRaw);
+            if (fields.isEmpty()) {
                 continue;
             }
-            Long messageId = null;
-            String role = null;
-            String content = null;
-            double score = 0;
-            for (int j = 0; j + 1 < fields.size(); j += 2) {
-                String name = text(fields.get(j));
-                Object value = fields.get(j + 1);
-                if ("message_id".equals(name)) {
-                    messageId = parseLong(value);
-                } else if ("role".equals(name)) {
-                    role = text(value);
-                } else if ("content_preview".equals(name)) {
-                    content = text(value);
-                } else if ("score".equals(name)) {
-                    score = distanceToSimilarity(parseDouble(value));
-                }
-            }
-            if (messageId != null && content != null) {
-                hits.add(new MemorySearchHit(messageId, role, content, score));
+            MemorySearchHit hit = parseFields(fields);
+            if (hit != null) {
+                hits.add(hit);
             }
         }
         return hits;
+    }
+
+    private List<MemorySearchHit> parseStructuredResults(List<?> results) {
+        List<MemorySearchHit> hits = new ArrayList<>();
+        for (Object result : results) {
+            List<?> resultFields = asList(result);
+            if (resultFields.isEmpty()) {
+                continue;
+            }
+            MemorySearchHit hit = parseFields(findValue(resultFields, "extra_attributes"));
+            if (hit != null) {
+                hits.add(hit);
+            }
+        }
+        return hits;
+    }
+
+    private MemorySearchHit parseFields(List<?> fields) {
+        Long messageId = null;
+        String role = null;
+        String content = null;
+        double score = 0;
+        for (int j = 0; j + 1 < fields.size(); j += 2) {
+            String name = text(fields.get(j));
+            Object value = fields.get(j + 1);
+            if ("message_id".equals(name)) {
+                messageId = parseLong(value);
+            } else if ("role".equals(name)) {
+                role = text(value);
+            } else if ("content_preview".equals(name)) {
+                content = text(value);
+            } else if ("score".equals(name)) {
+                score = distanceToSimilarity(parseDouble(value));
+            }
+        }
+        return messageId != null && content != null
+            ? new MemorySearchHit(messageId, role, content, score)
+            : null;
     }
 
     private byte[] vectorBytes(double[] vector) {
@@ -305,6 +324,25 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
         } catch (Exception e) {
             return 0;
         }
+    }
+
+    private List<?> asList(Object raw) {
+        if (raw instanceof List<?> list) {
+            return list;
+        }
+        if (raw instanceof Object[] array) {
+            return Arrays.asList(array);
+        }
+        return List.of();
+    }
+
+    private List<?> findValue(List<?> fields, String name) {
+        for (int i = 0; i + 1 < fields.size(); i += 2) {
+            if (name.equals(text(fields.get(i)))) {
+                return asList(fields.get(i + 1));
+            }
+        }
+        return List.of();
     }
 
     private double distanceToSimilarity(double distance) {

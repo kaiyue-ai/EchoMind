@@ -61,6 +61,20 @@ public class AgentPersistenceService {
         return repository.existsById(agentId);
     }
 
+    /**
+     * 从数据库删除指定Agent。
+     *
+     * @param agentId Agent标识
+     * @return true表示删除成功，false表示Agent不存在
+     */
+    public boolean delete(String agentId) {
+        if (!repository.existsById(agentId)) {
+            return false;
+        }
+        repository.deleteById(agentId);
+        return true;
+    }
+
     private AgentConfig toConfig(AgentEntity entity) {
         AgentConfig config = new AgentConfig();
         config.setAgentId(entity.getAgentId());

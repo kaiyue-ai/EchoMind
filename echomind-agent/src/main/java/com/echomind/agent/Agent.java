@@ -6,6 +6,7 @@ import com.echomind.agent.pipeline.stages.MemoryPersistStage;
 import com.echomind.agent.pipeline.stages.ResultAggregationStage;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -51,12 +52,11 @@ public class Agent {
             .doOnNext(finalResponse::append)
             .doOnComplete(() -> {
                 streamCtx.setFinalResponse(finalResponse.toString());
-                if (!streamCtx.isMemoryPersistenceEnabled()) {
-                    return;
-                }
-                MemoryPersistStage memoryStage = pipeline.getStage(MemoryPersistStage.class);
-                if (memoryStage != null) {
-                    memoryStage.process(streamCtx);
+                if (streamCtx.isMemoryPersistenceEnabled()) {
+                    MemoryPersistStage memoryStage = pipeline.getStage(MemoryPersistStage.class);
+                    if (memoryStage != null) {
+                        CompletableFuture.runAsync(() -> memoryStage.process(streamCtx));
+                    }
                 }
             });
     }
