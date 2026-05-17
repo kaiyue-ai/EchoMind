@@ -3,6 +3,7 @@ package com.echomind.console.controller.rest;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.SessionSummary;
+import com.echomind.console.auth.AuthContext;
 import com.echomind.console.dto.ChatMessageRequest;
 import com.echomind.console.dto.ChatSubmitResponse;
 import com.echomind.console.dto.ChatSyncResponse;
@@ -19,6 +20,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -68,7 +70,7 @@ public class ChatController {
      */
     @GetMapping(value = "/stream/{requestId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamResult(@PathVariable String requestId) {
-        return ssePushService.createEmitter(requestId);
+        return ssePushService.createEmitter(requestId, AuthContext.userId());
     }
 
     /**
@@ -120,6 +122,7 @@ public class ChatController {
             },
             () -> {
                 try {
+                    waitForStreamMemory(stream.userId(), stream.sessionId());
                     emitter.send(SseEmitter.event().name("result").data("[DONE]"));
                 } catch (IOException ignored) {
                 }
@@ -130,11 +133,31 @@ public class ChatController {
         return emitter;
     }
 
+    private void waitForStreamMemory(String userId, String sessionId) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (System.nanoTime() < deadline) {
+            try {
+                if (memoryManager.getFullContext(userId, sessionId).size() >= 2) {
+                    return;
+                }
+                TimeUnit.MILLISECONDS.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (RuntimeException e) {
+                log.warn("Failed while waiting stream memory user={} session={}: {}",
+                    userId, sessionId, e.getMessage());
+                return;
+            }
+        }
+        log.warn("Streaming memory not visible before SSE completion user={} session={}", userId, sessionId);
+    }
+
     /** 列出所有有记忆的对话摘要。 */
     @GetMapping("/sessions")
     public ResponseEntity<List<SessionSummary>> listSessions() {
         try {
-            return ResponseEntity.ok(memoryManager.listSessions());
+            return ResponseEntity.ok(memoryManager.listSessions(AuthContext.userId()));
         } catch (Exception e) {
             log.warn("Failed to list chat sessions: {}", e.getMessage());
             return ResponseEntity.ok(List.of());
@@ -144,7 +167,7 @@ public class ChatController {
     /** 获取指定对话的历史。 */
     @GetMapping("/{sessionId}/history")
     public ResponseEntity<List<AgentMessage>> getHistory(@PathVariable String sessionId) {
-        return ResponseEntity.ok(memoryManager.getFullContext(sessionId).stream()
+        return ResponseEntity.ok(memoryManager.getFullContext(AuthContext.userId(), sessionId).stream()
             .map(this::refreshAttachmentUrls)
             .toList());
     }

@@ -55,7 +55,7 @@ public class MemoryPersistStage implements PipelineStage {
             AgentMessage assistantMessage = AgentMessage.assistant(ctx.getFinalResponse());
             persisted.add(assistantMessage);
         }
-        chatMemoryPublisher.publish(ctx.getSessionId(), ctx.getAgentId(), List.copyOf(persisted));
+        chatMemoryPublisher.publish(ctx.getUserId(), ctx.getSessionId(), ctx.getAgentId(), List.copyOf(persisted));
         return ctx;
     }
 }

@@ -70,12 +70,26 @@ public class MemoryManager {
         if (isBlank(memoryKey) || message == null) {
             return;
         }
-        var saved = chatStore.saveMessage(memoryKey, agentId, message);
+        var saved = chatStore.saveMessage("default", memoryKey, agentId, message);
         recentCache.append(memoryKey, message);
         if (embeddingService != null) {
             embeddingService.indexMessage(memoryKey, saved.getId(), message);
         }
-        refreshSummaryIfNeeded(memoryKey);
+        refreshSummaryIfNeeded("default", memoryKey);
+    }
+
+    /** 保存用户会话消息到 MySQL、刷新 Redis 近期缓存并建立向量索引。只允许异步消费者调用。 */
+    public void addMessage(String userId, String memoryKey, String agentId, AgentMessage message) {
+        if (isBlank(memoryKey) || message == null) {
+            return;
+        }
+        String cacheKey = memoryKey(userId, memoryKey);
+        var saved = chatStore.saveMessage(normalizeUserId(userId), memoryKey, agentId, message);
+        recentCache.append(cacheKey, message);
+        if (embeddingService != null) {
+            embeddingService.indexMessage(cacheKey, saved.getId(), message);
+        }
+        refreshSummaryIfNeeded(normalizeUserId(userId), memoryKey);
     }
 
     /** 读取 Redis 里的近期消息；缓存空时不回源 MySQL。 */
@@ -91,6 +105,11 @@ public class MemoryManager {
      */
     public List<AgentMessage> getFullContext(String memoryKey) {
         return chatStore.loadFullHistory(memoryKey);
+    }
+
+    /** 完整历史只从 MySQL 读取，并按用户隔离。 */
+    public List<AgentMessage> getFullContext(String userId, String memoryKey) {
+        return chatStore.loadFullHistory(normalizeUserId(userId), memoryKey);
     }
 
     /**
@@ -116,6 +135,16 @@ public class MemoryManager {
         }
     }
 
+    /** 清除指定用户会话的全部正式历史和近期缓存。 */
+    public void clearSession(String userId, String memoryKey) {
+        String cacheKey = memoryKey(userId, memoryKey);
+        recentCache.clear(cacheKey);
+        chatStore.deleteSession(normalizeUserId(userId), memoryKey);
+        if (embeddingService != null) {
+            embeddingService.deleteSession(cacheKey);
+        }
+    }
+
     /** 当前会话近期缓存大小。 */
     public int shortTermSize(String memoryKey) {
         return recentCache.size(memoryKey);
@@ -131,18 +160,33 @@ public class MemoryManager {
         return chatStore.listSessions();
     }
 
-    private void refreshSummaryIfNeeded(String memoryKey) {
-        long count = chatStore.countMessages(memoryKey);
+    /** 会话列表从 MySQL 读取，并按用户隔离。 */
+    public List<SessionSummary> listSessions(String userId) {
+        return chatStore.listSessions(normalizeUserId(userId));
+    }
+
+    private void refreshSummaryIfNeeded(String userId, String memoryKey) {
+        String owner = normalizeUserId(userId);
+        long count = chatStore.countMessages(owner, memoryKey);
         int interval = Math.max(1, summaryRefreshInterval);
         if (count <= windowConfig.getMaxMessages() || count % interval != 0) {
             return;
         }
         try {
-            String summary = summaryService.summarize(chatStore.loadFullHistory(memoryKey));
-            chatStore.updateSummary(memoryKey, summary);
+            String summary = summaryService.summarize(chatStore.loadFullHistory(owner, memoryKey));
+            chatStore.updateSummary(owner, memoryKey, summary);
         } catch (Exception e) {
             log.warn("Failed to refresh memory summary for session {}: {}", memoryKey, e.getMessage());
         }
+    }
+
+    private String memoryKey(String userId, String sessionId) {
+        String owner = normalizeUserId(userId);
+        return sessionId != null && sessionId.startsWith(owner + ":") ? sessionId : owner + ":" + sessionId;
+    }
+
+    private String normalizeUserId(String userId) {
+        return userId == null || userId.isBlank() ? "default" : userId;
     }
 
     private boolean isBlank(String value) {

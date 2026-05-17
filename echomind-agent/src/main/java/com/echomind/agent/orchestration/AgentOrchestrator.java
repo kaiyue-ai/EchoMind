@@ -40,6 +40,12 @@ public class AgentOrchestrator {
         return execute(agentId, sessionId, userMessage, modelId, attachments, true);
     }
 
+    /** 执行一次完整对话，可携带用户身份。 */
+    public PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
+                                   List<MessageAttachment> attachments) {
+        return execute(userId, agentId, sessionId, userMessage, modelId, attachments, true);
+    }
+
     /** 执行内部任务，不读取或写入普通聊天记忆。 */
     public PipelineContext executeInternal(String agentId, String sessionId, String userMessage) {
         return execute(agentId, sessionId, userMessage, null, List.of(), false);
@@ -58,9 +64,10 @@ public class AgentOrchestrator {
         return agent;
     }
 
-    private PipelineContext buildPipelineContext(Agent agent, String sessionId, String userMessage,
+    private PipelineContext buildPipelineContext(String userId, Agent agent, String sessionId, String userMessage,
                                                   String modelId, List<MessageAttachment> attachments) {
         PipelineContext ctx = new PipelineContext();
+        ctx.setUserId(normalizeUserId(userId));
         ctx.setAgentId(agent.getAgentId());
         ctx.setSessionId(sessionId != null ? sessionId : UUID.randomUUID().toString());
         ctx.setUserMessage(userMessage);
@@ -75,13 +82,19 @@ public class AgentOrchestrator {
 
     private PipelineContext execute(String agentId, String sessionId, String userMessage, String modelId,
                                     List<MessageAttachment> attachments, boolean memoryPersistenceEnabled) {
+        return execute("default", agentId, sessionId, userMessage, modelId, attachments, memoryPersistenceEnabled);
+    }
+
+    private PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
+                                    List<MessageAttachment> attachments, boolean memoryPersistenceEnabled) {
         Agent agent = resolveAgent(agentId);
         if (agent == null) {
             PipelineContext ctx = new PipelineContext();
+            ctx.setUserId(normalizeUserId(userId));
             ctx.setFinalResponse("[Error] No agents configured");
             return ctx;
         }
-        PipelineContext ctx = buildPipelineContext(agent, sessionId, userMessage, modelId, attachments);
+        PipelineContext ctx = buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments);
         ctx.setMemoryPersistenceEnabled(memoryPersistenceEnabled);
 
         log.info("[Orchestrator] Agent={} model={} session={} msg={}", agent.getAgentId(),
@@ -104,17 +117,27 @@ public class AgentOrchestrator {
     /** 执行流式对话，可携带图片等多模态附件。 */
     public Flux<String> executeStream(String agentId, String sessionId, String userMessage, String modelId,
                                       List<MessageAttachment> attachments) {
+        return executeStream("default", agentId, sessionId, userMessage, modelId, attachments);
+    }
+
+    /** 执行流式对话，可携带用户身份。 */
+    public Flux<String> executeStream(String userId, String agentId, String sessionId, String userMessage, String modelId,
+                                      List<MessageAttachment> attachments) {
         Agent agent = resolveAgent(agentId);
         if (agent == null) {
             return Flux.just("[Error] No agents configured");
         }
 
-        PipelineContext ctx = buildPipelineContext(agent, sessionId, userMessage, modelId, attachments);
+        PipelineContext ctx = buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments);
 
         log.info("[Orchestrator:stream] Agent={} model={} session={} msg={}", agent.getAgentId(),
             ctx.getModelId(), ctx.getSessionId(),
             userMessage.substring(0, Math.min(50, userMessage.length())));
 
         return agent.chatStream(ctx);
+    }
+
+    private String normalizeUserId(String userId) {
+        return userId == null || userId.isBlank() ? "default" : userId;
     }
 }

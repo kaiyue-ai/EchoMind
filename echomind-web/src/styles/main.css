@@ -161,6 +161,110 @@ textarea {
   font-weight: 600;
 }
 
+.login-page {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #08090b;
+}
+
+.login-panel {
+  width: min(440px, 100%);
+  border: 1px solid var(--border);
+  background: #0f1013;
+  border-radius: 8px;
+  padding: 30px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.login-brand .brand-mark {
+  width: 42px;
+  height: 42px;
+}
+
+.login-brand strong,
+.login-brand span {
+  display: block;
+}
+
+.login-brand span {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.login-copy {
+  margin: 24px 0 18px;
+}
+
+.login-copy h1 {
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.login-copy p {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.login-mode {
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+.login-mode.el-segmented {
+  --el-segmented-bg-color: #16171b;
+  --el-segmented-item-selected-bg-color: #f4f4f5;
+  --el-segmented-item-selected-color: #050505;
+  --el-segmented-item-hover-color: var(--text);
+  --el-border-radius-base: 8px;
+}
+
+.login-form {
+  margin-top: 0;
+}
+
+.login-form .el-form-item {
+  display: block;
+  margin-bottom: 16px;
+}
+
+.login-form .el-form-item__label {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  height: auto;
+  margin-bottom: 7px;
+  padding: 0;
+  color: var(--text-secondary);
+  line-height: 1.2;
+  text-align: left;
+}
+
+.login-form .el-form-item__content {
+  margin-left: 0 !important;
+}
+
+.login-form .el-input {
+  height: 42px;
+}
+
+.login-submit {
+  width: 100%;
+  height: 42px;
+  margin-top: 4px;
+}
+
 .el-table {
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
@@ -224,9 +328,11 @@ textarea {
 }
 
 .brand-mark {
+  position: relative;
   display: grid;
   width: 38px;
   height: 38px;
+  overflow: hidden;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid #32353d;
@@ -236,6 +342,68 @@ textarea {
   font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
   font-size: 13px;
   font-weight: 800;
+}
+
+.miku-mark {
+  isolation: isolate;
+  border-color: rgba(45, 212, 191, 0.55);
+  background:
+    radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.22) 0 2px, transparent 3px),
+    linear-gradient(135deg, #0b1115, #111827 48%, #071b1d);
+}
+
+.miku-hair {
+  position: absolute;
+  top: 10px;
+  width: 13px;
+  height: 27px;
+  border-radius: 10px 10px 5px 5px;
+  background: linear-gradient(180deg, #7dd3fc 0%, #2dd4bf 45%, #0891b2 100%);
+  box-shadow: 0 0 12px rgba(45, 212, 191, 0.35);
+  z-index: 1;
+}
+
+.miku-hair.left {
+  left: 3px;
+  transform: rotate(10deg);
+}
+
+.miku-hair.right {
+  right: 3px;
+  transform: rotate(-10deg);
+}
+
+.miku-face {
+  position: relative;
+  width: 18px;
+  height: 22px;
+  border-radius: 45% 45% 48% 48%;
+  background: linear-gradient(180deg, #f8efe7 0%, #e8d5c9 100%);
+  box-shadow: 0 0 0 2px rgba(9, 9, 10, 0.56);
+  z-index: 2;
+}
+
+.miku-face::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: -5px;
+  width: 22px;
+  height: 10px;
+  border-radius: 9px 9px 4px 4px;
+  background: linear-gradient(90deg, #22d3ee, #2dd4bf);
+}
+
+.miku-face::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 9px;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: #0f172a;
+  box-shadow: 7px 0 0 #0f172a;
 }
 
 .brand-copy {

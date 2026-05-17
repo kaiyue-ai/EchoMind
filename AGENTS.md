@@ -29,7 +29,8 @@ EchoMind 是一个 Java 17 / Spring Boot 3.3 + Vue 3 的 AI Agent 平台。
 - 不要把 `AgentFactory`、`SkillRegistry`、`CapabilityRegistry`、`ConcurrentHashMap` 当持久化来源。
 - MySQL 是 Agent、Skill 状态、完整会话历史、知识库元数据的事实来源。
 - Redis Stack 是近期缓存、向量索引和用户长期画像事实来源；知识库向量和用户画像不落 MySQL。
-- 对话记忆按 `sessionId` 隔离，不要改回“每个 Agent 一份记忆”。
+- 普通聊天记忆按 `userId + sessionId` 隔离；旧无 token 请求归 `default` 用户，不要改回“每个 Agent 一份记忆”。
+- 第一阶段只隔离普通聊天会话和记忆；Agent、Skill、MCP、Team 仍是全局资源。
 - 主项目只接入外部 MCP Server，不恢复“主项目暴露 MCP Server”的旧功能。
 - Skill 只进入 Agent 工具视图，不要自动暴露成 MCP Server。
 - 禁用 Skill 或卸载 MCP 后，必须同步移除 `CapabilityRegistry` 中的工具。

@@ -47,8 +47,16 @@ public class PersistentChatMemoryStore {
      */
     @Transactional
     public ChatMessageEntity saveMessage(String sessionId, String agentId, AgentMessage message) {
-        ChatSessionEntity session = sessionRepository.findById(sessionId)
-            .orElseGet(() -> newSession(sessionId));
+        return saveMessage("default", sessionId, agentId, message);
+    }
+
+    /** 保存单条用户会话消息，并同步更新会话元数据。 */
+    @Transactional
+    public ChatMessageEntity saveMessage(String userId, String sessionId, String agentId, AgentMessage message) {
+        String owner = normalizeUserId(userId);
+        ChatSessionEntity session = sessionRepository.findByUserIdAndSessionId(owner, sessionId)
+            .orElseGet(() -> newSession(owner, sessionId));
+        session.setUserId(owner);
         if (agentId != null && !agentId.isBlank()) {
             session.setAgentId(agentId);
         }
@@ -58,11 +66,11 @@ public class PersistentChatMemoryStore {
         }
         session.setLastActivity(message.timestamp() != null ? message.timestamp() : Instant.now());
 
-        ChatMessageEntity entity = toEntity(sessionId, message);
+        ChatMessageEntity entity = toEntity(owner, sessionId, message);
         ChatMessageEntity saved = messageRepository.save(entity);
-        session.setMessageCount((int) messageRepository.countBySessionId(sessionId));
+        session.setMessageCount((int) messageRepository.countByUserIdAndSessionId(owner, sessionId));
         sessionRepository.save(session);
-        log.debug("Saved chat message session={} id={} role={}", sessionId, saved.getId(), saved.getRole());
+        log.debug("Saved chat message user={} session={} id={} role={}", owner, sessionId, saved.getId(), saved.getRole());
         return saved;
     }
 
@@ -70,6 +78,15 @@ public class PersistentChatMemoryStore {
     @Transactional(readOnly = true)
     public List<AgentMessage> loadFullHistory(String sessionId) {
         return messageRepository.findBySessionIdOrderByTimestampAscIdAsc(sessionId).stream()
+            .map(this::toMessage)
+            .toList();
+    }
+
+    /** 加载指定用户的完整会话历史，按时间升序。 */
+    @Transactional(readOnly = true)
+    public List<AgentMessage> loadFullHistory(String userId, String sessionId) {
+        return messageRepository.findByUserIdAndSessionIdOrderByTimestampAscIdAsc(normalizeUserId(userId), sessionId)
+            .stream()
             .map(this::toMessage)
             .toList();
     }
@@ -89,7 +106,7 @@ public class PersistentChatMemoryStore {
     /** 读取会话摘要。 */
     @Transactional(readOnly = true)
     public String loadSummary(String sessionId) {
-        return sessionRepository.findById(sessionId)
+        return sessionRepository.findByUserIdAndSessionId("default", sessionId)
             .map(ChatSessionEntity::getSummary)
             .orElse(null);
     }
@@ -97,10 +114,21 @@ public class PersistentChatMemoryStore {
     /** 更新会话摘要。 */
     @Transactional
     public void updateSummary(String sessionId, String summary) {
-        sessionRepository.findById(sessionId).ifPresent(session -> {
+        sessionRepository.findByUserIdAndSessionId("default", sessionId).ifPresent(session -> {
             session.setSummary(summary);
             sessionRepository.save(session);
         });
+    }
+
+    /** 更新指定用户会话摘要。 */
+    @Transactional
+    public void updateSummary(String userId, String sessionId, String summary) {
+        String owner = normalizeUserId(userId);
+        sessionRepository.findByUserIdAndSessionId(owner, sessionId)
+            .ifPresent(session -> {
+                session.setSummary(summary);
+                sessionRepository.save(session);
+            });
     }
 
     /** 统计会话消息数量。 */
@@ -109,11 +137,24 @@ public class PersistentChatMemoryStore {
         return messageRepository.countBySessionId(sessionId);
     }
 
+    /** 统计指定用户会话消息数量。 */
+    @Transactional(readOnly = true)
+    public long countMessages(String userId, String sessionId) {
+        return messageRepository.countByUserIdAndSessionId(normalizeUserId(userId), sessionId);
+    }
+
     /** 删除会话和消息。向量索引由 MemoryEmbeddingService 统一清理。 */
     @Transactional
     public void deleteSession(String sessionId) {
-        messageRepository.deleteBySessionId(sessionId);
-        sessionRepository.deleteById(sessionId);
+        deleteSession("default", sessionId);
+    }
+
+    /** 删除指定用户的会话和消息。 */
+    @Transactional
+    public void deleteSession(String userId, String sessionId) {
+        String owner = normalizeUserId(userId);
+        messageRepository.deleteByUserIdAndSessionId(owner, sessionId);
+        sessionRepository.deleteByUserIdAndSessionId(owner, sessionId);
     }
 
     /** 会话列表 DTO，供前端侧边栏展示。 */
@@ -124,16 +165,26 @@ public class PersistentChatMemoryStore {
             .toList();
     }
 
-    private ChatSessionEntity newSession(String sessionId) {
+    /** 用户会话列表 DTO，供前端侧边栏展示。 */
+    @Transactional(readOnly = true)
+    public List<SessionSummary> listSessions(String userId) {
+        return sessionRepository.findVisibleSessionsByUserId(normalizeUserId(userId), "team-run-").stream()
+            .map(session -> toSummary(normalizeUserId(userId), session))
+            .toList();
+    }
+
+    private ChatSessionEntity newSession(String userId, String sessionId) {
         ChatSessionEntity entity = new ChatSessionEntity();
+        entity.setUserId(normalizeUserId(userId));
         entity.setSessionId(sessionId);
         entity.setMessageCount(0);
         entity.setLastActivity(Instant.now());
         return entity;
     }
 
-    private ChatMessageEntity toEntity(String sessionId, AgentMessage message) {
+    private ChatMessageEntity toEntity(String userId, String sessionId, AgentMessage message) {
         ChatMessageEntity entity = new ChatMessageEntity();
+        entity.setUserId(normalizeUserId(userId));
         entity.setSessionId(sessionId);
         entity.setRole(message.role());
         entity.setContent(message.content());
@@ -154,9 +205,14 @@ public class PersistentChatMemoryStore {
     }
 
     private SessionSummary toSummary(ChatSessionEntity session) {
+        return toSummary(session.getUserId(), session);
+    }
+
+    private SessionSummary toSummary(String userId, ChatSessionEntity session) {
         String lastMessage = "";
         List<ChatMessageEntity> lastRows =
-            messageRepository.findBySessionIdOrderByTimestampDescIdDesc(session.getSessionId(), PageRequest.of(0, 1));
+            messageRepository.findByUserIdAndSessionIdOrderByTimestampDescIdDesc(
+                normalizeUserId(userId), session.getSessionId(), PageRequest.of(0, 1));
         if (!lastRows.isEmpty()) {
             lastMessage = truncate(lastRows.get(0).getContent(), LAST_MESSAGE_MAX_CHARS);
         }
@@ -217,5 +273,9 @@ public class PersistentChatMemoryStore {
             return normalized;
         }
         return normalized.substring(0, Math.max(0, maxChars - 3)) + "...";
+    }
+
+    private String normalizeUserId(String userId) {
+        return userId == null || userId.isBlank() ? "default" : userId;
     }
 }

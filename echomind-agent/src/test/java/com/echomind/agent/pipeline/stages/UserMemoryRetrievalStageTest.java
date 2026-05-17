@@ -41,7 +41,7 @@ class UserMemoryRetrievalStageTest {
 
         stage.process(ctx);
 
-        verify(store, never()).search("session-1", new double[] {1}, 5, 0.3);
+        verify(store, never()).search("default:session-1", new double[] {1}, 5, 0.3);
         assertThat(ctx.getMessages()).isEmpty();
     }
 
@@ -51,7 +51,7 @@ class UserMemoryRetrievalStageTest {
         UserMemoryStore store = mock(UserMemoryStore.class);
         double[] vector = new double[] {0.1, 0.2};
         when(embeddingClient.embed("我喜欢简洁代码")).thenReturn(Optional.of(vector));
-        when(store.search("session-1", vector, 5, 0.3)).thenReturn(List.of(
+        when(store.search("default:session-1", vector, 5, 0.3)).thenReturn(List.of(
             new UserMemoryHit("entry-1", UserMemoryCategory.PREFERENCE, "用户喜欢简洁代码", "用户说喜欢简洁代码", 0.9, 0.8)
         ));
         UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(embeddingClient, store, true, 5, 0.3);

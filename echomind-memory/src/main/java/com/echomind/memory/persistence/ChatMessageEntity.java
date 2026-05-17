@@ -25,7 +25,8 @@ import java.time.Instant;
     name = "echomind_chat_messages",
     indexes = {
         @Index(name = "idx_chat_msg_session_time", columnList = "session_id,timestamp"),
-        @Index(name = "idx_chat_msg_session_role", columnList = "session_id,role")
+        @Index(name = "idx_chat_msg_session_role", columnList = "session_id,role"),
+        @Index(name = "idx_chat_msg_user_session_time", columnList = "user_id,session_id,timestamp")
     }
 )
 @Getter
@@ -40,6 +41,10 @@ public class ChatMessageEntity {
     /** 所属会话 ID。 */
     @Column(name = "session_id", nullable = false, length = 128)
     private String sessionId;
+
+    /** 消息所属用户。旧数据默认归属 default。 */
+    @Column(name = "user_id", nullable = false, length = 128)
+    private String userId = "default";
 
     /** 消息角色：user / assistant / system / tool。 */
     @Column(nullable = false, length = 32)
@@ -70,6 +75,9 @@ public class ChatMessageEntity {
 
     @PrePersist
     void prePersist() {
+        if (userId == null || userId.isBlank()) {
+            userId = "default";
+        }
         if (timestamp == null) {
             timestamp = Instant.now();
         }

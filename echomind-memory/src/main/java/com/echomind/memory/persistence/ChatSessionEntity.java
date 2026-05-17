@@ -3,6 +3,7 @@ package com.echomind.memory.persistence;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.IdClass;
 import jakarta.persistence.Lob;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
@@ -20,11 +21,17 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "echomind_chat_sessions")
+@IdClass(ChatSessionId.class)
 @Getter
 @Setter
 public class ChatSessionEntity {
 
-    /** 会话唯一标识，通常来自前端 sessionId。 */
+    /** 会话所属用户。旧数据默认归属 default。 */
+    @Id
+    @Column(name = "user_id", nullable = false, length = 128)
+    private String userId = "default";
+
+    /** 会话标识，通常来自前端 sessionId，同一个值可在不同用户下复用。 */
     @Id
     @Column(name = "session_id", length = 128)
     private String sessionId;
@@ -61,6 +68,9 @@ public class ChatSessionEntity {
     @PrePersist
     void prePersist() {
         Instant now = Instant.now();
+        if (userId == null || userId.isBlank()) {
+            userId = "default";
+        }
         if (createdAt == null) {
             createdAt = now;
         }
@@ -72,6 +82,9 @@ public class ChatSessionEntity {
 
     @PreUpdate
     void preUpdate() {
+        if (userId == null || userId.isBlank()) {
+            userId = "default";
+        }
         updatedAt = Instant.now();
     }
 }

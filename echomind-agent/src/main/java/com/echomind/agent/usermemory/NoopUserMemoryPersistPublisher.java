@@ -10,4 +10,8 @@ public class NoopUserMemoryPersistPublisher implements UserMemoryPersistPublishe
     @Override
     public void publish(String sessionId, String agentId, List<AgentMessage> messages) {
     }
+
+    @Override
+    public void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
+    }
 }

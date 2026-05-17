@@ -6,6 +6,7 @@ import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.embedding.MemoryEmbeddingService;
 import com.echomind.memory.embedding.NoopMemoryVectorStore;
 import com.echomind.memory.persistence.ChatMessageRepository;
+import com.echomind.memory.persistence.ChatSessionId;
 import com.echomind.memory.persistence.ChatSessionRepository;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
 import com.echomind.memory.shortterm.WindowConfig;
@@ -59,10 +60,31 @@ class MemoryManagerTest {
         assertThat(memoryManager.getRecentMessages("session-1"))
             .extracting(AgentMessage::content)
             .containsExactly("第二条", "第三条");
-        assertThat(sessionRepository.findById("session-1"))
+        assertThat(sessionRepository.findById(new ChatSessionId("default", "session-1")))
             .get()
             .extracting(session -> session.getAgentId())
             .isEqualTo("agent-1");
+    }
+
+    @Test
+    void isolatesMysqlAndRecentCacheByUserAndSession() {
+        memoryManager.addMessage("user-a", "shared-session", "agent-1", AgentMessage.user("A 的消息"));
+        memoryManager.addMessage("user-b", "shared-session", "agent-1", AgentMessage.user("B 的消息"));
+
+        assertThat(memoryManager.getFullContext("user-a", "shared-session"))
+            .extracting(AgentMessage::content)
+            .containsExactly("A 的消息");
+        assertThat(memoryManager.getFullContext("user-b", "shared-session"))
+            .extracting(AgentMessage::content)
+            .containsExactly("B 的消息");
+        assertThat(memoryManager.listSessions("user-a"))
+            .extracting(com.echomind.common.model.SessionSummary::sessionId)
+            .containsExactly("shared-session");
+        assertThat(memoryManager.listSessions("user-b"))
+            .extracting(com.echomind.common.model.SessionSummary::sessionId)
+            .containsExactly("shared-session");
+        assertThat(sessionRepository.findById(new ChatSessionId("user-a", "shared-session"))).isPresent();
+        assertThat(sessionRepository.findById(new ChatSessionId("user-b", "shared-session"))).isPresent();
     }
 
     @Test

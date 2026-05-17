@@ -27,6 +27,11 @@ public class RabbitChatMemoryPersistPublisher implements ChatMemoryPersistPublis
 
     @Override
     public void publish(String sessionId, String agentId, List<AgentMessage> messages) {
+        publish(null, sessionId, agentId, messages);
+    }
+
+    @Override
+    public void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
         if (!enabled || rabbitTemplate == null || exchangeName == null || exchangeName.isBlank()
             || sessionId == null || sessionId.isBlank() || messages == null || messages.isEmpty()) {
             return;
@@ -35,7 +40,7 @@ public class RabbitChatMemoryPersistPublisher implements ChatMemoryPersistPublis
             int shardIndex = ChatMemoryShardSupport.shardIndex(sessionId, shardCount);
             String routingKey = ChatMemoryShardSupport.routingKey(shardIndex);
             rabbitTemplate.convertAndSend(exchangeName, routingKey,
-                new ChatMemoryPersistEvent(sessionId, agentId, messages));
+                new ChatMemoryPersistEvent(userId, sessionId, agentId, messages));
         } catch (Exception e) {
             log.warn("Failed to publish chat memory persist event sessionId={}: {}", sessionId, e.getMessage());
         }

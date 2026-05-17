@@ -21,6 +21,16 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_skills (
 
 CREATE INDEX IF NOT EXISTS idx_skill_state ON echomind.echomind_skills(state);
 
+-- 用户账号表：第一阶段用于普通聊天会话隔离
+CREATE TABLE IF NOT EXISTS echomind.echomind_users (
+    user_id VARCHAR(128) PRIMARY KEY,
+    username VARCHAR(128) NOT NULL UNIQUE,
+    password_hash VARCHAR(512) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 创建 Agent 表（生产环境 ddl-auto=validate，需要初始化脚本兜底）
 CREATE TABLE IF NOT EXISTS echomind.echomind_agents (
     agent_id VARCHAR(128) PRIMARY KEY,
@@ -34,7 +44,8 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_agents (
 
 -- 会话记忆主表：完整历史事实来源的一部分
 CREATE TABLE IF NOT EXISTS echomind.echomind_chat_sessions (
-    session_id VARCHAR(128) PRIMARY KEY,
+    user_id VARCHAR(128) NOT NULL DEFAULT 'default',
+    session_id VARCHAR(128) NOT NULL,
     agent_id VARCHAR(128),
     title VARCHAR(255),
     summary LONGTEXT,
@@ -42,13 +53,22 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_chat_sessions (
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     last_activity DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-    INDEX idx_chat_session_last_activity (last_activity)
+    PRIMARY KEY (user_id, session_id),
+    INDEX idx_chat_session_last_activity (last_activity),
+    INDEX idx_chat_session_user_activity (user_id, last_activity)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE echomind.echomind_chat_sessions
+    ADD COLUMN IF NOT EXISTS user_id VARCHAR(128) NOT NULL DEFAULT 'default';
+
+CREATE INDEX IF NOT EXISTS idx_chat_session_user_activity
+    ON echomind.echomind_chat_sessions(user_id, last_activity);
 
 -- 会话消息表：前端历史记录从这里完整读取
 CREATE TABLE IF NOT EXISTS echomind.echomind_chat_messages (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     session_id VARCHAR(128) NOT NULL,
+    user_id VARCHAR(128) NOT NULL DEFAULT 'default',
     role VARCHAR(32) NOT NULL,
     content LONGTEXT,
     timestamp DATETIME(6) NOT NULL,
@@ -56,8 +76,15 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_chat_messages (
     attachments_json LONGTEXT,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     INDEX idx_chat_msg_session_time (session_id, timestamp),
-    INDEX idx_chat_msg_session_role (session_id, role)
+    INDEX idx_chat_msg_session_role (session_id, role),
+    INDEX idx_chat_msg_user_session_time (user_id, session_id, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE echomind.echomind_chat_messages
+    ADD COLUMN IF NOT EXISTS user_id VARCHAR(128) NOT NULL DEFAULT 'default';
+
+CREATE INDEX IF NOT EXISTS idx_chat_msg_user_session_time
+    ON echomind.echomind_chat_messages(user_id, session_id, timestamp);
 
 -- 会话向量表：MySQL 作为 Redis Stack 向量索引的持久备份和兜底检索
 CREATE TABLE IF NOT EXISTS echomind.echomind_memory_embeddings (

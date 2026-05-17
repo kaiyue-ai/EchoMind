@@ -29,9 +29,9 @@ class ChatMemoryPersistConsumerTest {
         consumer.onPersistEvent(new ChatMemoryPersistEvent("session-1", "default", messages));
 
         var ordered = inOrder(memoryManager, publisher);
-        ordered.verify(memoryManager).addMessage("session-1", "default", messages.get(0));
-        ordered.verify(memoryManager).addMessage("session-1", "default", messages.get(1));
-        ordered.verify(publisher).publish("session-1", "default", messages);
+        ordered.verify(memoryManager).addMessage("default", "session-1", "default", messages.get(0));
+        ordered.verify(memoryManager).addMessage("default", "session-1", "default", messages.get(1));
+        ordered.verify(publisher).publish("default", "session-1", "default", messages);
     }
 
     @Test
@@ -42,7 +42,7 @@ class ChatMemoryPersistConsumerTest {
 
         consumer.onPersistEvent(new ChatMemoryPersistEvent(" ", "default", List.of(AgentMessage.user("x"))));
 
-        verify(memoryManager, never()).addMessage(any(), any(), any());
-        verify(publisher, never()).publish(any(), any(), any());
+        verify(memoryManager, never()).addMessage(any(), any(), any(), any());
+        verify(publisher, never()).publish(any(), any(), any(), any());
     }
 }

@@ -10,6 +10,15 @@ const api = axios.create({
   timeout: 60000
 })
 
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('echomind_auth_token')
+  if (token) {
+    config.headers = config.headers || {}
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
 function parseError(err, fallback = '请求失败') {
   return err.response?.data?.error || err.response?.data?.message || err.message || fallback
 }
@@ -25,6 +34,14 @@ api.interceptors.response.use(
 
 export default {
   parseError,
+  auth: {
+    login: (username, password) =>
+      api.post('/auth/login', { username, password }).then(r => r.data),
+    register: (username, password) =>
+      api.post('/auth/register', { username, password }).then(r => r.data),
+    me: () => api.get('/auth/me').then(r => r.data),
+    logout: () => api.post('/auth/logout').then(r => r.data)
+  },
   // ===== 聊天接口 =====
   chat: {
     /** 异步发送消息：立即拿到 requestId，结果通过 SSE 获取 */
@@ -38,7 +55,9 @@ export default {
     /** 订阅异步结果 SSE 流 */
     streamResult: (requestId) =>
       new Promise((resolve, reject) => {
-        const es = new EventSource(`/api/chat/stream/${requestId}`)
+        const token = localStorage.getItem('echomind_auth_token')
+        const query = token ? `?token=${encodeURIComponent(token)}` : ''
+        const es = new EventSource(`/api/chat/stream/${requestId}${query}`)
         es.addEventListener('result', (e) => {
           es.close()
           resolve(JSON.parse(e.data))
@@ -58,9 +77,12 @@ export default {
      * EventSource 只支持 GET，所以这里使用 fetch + ReadableStream。
      */
     stream: (agentId, message, sessionId, modelId, attachments = [], onToken, onDone, onError, onMeta) => {
+      const headers = { 'Content-Type': 'application/json' }
+      const token = localStorage.getItem('echomind_auth_token')
+      if (token) headers.Authorization = `Bearer ${token}`
       fetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ agentId: agentId || 'default', message, sessionId, modelId, attachments })
       }).then(response => {
         if (!response.ok) {

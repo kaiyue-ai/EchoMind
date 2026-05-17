@@ -10,6 +10,7 @@ import java.util.List;
  */
 public record ChatRequest(
     String requestId,
+    String userId,
     String agentId,
     String sessionId,
     String message,
@@ -18,6 +19,12 @@ public record ChatRequest(
 ) {
     /** 兼容旧异步请求：没有附件时仍可按原字段创建。 */
     public ChatRequest(String requestId, String agentId, String sessionId, String message, String modelId) {
-        this(requestId, agentId, sessionId, message, modelId, null);
+        this(requestId, null, agentId, sessionId, message, modelId, null);
+    }
+
+    /** 兼容旧异步请求：没有用户身份时由消费端回退 default 用户。 */
+    public ChatRequest(String requestId, String agentId, String sessionId, String message, String modelId,
+                       List<MessageAttachment> attachments) {
+        this(requestId, null, agentId, sessionId, message, modelId, attachments);
     }
 }

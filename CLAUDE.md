@@ -46,7 +46,7 @@ Controller / CLI
 - `AgentFactory`、`SkillRegistry`、`CapabilityRegistry` 只是运行时索引。
 - MySQL 保存业务事实；Redis Stack 保存缓存和可重建向量索引。
 - 主项目只接入外部 MCP Server，不暴露自身 MCP Server。
-- 对话记忆按 `sessionId` 隔离。
+- 普通聊天记忆按 `userId + sessionId` 隔离；Agent、Skill、MCP、Team 仍是全局资源。
 
 ## 常用命令
 

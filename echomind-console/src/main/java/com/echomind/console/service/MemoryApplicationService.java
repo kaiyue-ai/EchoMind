@@ -1,6 +1,7 @@
 package com.echomind.console.service;
 
 import com.echomind.common.model.AgentMessage;
+import com.echomind.console.auth.AuthContext;
 import com.echomind.memory.MemoryManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -11,8 +12,8 @@ import java.util.Map;
 /**
  * 记忆应用服务。
  *
- * <p>当前记忆按 sessionId 隔离。Controller 只传入 sessionId，完整历史、近期缓存、
- * 摘要和向量检索都由 MemoryManager 统一处理。</p>
+ * <p>普通聊天记忆按当前认证用户和 sessionId 隔离。Controller 不接收可信 userId，
+ * 完整历史、近期缓存、摘要和向量检索都由 MemoryManager 统一处理。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -22,12 +23,12 @@ public class MemoryApplicationService {
 
     public List<AgentMessage> getMemory(String sessionId) {
         validateSessionId(sessionId);
-        return memoryManager.getFullContext(sessionId);
+        return memoryManager.getFullContext(AuthContext.userId(), sessionId);
     }
 
     public Map<String, String> clearMemory(String sessionId) {
         validateSessionId(sessionId);
-        memoryManager.clearSession(sessionId);
+        memoryManager.clearSession(AuthContext.userId(), sessionId);
         return Map.of("status", "cleared", "sessionId", sessionId);
     }
 

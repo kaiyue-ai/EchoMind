@@ -49,6 +49,13 @@ export const useSessionStore = defineStore('sessions', {
     },
     setActive(sessionId) {
       this.activeSessionId = sessionId || null
+    },
+    reset() {
+      this.sessions = []
+      this.loading = false
+      this.deletingId = null
+      this.activeSessionId = null
+      this.error = null
     }
   }
 })

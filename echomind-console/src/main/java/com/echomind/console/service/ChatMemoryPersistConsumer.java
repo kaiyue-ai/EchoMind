@@ -27,10 +27,16 @@ public class ChatMemoryPersistConsumer {
             || event.messages() == null || event.messages().isEmpty()) {
             return;
         }
+        String userId = normalizeUserId(event.userId());
         for (var message : event.messages()) {
-            memoryManager.addMessage(event.sessionId(), event.agentId(), message);
+            memoryManager.addMessage(userId, event.sessionId(), event.agentId(), message);
         }
-        userMemoryPublisher.publish(event.sessionId(), event.agentId(), event.messages());
-        log.debug("Persisted chat memory event sessionId={} messages={}", event.sessionId(), event.messages().size());
+        userMemoryPublisher.publish(userId, event.sessionId(), event.agentId(), event.messages());
+        log.debug("Persisted chat memory event userId={} sessionId={} messages={}",
+            userId, event.sessionId(), event.messages().size());
+    }
+
+    private String normalizeUserId(String userId) {
+        return userId == null || userId.isBlank() ? "default" : userId;
     }
 }

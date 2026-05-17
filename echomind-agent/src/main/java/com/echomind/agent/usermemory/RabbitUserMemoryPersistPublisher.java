@@ -23,12 +23,17 @@ public class RabbitUserMemoryPersistPublisher implements UserMemoryPersistPublis
 
     @Override
     public void publish(String sessionId, String agentId, List<AgentMessage> messages) {
+        publish(null, sessionId, agentId, messages);
+    }
+
+    @Override
+    public void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
         if (!enabled || rabbitTemplate == null || queueName == null || queueName.isBlank()
             || sessionId == null || sessionId.isBlank() || messages == null || messages.isEmpty()) {
             return;
         }
         try {
-            rabbitTemplate.convertAndSend(queueName, new UserMemoryEvent(sessionId, agentId, messages));
+            rabbitTemplate.convertAndSend(queueName, new UserMemoryEvent(userId, sessionId, agentId, messages));
         } catch (Exception e) {
             log.warn("Failed to publish user memory event sessionId={}: {}", sessionId, e.getMessage());
         }

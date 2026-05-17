@@ -8,4 +8,8 @@ import java.util.List;
 public interface ChatMemoryPersistPublisher {
 
     void publish(String sessionId, String agentId, List<AgentMessage> messages);
+
+    default void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
+        publish(sessionId, agentId, messages);
+    }
 }

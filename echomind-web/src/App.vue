@@ -1,5 +1,6 @@
 <template>
   <WorkbenchShell
+    v-if="route.path !== '/login'"
     :sessions="sessions"
     :sessions-loading="sessionsLoading"
     :deleting-session-id="deletingId"
@@ -9,6 +10,7 @@
     @open-session="openSession"
     @delete-session="deleteSession"
   />
+  <router-view v-else />
 </template>
 
 <script setup>
@@ -19,11 +21,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import WorkbenchShell from './components/workbench/WorkbenchShell.vue'
 import { useChatStore } from './stores/chat'
 import { useSessionStore } from './stores/sessions'
+import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
 const router = useRouter()
 const chatStore = useChatStore()
 const sessionStore = useSessionStore()
+const authStore = useAuthStore()
 const { sessions, loading: sessionsLoading, deletingId, activeSessionId } = storeToRefs(sessionStore)
 
 watch(() => route.query.sessionId, (sid) => {
@@ -72,5 +76,20 @@ async function deleteSession(session) {
 provide('refreshSessions', loadSessions)
 provide('deleteSession', deleteSession)
 
-onMounted(loadSessions)
+onMounted(() => {
+  if (route.path !== '/login') {
+    loadSessions()
+  }
+})
+
+watch(() => authStore.user?.userId, async (userId, previousUserId) => {
+  if (!userId || userId === previousUserId || route.path === '/login') return
+  await loadSessions()
+})
+
+watch(() => route.path, async (path, previousPath) => {
+  if (path !== '/login' && previousPath === '/login' && authStore.isAuthenticated) {
+    await loadSessions()
+  }
+})
 </script>

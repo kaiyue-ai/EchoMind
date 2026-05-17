@@ -29,7 +29,7 @@ class MemoryPersistStageTest {
         stage.process(ctx);
 
         verify(memoryManager, never()).addMessage(any(), any(), any(AgentMessage.class));
-        verify(publisher, never()).publish(any(), any(), any());
+        verify(publisher, never()).publish(any(), any(), any(), any());
     }
 
     @Test
@@ -46,6 +46,6 @@ class MemoryPersistStageTest {
         stage.process(ctx);
 
         verify(memoryManager, never()).addMessage(any(), any(), any(AgentMessage.class));
-        verify(publisher).publish(eq("session-1"), eq("default"), any());
+        verify(publisher).publish(eq("default"), eq("session-1"), eq("default"), any());
     }
 }

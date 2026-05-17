@@ -11,4 +11,9 @@ public class NoopChatMemoryPersistPublisher implements ChatMemoryPersistPublishe
     public void publish(String sessionId, String agentId, List<AgentMessage> messages) {
         // no-op
     }
+
+    @Override
+    public void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
+        // no-op
+    }
 }

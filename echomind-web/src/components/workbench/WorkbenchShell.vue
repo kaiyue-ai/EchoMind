@@ -2,7 +2,11 @@
   <div :class="['workbench-shell', { 'sidebar-collapsed': sidebarCollapsed }]">
     <aside class="workbench-sidebar">
       <div class="brand-row" @click="goHome">
-        <div class="brand-mark">EM</div>
+        <div class="brand-mark miku-mark" aria-label="初音未来头像">
+          <span class="miku-hair left"></span>
+          <span class="miku-hair right"></span>
+          <span class="miku-face"></span>
+        </div>
         <div v-if="!sidebarCollapsed" class="brand-copy">
           <strong>EchoMind</strong>
           <span>Agent Workbench</span>
@@ -41,8 +45,11 @@
       <footer class="sidebar-foot">
         <div v-if="!sidebarCollapsed" class="system-status">
           <span class="live-dot"></span>
-          <span>System Online</span>
+          <span>{{ authStore.user?.username || 'System Online' }}</span>
         </div>
+        <el-button text title="退出登录" @click="logout">
+          <el-icon><SwitchButton /></el-icon>
+        </el-button>
         <el-button text :title="sidebarCollapsed ? '展开侧栏' : '折叠侧栏'" @click="uiStore.toggleSidebar()">
           <el-icon><component :is="sidebarCollapsed ? Expand : Fold" /></el-icon>
         </el-button>
@@ -71,9 +78,11 @@ import {
   Expand,
   Fold,
   Grid,
+  SwitchButton,
   UserFilled
 } from '@element-plus/icons-vue'
 import { useUiStore } from '../../stores/ui'
+import { useAuthStore } from '../../stores/auth'
 import SessionList from './SessionList.vue'
 
 defineProps({
@@ -88,6 +97,7 @@ defineEmits(['refreshSessions', 'newSession', 'openSession', 'deleteSession'])
 const route = useRoute()
 const router = useRouter()
 const uiStore = useUiStore()
+const authStore = useAuthStore()
 const { sidebarCollapsed } = storeToRefs(uiStore)
 const currentRoute = computed(() => route.path)
 
@@ -101,5 +111,10 @@ const navItems = [
 
 function goHome() {
   router.push('/chat')
+}
+
+async function logout() {
+  await authStore.logout()
+  router.replace('/login')
 }
 </script>

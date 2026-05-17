@@ -22,6 +22,7 @@ import lombok.Setter;
 public class PipelineContext {
 
     private String sessionId;
+    private String userId = "default";
     private String agentId;
     private String modelId;
     private String userMessage;
@@ -47,8 +48,10 @@ public class PipelineContext {
         return modelAttachments.isEmpty() ? attachments : modelAttachments;
     }
 
-    /** 记忆按一次对话隔离；sessionId 就是当前对话的记忆槽。 */
+    /** 记忆按用户和会话隔离，避免不同用户碰巧使用同一个 sessionId 时共享上下文。 */
     public String getMemoryKey() {
-        return sessionId != null && !sessionId.isBlank() ? sessionId : agentId;
+        String owner = userId != null && !userId.isBlank() ? userId : "default";
+        String conversation = sessionId != null && !sessionId.isBlank() ? sessionId : agentId;
+        return owner + ":" + conversation;
     }
 }

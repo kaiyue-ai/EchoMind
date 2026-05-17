@@ -14,7 +14,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
-/** 按 sessionId 召回用户长期画像，并注入本轮模型上下文。 */
+/** 按用户隔离后的 memoryKey 召回用户长期画像，并注入本轮模型上下文。 */
 @Slf4j
 @RequiredArgsConstructor
 public class UserMemoryRetrievalStage implements PipelineStage {
@@ -32,20 +32,20 @@ public class UserMemoryRetrievalStage implements PipelineStage {
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
-        if (!enabled || vectorStore == null || topK <= 0 || ctx.getSessionId() == null || ctx.getSessionId().isBlank()) {
+        if (!enabled || vectorStore == null || topK <= 0 || ctx.getMemoryKey() == null || ctx.getMemoryKey().isBlank()) {
             log.debug("Skip user memory retrieval enabled={} store={} topK={} sessionId={}",
-                enabled, vectorStore == null ? "null" : vectorStore.getClass().getSimpleName(), topK, ctx.getSessionId());
+                enabled, vectorStore == null ? "null" : vectorStore.getClass().getSimpleName(), topK, ctx.getMemoryKey());
             return ctx;
         }
         return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, ctx.getUserMessage())
             .map(vector -> {
-                List<UserMemoryHit> hits = vectorStore.search(ctx.getSessionId(), vector, topK, minConfidence);
+                List<UserMemoryHit> hits = vectorStore.search(ctx.getMemoryKey(), vector, topK, minConfidence);
                 log.debug("User memory retrieval sessionId={} store={} hits={}",
-                    ctx.getSessionId(), vectorStore.getClass().getSimpleName(), hits.size());
+                    ctx.getMemoryKey(), vectorStore.getClass().getSimpleName(), hits.size());
                 return injectHits(ctx, hits);
             })
             .orElseGet(() -> {
-                log.debug("User memory retrieval sessionId={} skipped: query embedding unavailable", ctx.getSessionId());
+                log.debug("User memory retrieval sessionId={} skipped: query embedding unavailable", ctx.getMemoryKey());
                 return ctx;
             });
     }

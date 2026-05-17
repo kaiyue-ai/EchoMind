@@ -1,15 +1,16 @@
 # 当前进度
 
-最后更新：2026-05-11
+最后更新：2026-05-17
 
 ## 已完成
 
 - 项目已形成多模块结构：LLM、Memory、MCP、Skill、Agent、Agent Team、Console、Boot、Web 分开维护。
 - 主项目已从“暴露 MCP Server”调整为“接入外部 MCP Server”。
 - Skill 和外部 MCP 工具统一进入 `CapabilityRegistry`，供 Agent 对话时使用。
-- 对话记忆已改回按 `sessionId` 隔离，不再按 Agent 共享记忆。
+- 对话记忆已改为按 `userId + sessionId` 隔离，不再按 Agent 共享记忆。
+- 已新增第一阶段用户登录和认证上下文：无 token 兼容请求归属 `default` 用户。
 - MySQL 保存完整会话历史，Redis Stack 承担近期上下文、向量检索和用户长期画像。
-- 已新增用户长期画像方案：主应用按 `sessionId` 从 Redis Stack 召回画像；`echomind-user-memory` 通过 RabbitMQ 异步提取画像并写 Redis Stack。
+- 已新增用户长期画像方案：主应用按 `userId + sessionId` 从 Redis Stack 召回画像；`echomind-user-memory` 通过 RabbitMQ 异步提取画像并写 Redis Stack。
 - Agent 知识库已支持文档上传、切片、向量化、检索和前端展示。
 - 前端聊天状态已通过 Pinia 持有，避免普通页面跳转导致智能对话重置。
 - 前端已支持 Markdown 渲染和代码块一键复制。
@@ -17,6 +18,7 @@
 - 阿里云 OSS 已接入上传文件和图片历史存储路径。
 - 阿里云百炼多模态模型已纳入模型配置，模型能力中用 `vision` 区分是否支持图片。
 - Docker Compose 默认部署业务依赖和前后端，不再让后端启动依赖 OpenTelemetry Collector / SkyWalking。
+- 普通聊天会话列表、历史查询、删除、Redis 最近上下文、异步记忆写入和用户长期画像已按当前用户隔离；Agent、Skill、MCP、Team 仍为全局资源。
 
 ## 进行中
 

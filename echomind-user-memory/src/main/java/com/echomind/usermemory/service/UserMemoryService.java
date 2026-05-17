@@ -31,11 +31,12 @@ public class UserMemoryService {
         if (!properties.isEnabled() || event == null || event.sessionId() == null || event.sessionId().isBlank()) {
             return;
         }
+        String memoryKey = memoryKey(event.userId(), event.sessionId());
         List<UserMemoryHit> existing = vectorStore.listBySession(
-            event.sessionId(),
+            memoryKey,
             properties.getExistingProfileLimit()
         );
-        List<ExtractedUserMemory> extracted = extractor.extract(event.sessionId(), existing, event.messages());
+        List<ExtractedUserMemory> extracted = extractor.extract(memoryKey, existing, event.messages());
         if (extracted.isEmpty()) {
             return;
         }
@@ -67,9 +68,9 @@ public class UserMemoryService {
             if (embedding.isEmpty()) {
                 continue;
             }
-            duplicates.forEach(hit -> vectorStore.deleteEntry(event.sessionId(), hit.entryId()));
+            duplicates.forEach(hit -> vectorStore.deleteEntry(memoryKey, hit.entryId()));
             vectorStore.save(new UserMemoryEntry(
-                event.sessionId(),
+                memoryKey,
                 UUID.randomUUID().toString(),
                 item.category(),
                 item.content(),
@@ -79,7 +80,12 @@ public class UserMemoryService {
             ));
             saved++;
         }
-        log.info("Saved {} user memory entries sessionId={} skippedDuplicates={}", saved, event.sessionId(), skipped);
+        log.info("Saved {} user memory entries sessionId={} skippedDuplicates={}", saved, memoryKey, skipped);
+    }
+
+    private String memoryKey(String userId, String sessionId) {
+        String owner = userId == null || userId.isBlank() ? "default" : userId;
+        return sessionId != null && sessionId.startsWith(owner + ":") ? sessionId : owner + ":" + sessionId;
     }
 
     private String signature(com.echomind.memory.usermemory.UserMemoryCategory category, String content) {

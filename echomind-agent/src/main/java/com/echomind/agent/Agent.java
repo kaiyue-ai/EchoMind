@@ -6,10 +6,10 @@ import com.echomind.agent.pipeline.stages.MemoryPersistStage;
 import com.echomind.agent.pipeline.stages.ResultAggregationStage;
 
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 
 /**
@@ -20,6 +20,7 @@ import reactor.core.publisher.Flux;
  */
 @Getter
 @RequiredArgsConstructor
+@Slf4j
 public class Agent {
 
     private final String agentId;
@@ -55,7 +56,12 @@ public class Agent {
                 if (streamCtx.isMemoryPersistenceEnabled()) {
                     MemoryPersistStage memoryStage = pipeline.getStage(MemoryPersistStage.class);
                     if (memoryStage != null) {
-                        CompletableFuture.runAsync(() -> memoryStage.process(streamCtx));
+                        try {
+                            memoryStage.process(streamCtx);
+                        } catch (RuntimeException e) {
+                            log.warn("Failed to publish streaming chat memory session={}: {}",
+                                streamCtx.getSessionId(), e.getMessage());
+                        }
                     }
                 }
             });
