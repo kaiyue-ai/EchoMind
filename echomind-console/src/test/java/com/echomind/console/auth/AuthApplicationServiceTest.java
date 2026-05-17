@@ -2,14 +2,21 @@ package com.echomind.console.auth;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.echomind.skill.storage.ObjectStorageService;
+import com.echomind.skill.storage.StoredObject;
+
+import java.nio.file.Path;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AuthApplicationServiceTest {
@@ -64,6 +71,79 @@ class AuthApplicationServiceTest {
     }
 
     @Test
+    void uploadAvatarStoresFileAndUpdatesCurrentUser() throws Exception {
+        UserAccountRepository repository = inMemoryUserAccountRepository();
+        ObjectStorageService storageService = mock(ObjectStorageService.class);
+        when(storageService.putObject(anyString(), any(Path.class), anyString())).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0, String.class);
+            return new StoredObject("oss://bucket/" + key, "bucket", key, "https://cdn.example.com/" + key, 12, "image/png");
+        });
+        when(storageService.supports(anyString())).thenReturn(true);
+        when(storageService.urlFor(anyString(), any())).thenReturn("https://cdn.example.com/avatar.png");
+        AuthApplicationService service = service(repository, new PasswordHasher(), new AuthTokenService("test-secret", 3600), storageService);
+        AuthApplicationService.AuthResponse response =
+            service.register(new AuthApplicationService.AuthRequest("AvatarUser", "s3cret"));
+        AuthContext.set(new AuthUser(response.user().userId(), "avataruser", true));
+
+        try {
+            AuthApplicationService.UserView user = service.uploadAvatar(new MockMultipartFile(
+                "file", "avatar.png", "image/png", new byte[] {1, 2, 3}
+            ));
+
+            assertThat(user.avatarUri()).startsWith("oss://bucket/avatars/" + response.user().userId());
+            assertThat(user.avatarUrl()).isEqualTo("https://cdn.example.com/avatar.png");
+            verify(storageService).putObject(org.mockito.ArgumentMatchers.startsWith("avatars/" + response.user().userId()),
+                any(Path.class), org.mockito.ArgumentMatchers.eq("image/png"));
+        } finally {
+            AuthContext.clear();
+        }
+    }
+
+    @Test
+    void uploadAvatarRejectsFilesOverTwoMb() {
+        UserAccountRepository repository = inMemoryUserAccountRepository();
+        AuthApplicationService service = service(repository, new PasswordHasher(), new AuthTokenService("test-secret", 3600));
+        AuthApplicationService.AuthResponse response =
+            service.register(new AuthApplicationService.AuthRequest("LargeAvatar", "s3cret"));
+        AuthContext.set(new AuthUser(response.user().userId(), "largeavatar", true));
+
+        try {
+            byte[] tooLarge = new byte[2 * 1024 * 1024 + 1];
+            assertThatThrownBy(() -> service.uploadAvatar(new MockMultipartFile(
+                "file", "avatar.png", "image/png", tooLarge
+            )))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("头像不能超过 2MB");
+        } finally {
+            AuthContext.clear();
+        }
+    }
+
+    @Test
+    void uploadAvatarHidesStorageProviderDetailsOnFailure() throws Exception {
+        UserAccountRepository repository = inMemoryUserAccountRepository();
+        ObjectStorageService storageService = mock(ObjectStorageService.class);
+        when(storageService.putObject(anyString(), any(Path.class), anyString()))
+            .thenThrow(new java.io.IOException("internal credential details should stay server-side"));
+        AuthApplicationService service = service(repository, new PasswordHasher(), new AuthTokenService("test-secret", 3600), storageService);
+        AuthApplicationService.AuthResponse response =
+            service.register(new AuthApplicationService.AuthRequest("FailAvatar", "s3cret"));
+        AuthContext.set(new AuthUser(response.user().userId(), "failavatar", true));
+
+        try {
+            assertThatThrownBy(() -> service.uploadAvatar(new MockMultipartFile(
+                "file", "avatar.png", "image/png", new byte[] {1, 2, 3}
+            )))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("头像上传失败，请检查 OSS 配置或稍后重试")
+                .hasMessageNotContaining("credential")
+                .hasMessageNotContaining("server-side");
+        } finally {
+            AuthContext.clear();
+        }
+    }
+
+    @Test
     void requireActiveUserRejectsDisabledOrMissingUsers() {
         UserAccountRepository repository = inMemoryUserAccountRepository();
         AuthApplicationService service = service(
@@ -105,7 +185,14 @@ class AuthApplicationServiceTest {
     private static AuthApplicationService service(UserAccountRepository repository,
                                                   PasswordHasher passwordHasher,
                                                   AuthTokenService tokenService) {
-        AuthApplicationService service = new AuthApplicationService(repository, passwordHasher, tokenService);
+        return service(repository, passwordHasher, tokenService, mock(ObjectStorageService.class));
+    }
+
+    private static AuthApplicationService service(UserAccountRepository repository,
+                                                  PasswordHasher passwordHasher,
+                                                  AuthTokenService tokenService,
+                                                  ObjectStorageService storageService) {
+        AuthApplicationService service = new AuthApplicationService(repository, passwordHasher, tokenService, storageService);
         ReflectionTestUtils.setField(service, "defaultUsername", "admin");
         ReflectionTestUtils.setField(service, "defaultPassword", "admin123");
         return service;
@@ -122,6 +209,12 @@ class AuthApplicationServiceTest {
             UserAccountStatus status = invocation.getArgument(1, UserAccountStatus.class);
             return byUsername.values().stream()
                 .filter(user -> userId.equals(user.getUserId()) && status == user.getStatus())
+                .findFirst();
+        });
+        when(repository.findById(any())).thenAnswer(invocation -> {
+            String userId = invocation.getArgument(0, String.class);
+            return byUsername.values().stream()
+                .filter(user -> userId.equals(user.getUserId()))
                 .findFirst();
         });
         when(repository.save(any(UserAccountEntity.class))).thenAnswer(invocation -> {

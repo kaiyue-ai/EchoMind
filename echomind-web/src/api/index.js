@@ -40,7 +40,12 @@ export default {
     register: (username, password) =>
       api.post('/auth/register', { username, password }).then(r => r.data),
     me: () => api.get('/auth/me').then(r => r.data),
-    logout: () => api.post('/auth/logout').then(r => r.data)
+    logout: () => api.post('/auth/logout').then(r => r.data),
+    uploadAvatar: (file) => {
+      const form = new FormData()
+      form.append('file', file)
+      return api.post('/auth/avatar', form).then(r => r.data)
+    }
   },
   // ===== 聊天接口 =====
   chat: {

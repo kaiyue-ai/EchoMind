@@ -16,16 +16,16 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_skills (
     jar_path VARCHAR(255),
     created_at DATETIME(6),
     updated_at DATETIME(6),
+    INDEX idx_skill_state (state),
     CONSTRAINT uq_skill_name_version UNIQUE (name, version)
 ) ENGINE=InnoDB;
-
-CREATE INDEX IF NOT EXISTS idx_skill_state ON echomind.echomind_skills(state);
 
 -- 用户账号表：第一阶段用于普通聊天会话隔离
 CREATE TABLE IF NOT EXISTS echomind.echomind_users (
     user_id VARCHAR(128) PRIMARY KEY,
     username VARCHAR(128) NOT NULL UNIQUE,
     password_hash VARCHAR(512) NOT NULL,
+    avatar_uri VARCHAR(512),
     status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
@@ -58,12 +58,6 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_chat_sessions (
     INDEX idx_chat_session_user_activity (user_id, last_activity)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE echomind.echomind_chat_sessions
-    ADD COLUMN IF NOT EXISTS user_id VARCHAR(128) NOT NULL DEFAULT 'default';
-
-CREATE INDEX IF NOT EXISTS idx_chat_session_user_activity
-    ON echomind.echomind_chat_sessions(user_id, last_activity);
-
 -- 会话消息表：前端历史记录从这里完整读取
 CREATE TABLE IF NOT EXISTS echomind.echomind_chat_messages (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -79,12 +73,6 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_chat_messages (
     INDEX idx_chat_msg_session_role (session_id, role),
     INDEX idx_chat_msg_user_session_time (user_id, session_id, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-ALTER TABLE echomind.echomind_chat_messages
-    ADD COLUMN IF NOT EXISTS user_id VARCHAR(128) NOT NULL DEFAULT 'default';
-
-CREATE INDEX IF NOT EXISTS idx_chat_msg_user_session_time
-    ON echomind.echomind_chat_messages(user_id, session_id, timestamp);
 
 -- 会话向量表：MySQL 作为 Redis Stack 向量索引的持久备份和兜底检索
 CREATE TABLE IF NOT EXISTS echomind.echomind_memory_embeddings (

@@ -268,6 +268,7 @@ npm run dev
 | `POST` | `/api/auth/register` | 注册普通登录用户 |
 | `POST` | `/api/auth/logout` | 登出占位接口，前端清理本地 token |
 | `GET` | `/api/auth/me` | 查询当前认证用户；无 token 时返回 default 兼容用户 |
+| `POST` | `/api/auth/avatar` | 上传当前用户头像，图片进入对象存储，大小不超过 2MB |
 | `POST` | `/api/chat` | 异步发送消息，返回 requestId 和 sessionId |
 | `GET` | `/api/chat/stream/{requestId}` | 订阅异步最终结果 SSE |
 | `POST` | `/api/chat/sync` | 同步执行 Agent 并返回完整回复 |
@@ -303,6 +304,8 @@ npm run dev
 聊天、会话列表、历史查询、会话删除和 `/api/memory/{sessionId}` 都以后端认证上下文中的用户为准；
 前端或调用方不需要也不能提交可信 `userId`。默认登录账号可通过
 `ECHOMIND_AUTH_DEFAULT_USERNAME` / `ECHOMIND_AUTH_DEFAULT_PASSWORD` 配置，未配置时为 `admin` / `admin123`。
+用户头像 URI 保存到 MySQL `echomind_users.avatar_uri`，文件经 `ObjectStorageService` 写入 OSS 或本地兜底存储，
+`/api/auth/me` 返回可展示的短期 URL。
 
 ## CLI 命令
 

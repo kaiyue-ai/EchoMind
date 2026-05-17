@@ -229,8 +229,8 @@ public class EchoMindProperties {
     /**
      * 对象存储配置。
      *
-     * <p>生产环境建议 mode=oss，并通过环境变量注入 endpoint、AccessKeyID、
-     * AccessKeySecret 和 bucket；开发测试环境可以保持 local。</p>
+     * <p>生产环境建议 mode=oss，并通过环境变量注入 endpoint、bucket 和阿里云
+     * AccessKey；开发测试环境可以保持 local。</p>
      */
     @Data
     public static class Storage {
@@ -240,8 +240,8 @@ public class EchoMindProperties {
         private String localDir = "./data/objects/";
         /** OSS Endpoint，例如 https://oss-cn-hangzhou.aliyuncs.com。 */
         private String endpoint;
-        /** OSS Bucket，默认按用户要求使用 my-dev-oss。 */
-        private String bucket = "my-dev-oss";
+        /** OSS Bucket，默认按部署环境使用 echo-mind2144。 */
+        private String bucket = "echo-mind2144";
         /** OSS AccessKey ID。 */
         private String accessKeyId;
         /** OSS AccessKey Secret。 */

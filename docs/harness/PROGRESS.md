@@ -19,6 +19,7 @@
 - 阿里云百炼多模态模型已纳入模型配置，模型能力中用 `vision` 区分是否支持图片。
 - Docker Compose 默认部署业务依赖和前后端，不再让后端启动依赖 OpenTelemetry Collector / SkyWalking。
 - 普通聊天会话列表、历史查询、删除、Redis 最近上下文、异步记忆写入和用户长期画像已按当前用户隔离；Agent、Skill、MCP、Team 仍为全局资源。
+- 用户头像已支持上传到统一对象存储，MySQL 用户表仅保存 `avatar_uri`，前端侧栏可直接更换头像。
 
 ## 进行中
 

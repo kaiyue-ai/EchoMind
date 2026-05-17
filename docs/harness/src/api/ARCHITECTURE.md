@@ -50,7 +50,7 @@ Runtime / Domain Service 负责真正的执行能力：
 
 | Controller | 责任 |
 |---|---|
-| `AuthController` | 登录、注册、登出占位和当前用户查询 |
+| `AuthController` | 登录、注册、登出占位、当前用户查询和用户头像上传 |
 | `AgentController` | Agent 创建、更新、删除、执行和知识库管理入口 |
 | `ChatController` | 同步聊天、异步聊天、流式聊天、图片上传聊天 |
 | `SkillController` | Skill 列表、上传、启停、删除 |
@@ -64,7 +64,7 @@ Runtime / Domain Service 负责真正的执行能力：
 
 | Service | 责任 |
 |---|---|
-| `AuthApplicationService` | 用户登录、注册、默认用户初始化和 token 签发 |
+| `AuthApplicationService` | 用户登录、注册、默认用户初始化、token 签发和头像对象存储写入 |
 | `AgentApplicationService` | Agent 配置校验、MySQL 持久化、运行时 AgentFactory 同步 |
 | `ChatApplicationService` | 从认证上下文取当前用户，归一化聊天请求，选择同步、异步或流式路径 |
 | `SkillApplicationService` | Skill 上传、启停、删除，并同步能力注册表 |
@@ -77,6 +77,10 @@ Runtime / Domain Service 负责真正的执行能力：
 所有普通聊天和记忆接口都以后端认证上下文中的用户为准。无 `Authorization: Bearer ...`
 时归属兼容 `default` 用户；前端不提交可信 `userId`。第一阶段只隔离普通聊天会话和记忆，
 Agent、Skill、MCP、Team 仍是全局资源。
+
+`POST /api/auth/avatar` 只允许已登录用户上传头像，图片大小上限 2MB。文件写入统一
+`ObjectStorageService`，生产环境配置完整时进入 OSS；MySQL 只保存稳定 `avatar_uri`，
+接口响应再生成展示 URL。
 
 ## 聊天接口链路
 

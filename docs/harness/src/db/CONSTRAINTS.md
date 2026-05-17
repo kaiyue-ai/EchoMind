@@ -10,6 +10,7 @@
 | Skill 市场状态 | MySQL `echomind_skills` + Skill JAR | `SkillRegistry`、`CapabilityRegistry` |
 | 会话列表 | MySQL `echomind_chat_sessions`，按 `user_id + session_id` 隔离 | 前端 Pinia store |
 | 会话消息 | MySQL `echomind_chat_messages`，按 `user_id + session_id` 保存，仅用于前端展示/审计 | Redis 最近 100 条是 LLM 上下文来源 |
+| 用户账号 | MySQL `echomind_users`，含用户名、密码哈希、状态和 `avatar_uri` | 头像二进制在 OSS / 本地对象存储 |
 | 会话向量 | Redis Stack 向量索引 | 后台异步写入，主链路不等待 |
 | 用户长期画像 | Redis Stack `idx:user:memory:vectors` | 主应用 Pipeline 按 `userId + sessionId` KNN 召回 |
 | Agent 知识库文档 | MySQL 文档表 + 对象存储文件，切片正文/元数据进 MySQL | Redis Stack 知识库向量索引 |

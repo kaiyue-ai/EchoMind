@@ -168,9 +168,9 @@ echomind:
     mode: ${ECHOMIND_STORAGE_MODE:oss}
     local-dir: ${ECHOMIND_STORAGE_LOCAL_DIR:./data/objects/}
     endpoint: ${ALIYUN_OSS_ENDPOINT:}
-    bucket: ${ALIYUN_OSS_BUCKET:my-dev-oss}
-    access-key-id: ${AccessKeyID:${ALIYUN_ACCESS_KEY_ID:}}
-    access-key-secret: ${AccessKeySecret:${ALIYUN_ACCESS_KEY_SECRET:}}
+    bucket: ${ALIYUN_OSS_BUCKET:echo-mind2144}
+    access-key-id: ${ALIBABA_CLOUD_ACCESS_KEY_ID:${AccessKeyID:${ALIYUN_ACCESS_KEY_ID:}}}
+    access-key-secret: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:${AccessKeySecret:${ALIYUN_ACCESS_KEY_SECRET:}}}
   mcp:
     external-servers:
       - id: nowcoder-java-interview

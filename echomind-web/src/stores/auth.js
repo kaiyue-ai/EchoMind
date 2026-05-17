@@ -61,6 +61,19 @@ export const useAuthStore = defineStore('auth', {
         this.clearSession()
       }
     },
+    async uploadAvatar(file) {
+      this.loading = true
+      this.error = null
+      try {
+        this.user = await api.auth.uploadAvatar(file)
+        return this.user
+      } catch (e) {
+        this.error = api.parseError(e, '头像上传失败')
+        throw e
+      } finally {
+        this.loading = false
+      }
+    },
     setSession(token, user) {
       resetUserScopedStores()
       this.token = token

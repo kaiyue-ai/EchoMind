@@ -11,7 +11,10 @@
       :key="index"
       :class="['message-row', `message-${message.role}`]"
     >
-      <div class="message-avatar">{{ roleLabel(message.role) }}</div>
+      <div class="message-avatar">
+        <img v-if="message.role === 'user' && authStore.user?.avatarUrl" :src="authStore.user.avatarUrl" alt="用户头像" />
+        <span v-else>{{ roleLabel(message.role) }}</span>
+      </div>
       <div class="message-content">
         <MarkdownRenderer v-if="message.role === 'assistant'" :content="message.content" />
         <div v-else class="plain-message">{{ message.content }}</div>
@@ -36,12 +39,14 @@
 <script setup>
 import { nextTick, ref, watch } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import { useAuthStore } from '../../stores/auth'
 
 const props = defineProps({
   messages: { type: Array, default: () => [] }
 })
 
 const containerRef = ref(null)
+const authStore = useAuthStore()
 
 watch(() => props.messages, () => {
   nextTick(scrollToBottom)

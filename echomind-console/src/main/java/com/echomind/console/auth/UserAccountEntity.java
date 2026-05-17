@@ -30,6 +30,9 @@ public class UserAccountEntity {
     @Column(name = "password_hash", nullable = false, length = 512)
     private String passwordHash;
 
+    @Column(name = "avatar_uri", length = 512)
+    private String avatarUri;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private UserAccountStatus status = UserAccountStatus.ACTIVE;

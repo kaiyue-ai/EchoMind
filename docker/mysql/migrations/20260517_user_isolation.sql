@@ -8,12 +8,28 @@ CREATE TABLE IF NOT EXISTS echomind_users (
     user_id VARCHAR(128) PRIMARY KEY,
     username VARCHAR(128) NOT NULL UNIQUE,
     password_hash VARCHAR(512) NOT NULL,
+    avatar_uri VARCHAR(512),
     status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET @schema_name = DATABASE();
+
+SET @sql = (
+    SELECT IF(
+        COUNT(*) = 0,
+        'ALTER TABLE echomind_users ADD COLUMN avatar_uri VARCHAR(512)',
+        'SELECT ''echomind_users.avatar_uri exists'''
+    )
+    FROM information_schema.columns
+    WHERE table_schema = @schema_name
+      AND table_name = 'echomind_users'
+      AND column_name = 'avatar_uri'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 SET @sql = (
     SELECT IF(
