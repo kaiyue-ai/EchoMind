@@ -9,11 +9,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -26,6 +27,15 @@ import java.util.stream.Collectors;
 public class RedisRecentMemoryCache implements RecentMemoryCache {
 
     private static final String KEY_PREFIX = "echomind:memory:recent:";
+
+    private static final DefaultRedisScript<Long> APPEND_SCRIPT = new DefaultRedisScript<>("""
+        redis.call('RPUSH', KEYS[1], ARGV[1])
+        redis.call('LTRIM', KEYS[1], -ARGV[2], -1)
+        if ARGV[3] ~= '0' then
+            redis.call('EXPIRE', KEYS[1], ARGV[3])
+        end
+        return 1
+        """, Long.class);
 
     private final StringRedisTemplate redis;
     private final RedisKeyScanner keyScanner;
@@ -48,11 +58,12 @@ public class RedisRecentMemoryCache implements RecentMemoryCache {
     public void append(String sessionId, AgentMessage message) {
         String key = key(sessionId);
         try {
-            redis.opsForList().rightPush(key, mapper.writeValueAsString(message));
-            redis.opsForList().trim(key, -maxMessages, -1);
-            if (ttlSeconds > 0) {
-                redis.expire(key, ttlSeconds, TimeUnit.SECONDS);
-            }
+            String json = mapper.writeValueAsString(message);
+            redis.execute(APPEND_SCRIPT,
+                List.of(key),
+                json,
+                String.valueOf(maxMessages),
+                String.valueOf(ttlSeconds));
         } catch (JsonProcessingException e) {
             log.warn("Failed to serialize recent memory for session {}: {}", sessionId, e.getMessage());
         } catch (Exception e) {

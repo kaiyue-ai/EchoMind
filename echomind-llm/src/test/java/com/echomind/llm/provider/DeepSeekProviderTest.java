@@ -76,6 +76,26 @@ class DeepSeekProviderTest {
     }
 
     @Test
+    void requiredToolNameUsesAnthropicRequiredToolChoice() {
+        DeepSeekProvider provider = new DeepSeekProvider("https://api.deepseek.com/anthropic", "test-key");
+
+        Map<String, Object> body = provider.buildRequestBody(
+            new ModelSpec("deepseek", "deepseek-v4-flash", Set.of(ModelCapability.TEXT), true),
+            "你是助手",
+            "搜一下https://example.com",
+            List.of(new LlmTool(
+                "web_search",
+                "Search the web",
+                Map.of("properties", Map.of("query", Map.of("type", "string"))),
+                ignored -> "搜索结果"
+            )),
+            "web_search"
+        );
+
+        assertThat(body).containsEntry("tool_choice", Map.of("type", "tool", "name", "web_search"));
+    }
+
+    @Test
     void parsesDeepSeekDsmlToolCallsFromTextBlocks() {
         DeepSeekProvider provider = new DeepSeekProvider("https://api.deepseek.com/anthropic", "test-key");
 
@@ -95,30 +115,6 @@ class DeepSeekProviderTest {
         assertThat(calls.get(0).arguments()).containsEntry("query", "杭州 60人 户外团建 场地");
         assertThat(calls.get(1).name()).isEqualTo("calculate");
         assertThat(calls.get(1).arguments()).containsEntry("expression", "60 / 6");
-    }
-
-    @Test
-    void executesDeepSeekDsmlToolCallsWithKnownAliases() {
-        DeepSeekProvider provider = new DeepSeekProvider("https://api.deepseek.com/anthropic", "test-key");
-        List<DeepSeekProvider.DsmlToolCall> calls = List.of(
-            new DeepSeekProvider.DsmlToolCall("calculate", Map.of("expr", "60 / 6")),
-            new DeepSeekProvider.DsmlToolCall("weather_forecast", Map.of("location", "杭州", "days", "3"))
-        );
-
-        String message = provider.dsmlToolResultsMessage(calls, List.of(
-            new LlmTool("calculator", "Calculate", Map.of(), args -> "CALC=" + args),
-            new LlmTool("weather_query", "Weather", Map.of(), args -> "WEATHER=" + args)
-        ));
-
-        assertThat(message).contains("resolvedTool=calculator");
-        assertThat(message).contains("CALC=");
-        assertThat(message).contains("\"expression\":\"60 / 6\"");
-        assertThat(message).contains("resolvedTool=weather_query");
-        assertThat(message).contains("WEATHER=");
-        assertThat(message).contains("\"city\":\"杭州\"");
-        assertThat(message).contains("\"location\":\"杭州\"");
-        assertThat(message).contains("\"days\":\"3\"");
-        assertThat(message).contains("Do not emit DSML tags");
     }
 
     @Test
@@ -207,4 +203,5 @@ class DeepSeekProviderTest {
             server.stop(0);
         }
     }
+
 }

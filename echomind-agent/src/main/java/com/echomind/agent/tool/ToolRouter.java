@@ -2,9 +2,12 @@ package com.echomind.agent.tool;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.net.URI;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 统一工具注册表和匹配器。
@@ -17,6 +20,10 @@ public class ToolRouter {
 
     /** 达到这个分数才认为是明确关键词命中，可以收窄模型候选工具。 */
     private static final int STRONG_MATCH_SCORE = 4;
+    private static final Pattern HTTP_URL_PATTERN = Pattern.compile(
+        "https?://[^\\s\\p{Z}<>\"'）)】]+",
+        Pattern.CASE_INSENSITIVE
+    );
 
     private final Map<String, Tool> tools = new ConcurrentHashMap<>();
 
@@ -33,13 +40,13 @@ public class ToolRouter {
     private static final Map<String, List<String>> TAG_ALIASES = Map.of(
         "write", List.of("写入", "写", "保存", "创建"),
         "read", List.of("读取", "读", "查看", "阅读"),
-        "search", List.of("搜索", "查询", "查找"),
+        "search", List.of("搜索", "查询", "查找", "搜一下", "搜", "查一下", "上网查", "联网查"),
         "file", List.of("文件", "文档"),
         "weather", List.of("天气", "气温"),
         "calculate", List.of("计算", "运算", "算"),
         "lookup", List.of("查询", "查找", "搜索"),
         "find", List.of("查找", "搜索", "找"),
-        "web", List.of("网络", "网页", "上网", "在线")
+        "web", List.of("网络", "网页", "上网", "在线", "链接", "网址", "url", "http", "https", "打开链接")
     );
 
     /** 枚举参数的中文别名，用于把“读取/写入/列出”等中文动作映射到 schema 枚举值。 */
@@ -125,10 +132,34 @@ public class ToolRouter {
      * 未命中时再让模型在完整允许工具集合里智能判断。</p>
      */
     public List<Tool> matchForAgentSkillIds(String userMessage, Collection<?> allowedSkillIds) {
-        List<Tool> allowedTools = listForAgentSkillIds(allowedSkillIds);
+        List<Tool> allowedTools = filterCompatibleTools(userMessage, listForAgentSkillIds(allowedSkillIds));
+        return matchTools(userMessage, allowedTools);
+    }
+
+    /**
+     * 按用户消息过滤明显不兼容的工具。
+     *
+     * <p>典型场景是 URL：如果消息里是 CSDN/知乎链接，就不能把“只支持牛客”的 MCP
+     * 暴露给模型自由选择。这个过滤只处理确定性的域名边界，剩下仍交给关键词和模型判断。</p>
+     */
+    public List<Tool> filterCompatibleTools(String userMessage, Collection<Tool> candidateTools) {
+        if (candidateTools == null || candidateTools.isEmpty()) {
+            return List.of();
+        }
+        List<URI> urls = extractHttpUrls(userMessage);
+        if (urls.isEmpty()) {
+            return List.copyOf(candidateTools);
+        }
+        return candidateTools.stream()
+            .filter(tool -> isCompatibleWithUrls(tool, urls))
+            .toList();
+    }
+
+    public List<Tool> matchTools(String userMessage, Collection<Tool> candidateTools) {
         if (userMessage == null || userMessage.isBlank()) {
             return List.of();
         }
+        List<Tool> allowedTools = filterCompatibleTools(userMessage, candidateTools);
         String lowerMsg = userMessage.toLowerCase();
         return allowedTools.stream()
             .map(tool -> new ToolMatch(tool, score(lowerMsg, tool)))
@@ -157,17 +188,18 @@ public class ToolRouter {
         if (userMessage == null || userMessage.isBlank()) {
             return List.of();
         }
-        String lowerMsg = userMessage.toLowerCase();
-        return currentTools().stream()
-            .map(tool -> new ToolMatch(tool, score(lowerMsg, tool)))
-            .filter(match -> match.score() >= STRONG_MATCH_SCORE)
-            .sorted(Comparator.comparingInt(ToolMatch::score).reversed())
-            .map(ToolMatch::tool)
-            .toList();
+        return matchTools(userMessage, currentTools());
     }
 
     private int score(String lowerMsg, Tool tool) {
         int score = 0;
+        List<URI> urls = extractHttpUrls(lowerMsg);
+        if (!urls.isEmpty() && !isCompatibleWithUrls(tool, urls)) {
+            return 0;
+        }
+
+        // URL 是强意图：通用网页搜索/读取工具应优先进入候选，域名专用工具只在域名匹配时进入。
+        score += scoreUrlIntent(urls, tool);
 
         // 1. Skill JAR 显式声明的关键词和别名：最可信，命中后应优先收窄候选。
         score += scoreTerms(lowerMsg, tool.keywords(), 8);
@@ -191,6 +223,110 @@ public class ToolRouter {
         score += scoreTerms(lowerMsg, textTerms(tool.description()), 2);
 
         return score;
+    }
+
+    private int scoreUrlIntent(List<URI> urls, Tool tool) {
+        if (urls == null || urls.isEmpty()) {
+            return 0;
+        }
+        int score = 0;
+        if (isGenericWebTool(tool)) {
+            score += 12;
+        }
+        if (isNowcoderSpecificTool(tool) && urls.stream().anyMatch(this::isNowcoderUrl)) {
+            score += 14;
+        }
+        return score;
+    }
+
+    private boolean isCompatibleWithUrls(Tool tool, List<URI> urls) {
+        if (urls == null || urls.isEmpty()) {
+            return true;
+        }
+        if (isNowcoderSpecificTool(tool)) {
+            return urls.stream().anyMatch(this::isNowcoderUrl);
+        }
+        return true;
+    }
+
+    private boolean isGenericWebTool(Tool tool) {
+        if (tool == null) {
+            return false;
+        }
+        String name = tool.name() == null ? "" : tool.name().toLowerCase();
+        if (name.contains("web-search") || name.contains("web_search") || name.equals("websearch")) {
+            return true;
+        }
+        Set<String> tags = new HashSet<>();
+        for (String tag : tool.tags()) {
+            if (tag != null) {
+                tags.add(tag.toLowerCase());
+            }
+        }
+        return tags.contains("web") && (tags.contains("search") || tags.contains("lookup") || tags.contains("find"));
+    }
+
+    private boolean isNowcoderSpecificTool(Tool tool) {
+        if (tool == null) {
+            return false;
+        }
+        String fingerprint = (
+            safe(tool.name()) + " " +
+            safe(tool.sourceId()) + " " +
+            safe(tool.description()) + " " +
+            schemaText(tool.parameterSchema())
+        ).toLowerCase();
+        return fingerprint.contains("nowcoder") || fingerprint.contains("牛客");
+    }
+
+    private boolean isNowcoderUrl(URI uri) {
+        String host = uri == null ? null : uri.getHost();
+        if (host == null) {
+            return false;
+        }
+        String lowerHost = host.toLowerCase(Locale.ROOT);
+        return lowerHost.equals("nowcoder.com") || lowerHost.endsWith(".nowcoder.com");
+    }
+
+    private List<URI> extractHttpUrls(String message) {
+        if (message == null || message.isBlank()) {
+            return List.of();
+        }
+        List<URI> urls = new ArrayList<>();
+        Matcher matcher = HTTP_URL_PATTERN.matcher(message);
+        while (matcher.find()) {
+            String raw = trimUrlSuffix(matcher.group());
+            try {
+                URI uri = URI.create(raw);
+                String scheme = uri.getScheme();
+                if (scheme != null && ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
+                    && uri.getHost() != null) {
+                    urls.add(uri);
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 非法 URL 只是不参与域名路由，不影响普通关键词匹配。
+            }
+        }
+        return urls;
+    }
+
+    private String trimUrlSuffix(String url) {
+        String trimmed = url == null ? "" : url.trim();
+        while (!trimmed.isEmpty() && "，。！？；;,.!?".indexOf(trimmed.charAt(trimmed.length() - 1)) >= 0) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
+    }
+
+    private String schemaText(Map<String, Object> schema) {
+        if (schema == null || schema.isEmpty()) {
+            return "";
+        }
+        return String.valueOf(schema);
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 
     private int scoreTerms(String lowerMsg, Collection<String> terms, int points) {

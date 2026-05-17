@@ -7,12 +7,5 @@ import java.util.List;
  */
 public record TeamCreateRequest(
     String name,
-    String plannerId,
-    String executorId,
-    String reviewerId,
     List<TeamMemberRequest> members
-) {
-    public TeamCreateRequest(String name, String plannerId, String executorId, String reviewerId) {
-        this(name, plannerId, executorId, reviewerId, null);
-    }
-}
+) {}

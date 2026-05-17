@@ -93,6 +93,8 @@ public class EchoMindProperties {
         private String apiKey;
         /** API 基础 URL（可被环境变量覆盖） */
         private String baseUrl;
+        /** 最大输出 token 数，默认 4096 */
+        private int maxTokens = 4096;
         /** 该提供商下的模型列表 */
         private List<ModelConfig> models = List.of();
     }
@@ -124,7 +126,7 @@ public class EchoMindProperties {
         private long redisTtlSeconds = 604800;
         /** 向量检索开关。 */
         private boolean embeddingEnabled = true;
-        /** 向量索引实现，正式路径为 redis-stack；mysql-linear 仅保留为弃用兼容值。 */
+        /** 向量索引实现，正式路径为 redis-stack。 */
         private String vectorStore = "redis-stack";
         /** Redis Stack RediSearch 索引名。 */
         private String vectorIndexName = "idx:echomind:memory:vectors";
@@ -140,6 +142,10 @@ public class EchoMindProperties {
         private int retrievalTopK = 0;
         /** 普通聊天记忆持久化 RabbitMQ 队列名。 */
         private String persistQueueName = "echomind.chat-memory.persist.requests";
+        /** 普通聊天记忆持久化 RabbitMQ Direct Exchange 名。 */
+        private String persistExchangeName = "echomind.chat-memory.persist.exchange";
+        /** 普通聊天记忆按 sessionId hash 后进入的分片队列数量。 */
+        private int persistShards = 8;
         /** 是否启用普通聊天记忆异步持久化发布。 */
         private boolean asyncPersistEnabled = true;
         /** 摘要最大字符数。 */

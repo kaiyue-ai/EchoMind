@@ -58,17 +58,6 @@ export default {
      * EventSource 只支持 GET，所以这里使用 fetch + ReadableStream。
      */
     stream: (agentId, message, sessionId, modelId, attachments = [], onToken, onDone, onError, onMeta) => {
-      if (typeof attachments === 'function') {
-        const legacyOnToken = attachments
-        const legacyOnDone = onToken
-        const legacyOnError = onDone
-        const legacyOnMeta = onError
-        attachments = []
-        onToken = legacyOnToken
-        onDone = legacyOnDone
-        onError = legacyOnError
-        onMeta = legacyOnMeta
-      }
       fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -217,9 +206,6 @@ export default {
     /** 提交澄清信息并继续Run */
     resumeRun: (teamId, runId, clarificationAnswer) =>
       api.post(`/teams/${teamId}/runs/${runId}/resume`, { clarificationAnswer }).then(r => r.data),
-    /** 执行团队任务 */
-    execute: (teamId, task) =>
-      api.post(`/teams/${teamId}/execute`, { task }).then(r => r.data),
     /** 消息总线状态 */
     messageBusStatus: () => api.get('/teams/message-bus/pending').then(r => r.data)
   }

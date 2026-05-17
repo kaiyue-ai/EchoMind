@@ -381,29 +381,6 @@
 { "clarificationAnswer": "活动日期是下周五，预算每人300元以内。" }
 ```
 
-### POST `/api/teams/{teamId}/execute` — 执行团队任务
-兼容旧同步入口；新版前端使用 `/runs` 创建异步任务并轮询查询。
-
-```json
-// 请求
-{
-  "task": "策划一场60人户外团建活动"
-}
-
-// 响应
-{
-  "teamId": "uuid",
-  "status": "COMPLETED",
-  "finalOutput": "完整的活动方案...",
-  "stepResults": [
-    "场地查询结果...",
-    "天气查询结果...",
-    "预算估算..."
-  ],
-  "mermaidDiagram": "sequenceDiagram\n    title ...\n    ..."
-}
-```
-
 ### GET `/api/teams/message-bus/pending` — 消息总线状态
 ```json
 { "pendingCount": 0 }
@@ -461,9 +438,9 @@ curl http://localhost:8080/api/mcp/tools
 # 执行Agent Team任务
 curl -X POST http://localhost:8080/api/teams \
   -H "Content-Type: application/json" \
-  -d '{"name":"测试团队","plannerId":"default","executorId":"default"}'
+  -d '{"name":"测试团队","members":[{"agentId":"default","role":"PLANNER","capabilityTags":["planning"],"sortOrder":10},{"agentId":"default","role":"EXECUTOR","capabilityTags":["general"],"sortOrder":20},{"agentId":"default","role":"REVIEWER","capabilityTags":["review"],"sortOrder":30}]}'
 
-curl -X POST http://localhost:8080/api/teams/{teamId}/execute \
+curl -X POST http://localhost:8080/api/teams/{teamId}/runs \
   -H "Content-Type: application/json" \
   -d '{"task":"策划一场60人户外团建活动"}'
 ```

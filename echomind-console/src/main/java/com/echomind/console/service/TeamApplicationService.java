@@ -2,12 +2,9 @@ package com.echomind.console.service;
 
 import com.echomind.agent.team.runtime.TeamBlackboardService;
 import com.echomind.agent.team.runtime.TeamMemberSpec;
-import com.echomind.agent.team.runtime.TeamRunSnapshot;
 import com.echomind.agent.team.state.TeamRole;
 import com.echomind.agent.team.messaging.TeamMessageBus;
 import com.echomind.console.dto.TeamCreateRequest;
-import com.echomind.console.dto.TeamExecuteRequest;
-import com.echomind.console.dto.TeamExecutionResponse;
 import com.echomind.console.dto.TeamMemberRequest;
 import com.echomind.console.dto.TeamResumeRequest;
 import com.echomind.console.dto.TeamRunCreateRequest;
@@ -48,15 +45,6 @@ public class TeamApplicationService {
         blackboardService.deleteTeam(teamId);
     }
 
-    public TeamExecutionResponse executeTask(String teamId, TeamExecuteRequest request) {
-        String task = request == null ? null : request.task();
-        if (task == null || task.isBlank()) {
-            throw new IllegalArgumentException("task is required");
-        }
-        TeamRunSnapshot result = blackboardService.executeRunBlocking(teamId, task);
-        return TeamExecutionResponse.from(teamId, result);
-    }
-
     public TeamRunView createRun(String teamId, TeamRunCreateRequest request) {
         String task = request == null ? null : request.task();
         return TeamRunView.from(blackboardService.createRun(teamId, task));
@@ -85,12 +73,12 @@ public class TeamApplicationService {
         if (request == null) {
             return List.of();
         }
-        if (request.members() != null && !request.members().isEmpty()) {
-            return request.members().stream()
-                .map(this::toMemberSpec)
-                .toList();
+        if (request.members() == null || request.members().isEmpty()) {
+            return List.of();
         }
-        return legacyMembers(request);
+        return request.members().stream()
+            .map(this::toMemberSpec)
+            .toList();
     }
 
     private TeamMemberSpec toMemberSpec(TeamMemberRequest request) {
@@ -99,17 +87,6 @@ public class TeamApplicationService {
             parseRole(request.role()),
             request.capabilityTags() == null ? List.of() : request.capabilityTags(),
             request.sortOrder() == null ? 0 : request.sortOrder()
-        );
-    }
-
-    private List<TeamMemberSpec> legacyMembers(TeamCreateRequest request) {
-        if (request.reviewerId() == null || request.reviewerId().isBlank()) {
-            throw new IllegalArgumentException("Reviewer agent is required");
-        }
-        return List.of(
-            new TeamMemberSpec(defaultAgent(request.plannerId()), TeamRole.PLANNER, List.of("planning"), 10),
-            new TeamMemberSpec(defaultAgent(request.executorId()), TeamRole.EXECUTOR, List.of("general", "search", "weather", "math"), 20),
-            new TeamMemberSpec(request.reviewerId().trim(), TeamRole.REVIEWER, List.of("review", "report"), 30)
         );
     }
 
@@ -124,7 +101,4 @@ public class TeamApplicationService {
         }
     }
 
-    private String defaultAgent(String agentId) {
-        return agentId == null || agentId.isBlank() ? "default" : agentId;
-    }
 }

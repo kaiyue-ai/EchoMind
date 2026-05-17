@@ -3,24 +3,14 @@ package com.echomind.memory.knowledge;
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.redis.RedisKeyScanner;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.lettuce.core.codec.ByteArrayCodec;
-import io.lettuce.core.output.ArrayOutput;
-import io.lettuce.core.output.CommandOutput;
-import io.lettuce.core.output.StatusOutput;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.lettuce.LettuceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Base64;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -30,6 +20,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+
+import static com.echomind.memory.embedding.RedisStackVectorStoreSupport.*;
 
 /**
  * Agent 私有知识库服务。
@@ -286,7 +278,7 @@ public class AgentKnowledgeService {
             indexDimension = dimension;
             log.info("Created Redis Stack agent knowledge index {} with dimension {}", indexName, dimension);
         } catch (Exception e) {
-            if (exceptionMessage(e).contains("already exists")) {
+            if (isIndexAlreadyExists(e)) {
                 indexReady = true;
                 indexDimension = dimension;
                 return;
@@ -390,7 +382,8 @@ public class AgentKnowledgeService {
             } else if ("chunk_id".equals(name)) {
                 chunkId = parseLong(value);
             } else if ("chunk_index".equals(name)) {
-                chunkIndex = parseLong(value).intValue();
+                Long ci = parseLong(value);
+                chunkIndex = ci != null ? ci.intValue() : 0;
             } else if ("file_name".equals(name)) {
                 fileName = text(value);
             } else if ("content".equals(name)) {
@@ -473,7 +466,7 @@ public class AgentKnowledgeService {
             return;
         }
         try {
-            keyScanner.deleteByPattern(keyPrefix + encodedAgentId(agentId) + ":" + documentId + ":*");
+            keyScanner.deleteByPattern(keyPrefix + encodeId(agentId) + ":" + documentId + ":*");
         } catch (Exception e) {
             log.warn("Failed to delete Redis agent knowledge vectors agentId={} documentId={}: {}",
                 agentId, documentId, e.getMessage());
@@ -549,21 +542,6 @@ public class AgentKnowledgeService {
         return Math.max(topK, topK * 3);
     }
 
-    private double distanceToSimilarity(double distance) {
-        if (Double.isNaN(distance) || Double.isInfinite(distance)) {
-            return 0;
-        }
-        return clamp(1 - distance, 0, 1);
-    }
-
-    private double parseDouble(Object value) {
-        try {
-            return Double.parseDouble(text(value));
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
     private String escapeLike(String value) {
         return value
             .replace("!", "!!")
@@ -575,99 +553,8 @@ public class AgentKnowledgeService {
         return value == null ? "" : value;
     }
 
-    private double clamp(double value, double min, double max) {
-        return Math.max(min, Math.min(max, value));
-    }
-
-    private byte[] vectorBytes(double[] vector) {
-        ByteBuffer buffer = ByteBuffer.allocate(vector.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-        for (double value : vector) {
-            buffer.putFloat((float) value);
-        }
-        return buffer.array();
-    }
-
     private String key(String agentId, Long documentId, Long chunkId) {
-        return keyPrefix + encodedAgentId(agentId) + ":" + documentId + ":" + chunkId;
-    }
-
-    private String encodedAgentId(String agentId) {
-        return Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(agentId.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private String escapeTag(String value) {
-        StringBuilder sb = new StringBuilder();
-        for (char c : value.toCharArray()) {
-            if (Character.isLetterOrDigit(c) || c == '_') {
-                sb.append(c);
-            } else {
-                sb.append('\\').append(c);
-            }
-        }
-        return sb.toString();
-    }
-
-    private Object executeArrayCommand(RedisConnection connection, String command, byte[]... args) {
-        return executeCommand(connection, command, new ArrayOutput<>(ByteArrayCodec.INSTANCE), args);
-    }
-
-    private Object executeStatusCommand(RedisConnection connection, String command, byte[]... args) {
-        return executeCommand(connection, command, new StatusOutput<>(ByteArrayCodec.INSTANCE), args);
-    }
-
-    private Object executeCommand(RedisConnection connection, String command,
-                                  CommandOutput<byte[], byte[], ?> output, byte[]... args) {
-        if (connection instanceof LettuceConnection lettuceConnection) {
-            return lettuceConnection.execute(command, output, args);
-        }
-        return connection.execute(command, args);
-    }
-
-    private String exceptionMessage(Throwable throwable) {
-        StringBuilder message = new StringBuilder();
-        Throwable cursor = throwable;
-        while (cursor != null) {
-            if (cursor.getMessage() != null) {
-                message.append(cursor.getMessage()).append(' ');
-            }
-            cursor = cursor.getCause();
-        }
-        return message.toString().toLowerCase();
-    }
-
-    private Long parseLong(Object value) {
-        try {
-            return Long.parseLong(text(value));
-        } catch (Exception e) {
-            return 0L;
-        }
-    }
-
-    private String text(Object value) {
-        if (value instanceof byte[] bytes) {
-            return new String(bytes, StandardCharsets.UTF_8);
-        }
-        return value == null ? null : String.valueOf(value);
-    }
-
-    private List<?> asList(Object raw) {
-        if (raw instanceof List<?> list) {
-            return list;
-        }
-        if (raw instanceof Object[] array) {
-            return Arrays.asList(array);
-        }
-        return List.of();
-    }
-
-    private List<?> findValue(List<?> fields, String name) {
-        for (int i = 0; i + 1 < fields.size(); i += 2) {
-            if (name.equals(text(fields.get(i)))) {
-                return asList(fields.get(i + 1));
-            }
-        }
-        return List.of();
+        return keyPrefix + encodeId(agentId) + ":" + documentId + ":" + chunkId;
     }
 
     private String truncate(String value, int maxChars) {
@@ -686,14 +573,6 @@ public class AgentKnowledgeService {
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agentId不能为空");
         }
-    }
-
-    private String blankToDefault(String value, String defaultValue) {
-        return value == null || value.isBlank() ? defaultValue : value;
-    }
-
-    private static byte[] bytes(String value) {
-        return (value == null ? "" : value).getBytes(StandardCharsets.UTF_8);
     }
 
     private static class HybridCandidate {

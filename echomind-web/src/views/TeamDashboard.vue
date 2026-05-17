@@ -107,6 +107,9 @@
 
           <ResourceCard v-if="currentRun.finalOutput" ref="finalReportRef" :class="currentRun.status === 'FAILED' ? 'failed-panel' : 'final-panel'">
             <template #title>{{ currentRun.status === 'FAILED' ? 'Reviewer 拦截原因' : '最终报告' }}</template>
+            <template #actions>
+              <el-button size="small" @click="downloadFinalReport">下载 Markdown</el-button>
+            </template>
             <MarkdownRenderer :content="currentRun.finalOutput" />
           </ResourceCard>
 
@@ -387,6 +390,21 @@ function formatTime(value) {
 
 function scrollToFinalReport() {
   finalReportRef.value?.$el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function downloadFinalReport() {
+  const content = currentRun.value?.finalOutput
+  const runId = currentRun.value?.runId
+  if (!content || !runId) return
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `team-run-${runId}-final-report.md`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 async function renderMermaid() {

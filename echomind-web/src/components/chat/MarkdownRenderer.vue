@@ -12,6 +12,8 @@ const props = defineProps({
 })
 
 const renderer = new marked.Renderer()
+const tokenizer = new marked.Tokenizer()
+tokenizer.del = () => false
 
 renderer.html = (html) => escapeHtml(html)
 renderer.link = (href, title, text) => {
@@ -40,7 +42,7 @@ renderer.code = (code, language) => {
   </div>`
 }
 
-marked.setOptions({ breaks: true, gfm: true, renderer })
+marked.setOptions({ breaks: true, gfm: true, renderer, tokenizer })
 
 const html = computed(() => props.content ? marked.parse(props.content) : '')
 

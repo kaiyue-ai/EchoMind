@@ -18,7 +18,6 @@ package com.echomind.common.exception;
  * 将异常向上传播，由 {@code AgentOrchestrator} 决定是否使用本地后备工具替代远程工具。
  *
  * @see com.echomind.mcp.client.StdioMCPClient stdio MCP 客户端
- * @see com.echomind.mcp.client.MCPClient HTTP MCP 客户端
  * @see com.echomind.mcp.jsonrpc.JsonRpcMessage JSON-RPC 消息定义
  */
 public class MCPTransportException extends EchoMindException {

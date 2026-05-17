@@ -71,7 +71,7 @@ class MemoryManagerTest {
             memoryManager.addMessage("session-2", "agent-1", AgentMessage.user("偏好-" + i + "：我喜欢喝拿铁"));
         }
 
-        List<AgentMessage> context = memoryManager.getPromptContext("session-2", "我喜欢喝什么");
+        List<AgentMessage> context = memoryManager.getPromptContext("session-2");
 
         assertThat(context)
             .extracting(AgentMessage::content)
@@ -90,7 +90,7 @@ class MemoryManagerTest {
             null
         );
 
-        assertThat(freshManager.getPromptContext("session-3", "继续")).isEmpty();
+        assertThat(freshManager.getPromptContext("session-3")).isEmpty();
         assertThat(freshManager.getFullContext("session-3"))
             .extracting(AgentMessage::content)
             .containsExactly("不会进入新缓存");

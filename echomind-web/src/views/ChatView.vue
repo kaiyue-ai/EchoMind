@@ -98,7 +98,6 @@ const { servers } = storeToRefs(mcpStore)
 const { inspectorOpen } = storeToRefs(uiStore)
 
 const fallbackModelId = 'deepseek:deepseek-v4-flash'
-const legacyClaudeModelPrefix = ['anthropic', 'claude'].join(':') + '-'
 
 const selectedModelSpec = computed(() => {
   const [providerId, modelName] = (selectedModel.value || '').split(':')
@@ -190,6 +189,13 @@ function sendMessage() {
 }
 
 function finishStream() {
+  const idx = thinkingMsgIndex.value
+  if (idx >= 0 && messages.value[idx]?.role === 'assistant' && messages.value[idx]?.content === '思考中...') {
+    messages.value.splice(idx, 1, {
+      role: 'system',
+      content: '本次请求没有收到模型输出，请稍后重试或切换模型。'
+    })
+  }
   loading.value = false
   thinkingMsgIndex.value = -1
   if (refreshSessions) refreshSessions()
@@ -241,7 +247,7 @@ function supportsVision(model) {
 
 function ensureSelectedModel() {
   if (!models.value.length) {
-    if (!selectedModel.value || selectedModel.value.startsWith(legacyClaudeModelPrefix)) {
+    if (!selectedModel.value) {
       selectedModel.value = fallbackModelId
     }
     return

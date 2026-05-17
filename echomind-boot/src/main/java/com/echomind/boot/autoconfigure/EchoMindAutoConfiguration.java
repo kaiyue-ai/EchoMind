@@ -46,6 +46,7 @@ import com.echomind.memory.usermemory.UserMemoryStore;
 import com.echomind.memory.usermemory.UserMemoryVectorStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
+import com.echomind.common.messaging.ChatMemoryShardSupport;
 import com.echomind.skill.loader.SkillDirectoryWatcher;
 import com.echomind.skill.loader.SkillJarLoader;
 import com.echomind.skill.marketplace.MarketplaceService;
@@ -58,6 +59,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.Declarable;
+import org.springframework.amqp.core.Declarables;
+import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.context.annotation.Bean;
@@ -108,7 +114,7 @@ public class EchoMindAutoConfiguration {
         if (!url.contains("/anthropic")) {
             url = url.endsWith("/") ? url + "anthropic" : url + "/anthropic";
         }
-        return new DeepSeekProvider(url, key);
+        return new DeepSeekProvider(url, key, config.getMaxTokens());
     }
 
     /**
@@ -266,10 +272,6 @@ public class EchoMindAutoConfiguration {
     public MemoryVectorStore memoryVectorStore(EchoMindProperties props,
                                                ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
         String type = props.getMemory().getVectorStore();
-        if ("mysql-linear".equalsIgnoreCase(type)) {
-            log.warn("mysql-linear memory vector store is deprecated for chat memory; using no-op vector store");
-            return new NoopMemoryVectorStore();
-        }
         RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
         if (factory == null) {
             log.warn("Redis Stack vector store requested but RedisConnectionFactory is unavailable; using no-op vector store");
@@ -381,8 +383,27 @@ public class EchoMindAutoConfiguration {
     }
 
     @Bean
-    public Queue chatMemoryPersistQueue(EchoMindProperties props) {
-        return new Queue(props.getMemory().getPersistQueueName(), true);
+    public DirectExchange chatMemoryPersistExchange(EchoMindProperties props) {
+        return new DirectExchange(props.getMemory().getPersistExchangeName(), true, false);
+    }
+
+    @Bean
+    public Declarables chatMemoryPersistShardBindings(EchoMindProperties props,
+                                                       DirectExchange chatMemoryPersistExchange) {
+        List<Declarable> declarables = new ArrayList<>();
+        int shards = ChatMemoryShardSupport.normalizeShardCount(props.getMemory().getPersistShards());
+        for (int i = 0; i < shards; i++) {
+            Queue queue = new Queue(
+                ChatMemoryShardSupport.queueName(props.getMemory().getPersistQueueName(), i),
+                true
+            );
+            Binding binding = BindingBuilder.bind(queue)
+                .to(chatMemoryPersistExchange)
+                .with(ChatMemoryShardSupport.routingKey(i));
+            declarables.add(queue);
+            declarables.add(binding);
+        }
+        return new Declarables(declarables);
     }
 
     @Bean
@@ -410,7 +431,8 @@ public class EchoMindAutoConfiguration {
         }
         return new RabbitChatMemoryPersistPublisher(
             template,
-            props.getMemory().getPersistQueueName(),
+            props.getMemory().getPersistExchangeName(),
+            props.getMemory().getPersistShards(),
             props.getMemory().isAsyncPersistEnabled()
         );
     }

@@ -21,7 +21,7 @@ public class ContextEnrichStage implements PipelineStage {
             ctx.getMessages().add(AgentMessage.user(ctx.getUserMessage(), ctx.getAttachments()));
             return ctx;
         }
-        var history = memoryManager.getPromptContext(ctx.getMemoryKey(), ctx.getUserMessage());
+        var history = memoryManager.getPromptContext(ctx.getMemoryKey());
         ctx.getMessages().addAll(history);
         ctx.getMessages().add(AgentMessage.user(ctx.getUserMessage(), ctx.getAttachments()));
         return ctx;

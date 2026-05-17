@@ -65,8 +65,8 @@ npm.cmd run build
 cd D:\claudeWorkSpace\ai-agent
 mvn.cmd -q clean package "-Dmaven.test.skip=true"
 docker build -f Dockerfile.runtime -t ai-agent-backend:latest .
-docker build -t ai-agent-frontend:latest .\echomind-web
-docker compose up -d backend frontend
+docker build -f .\echomind-web\Dockerfile.runtime -t ai-agent-frontend:latest .\echomind-web
+docker compose up -d --remove-orphans backend frontend
 ```
 
 部署后：
@@ -83,4 +83,3 @@ Invoke-RestMethod http://localhost:8080/api/mcp/tools
 - 本文件只放 Claude 工具入口信息，不再维护长篇架构细节。
 - 架构和调用链路变化优先更新 `docs/harness`，必要时再同步 `README.md`。
 - 如果发现本文件和 `AGENTS.md`、`docs/harness` 冲突，以 `AGENTS.md` 和 `docs/harness` 为准。
-

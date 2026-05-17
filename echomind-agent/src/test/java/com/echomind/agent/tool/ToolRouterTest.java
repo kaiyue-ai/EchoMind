@@ -102,6 +102,73 @@ class ToolRouterTest {
             .containsExactly("contract-review");
     }
 
+    @Test
+    void urlRequestStronglyMatchesGenericWebSearch() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool("web-search", "skill", "web-search@1.1.0", List.of("search", "web")));
+        router.register(tool("calculator", "skill", "calculator@1.0.0", List.of("calculate", "math")));
+
+        List<Tool> matched = router.matchForAgentSkillIds(
+            "搜一下https://blog.csdn.net/2503_93062705/article/details/160631994",
+            List.of("web-search", "calculator")
+        );
+
+        assertThat(matched).extracting(Tool::name).containsExactly("web-search");
+    }
+
+    @Test
+    void nonNowcoderUrlDoesNotExposeNowcoderMcpToModelFallback() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool(
+            "web-search",
+            "skill",
+            "web-search@1.1.0",
+            List.of("search", "web"),
+            List.of(),
+            Map.of(),
+            "Search and read public web pages"
+        ));
+        router.register(tool(
+            "fetch_nowcoder_java_interview_article",
+            "mcp",
+            "nowcoder-java-interview",
+            List.of(),
+            List.of(),
+            Map.of(),
+            "抓取牛客网 Java 面经文章。传 url 时抓指定文章；不传 url 时随机抓取。"
+        ));
+
+        List<Tool> visibleTools = router.filterCompatibleTools(
+            "搜一下https://blog.csdn.net/2503_93062705/article/details/160631994",
+            router.listForAgentSkillIds(List.of("web-search"))
+        );
+
+        assertThat(visibleTools).extracting(Tool::name)
+            .containsExactly("web-search");
+    }
+
+    @Test
+    void nowcoderUrlKeepsNowcoderMcpAvailable() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool(
+            "fetch_nowcoder_java_interview_article",
+            "mcp",
+            "nowcoder-java-interview",
+            List.of(),
+            List.of(),
+            Map.of(),
+            "抓取牛客网 Java 面经文章。传 url 时抓指定文章。"
+        ));
+
+        List<Tool> visibleTools = router.filterCompatibleTools(
+            "读取https://www.nowcoder.com/discuss/353159907862061056",
+            router.listForAgentSkillIds(List.of())
+        );
+
+        assertThat(visibleTools).extracting(Tool::name)
+            .containsExactly("fetch_nowcoder_java_interview_article");
+    }
+
     private Tool tool(String name, String sourceType, String sourceId, List<String> tags) {
         return tool(name, sourceType, sourceId, tags, List.of(), Map.of());
     }

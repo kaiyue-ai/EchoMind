@@ -89,6 +89,11 @@ POST /api/chat/sync
   -> MemoryPersistStage
 ```
 
+`MemoryPersistStage` 只发布普通聊天记忆事件，不在主线程写 MySQL、Redis 或向量库。
+事件进入 `echomind.chat-memory.persist.exchange`，按 `sessionId` hash 到
+`echomind.chat-memory.persist.requests.shard.N`。每个分片队列只能单消费者，整体并发靠分片数扩展；
+不要把单个聊天记忆分片改成多消费者，否则同一会话的历史可能乱序。
+
 异步聊天：
 
 ```text
@@ -148,7 +153,7 @@ Skill JAR
 ```text
 外部 MCP Server
   -> ExternalMcpRuntimeService
-  -> StdioMCPClient / MCPClient
+  -> StdioMCPClient
   -> CapabilityRegistry
   -> ResultAggregationStage
   -> LLM function calling
@@ -160,6 +165,8 @@ Skill JAR
 - Skill 不应该伪装成 MCP Server。
 - MCP 管理接口只管理外部 MCP Server。
 - 禁用 Skill 或卸载 MCP 时，必须同步移除对应工具能力。
+- URL 请求先走确定性工具过滤：通用网页读取/搜索交给 `web-search`，域名专用 MCP
+  只在链接域名匹配时暴露，避免模型把 CSDN、知乎等链接误交给牛客工具。
 
 ## Agent Team 接口演进方向
 

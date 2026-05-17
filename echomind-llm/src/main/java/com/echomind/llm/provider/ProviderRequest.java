@@ -16,12 +16,25 @@ public record ProviderRequest(
     String systemPrompt,
     String userMessage,
     List<MessageAttachment> attachments,
-    List<LlmTool> tools
+    List<LlmTool> tools,
+    String requiredToolName,
+    String toolInputMessage
 ) {
 
     public ProviderRequest {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
         tools = tools == null ? List.of() : List.copyOf(tools);
+    }
+
+    public ProviderRequest(ModelSpec model, String systemPrompt, String userMessage,
+                           List<MessageAttachment> attachments, List<LlmTool> tools) {
+        this(model, systemPrompt, userMessage, attachments, tools, null, null);
+    }
+
+    public ProviderRequest(ModelSpec model, String systemPrompt, String userMessage,
+                           List<MessageAttachment> attachments, List<LlmTool> tools,
+                           String requiredToolName) {
+        this(model, systemPrompt, userMessage, attachments, tools, requiredToolName, null);
     }
 
     public boolean hasAttachments() {

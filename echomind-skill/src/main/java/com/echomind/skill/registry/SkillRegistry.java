@@ -82,6 +82,14 @@ public class SkillRegistry {
         SkillRegistration reg = registrations.remove(skillId);
         if (reg != null) {
             reg.getSkill().onDestroy();
+            try {
+                ClassLoader classLoader = reg.getClassLoader();
+                if (classLoader instanceof AutoCloseable c) {
+                    c.close();
+                }
+            } catch (Exception e) {
+                log.warn("Failed to close class loader for skill {}: {}", skillId, e.getMessage());
+            }
             log.info("Unregistered skill: {}", skillId);
         }
     }

@@ -29,7 +29,6 @@ import com.fasterxml.jackson.databind.JsonNode;
  * 非常适合作为序列化的消息载体。
  *
  * @author EchoMind Team
- * @see com.echomind.mcp.client.MCPClient
  * @see com.echomind.mcp.client.StdioMCPClient
  * @since 1.0
  */

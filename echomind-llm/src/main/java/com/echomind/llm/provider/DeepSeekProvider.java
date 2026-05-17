@@ -48,10 +48,15 @@ public class DeepSeekProvider implements ModelProvider {
 
     private final String baseUrl;
     private final String apiKey;
+    private final int maxTokens;
     private final OkHttpClient httpClient;
 
     public DeepSeekProvider(String baseUrl, String apiKey) {
-        this(baseUrl, apiKey, new OkHttpClient.Builder()
+        this(baseUrl, apiKey, 4096);
+    }
+
+    public DeepSeekProvider(String baseUrl, String apiKey, int maxTokens) {
+        this(baseUrl, apiKey, maxTokens, new OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(90, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
@@ -59,8 +64,13 @@ public class DeepSeekProvider implements ModelProvider {
     }
 
     DeepSeekProvider(String baseUrl, String apiKey, OkHttpClient httpClient) {
+        this(baseUrl, apiKey, 4096, httpClient);
+    }
+
+    DeepSeekProvider(String baseUrl, String apiKey, int maxTokens, OkHttpClient httpClient) {
         this.baseUrl = normalizeBaseUrl(baseUrl);
         this.apiKey = apiKey;
+        this.maxTokens = maxTokens > 0 ? maxTokens : 4096;
         this.httpClient = httpClient;
     }
 
@@ -80,7 +90,8 @@ public class DeepSeekProvider implements ModelProvider {
             return unsupportedMultimodalMessage();
         }
         try {
-            return callMessages(request.model(), request.systemPrompt(), request.userMessage(), request.tools());
+            return callMessages(request.model(), request.systemPrompt(), request.userMessage(),
+                request.tools(), request.requiredToolName(), request.toolInputMessage());
         } catch (Exception e) {
             log.error("DeepSeek API call failed", e);
             return "[Error] " + e.getMessage();
@@ -92,11 +103,12 @@ public class DeepSeekProvider implements ModelProvider {
         if (request.hasAttachments()) {
             return Flux.just(unsupportedMultimodalMessage());
         }
-        return streamMessages(request.model(), request.systemPrompt(), request.userMessage(), request.tools());
+        return streamMessages(request.model(), request.systemPrompt(), request.userMessage(), request.tools(),
+            request.requiredToolName(), request.toolInputMessage());
     }
 
     private Flux<String> streamMessages(ModelSpec model, String systemPrompt, String userMessage,
-                                        List<LlmTool> tools) {
+                                        List<LlmTool> tools, String requiredToolName, String toolInputMessage) {
         if (apiKey == null || apiKey.isBlank()) {
             return Flux.just("[Error] DeepSeek API key is not configured");
         }
@@ -105,11 +117,23 @@ public class DeepSeekProvider implements ModelProvider {
                 List<LlmTool> activeTools = tools == null ? List.of() : tools;
                 StringBuilder executedToolResults = new StringBuilder();
                 List<Map<String, Object>> messages = buildMessages(systemPrompt, userMessage, activeTools);
+                if (requiredToolName != null && !requiredToolName.isBlank()) {
+                    executeRequiredTool(messages, requiredToolName, activeTools,
+                        toolInputMessage == null ? userMessage : toolInputMessage, executedToolResults);
+                    messages.add(Map.of("role", "user", "content", forcedFinalAnswerPrompt(executedToolResults)));
+                    StreamingDeepSeekResult result = streamMessagesBody(
+                        buildRequestBody(model, messages, List.of()), sink, false);
+                    emitHeldText(result, sink);
+                    if (!sink.isCancelled()) {
+                        sink.complete();
+                    }
+                    return;
+                }
                 boolean finished = false;
 
                 for (int round = 0; round < MAX_TOOL_ROUNDS && !sink.isCancelled(); round++) {
                     StreamingDeepSeekResult result = streamMessagesBody(
-                        buildRequestBody(model, messages, activeTools), sink, !activeTools.isEmpty());
+                        buildRequestBody(model, messages, activeTools, requiredToolName), sink, !activeTools.isEmpty());
                     if (activeTools.isEmpty()) {
                         emitHeldText(result, sink);
                         finished = true;
@@ -157,11 +181,17 @@ public class DeepSeekProvider implements ModelProvider {
     }
 
     private String callMessages(ModelSpec model, String systemPrompt, String userMessage) throws IOException {
-        return callMessages(model, systemPrompt, userMessage, List.of());
+        return callMessages(model, systemPrompt, userMessage, List.of(), null, null);
     }
 
     private String callMessages(ModelSpec model, String systemPrompt, String userMessage,
                                 List<LlmTool> tools) throws IOException {
+        return callMessages(model, systemPrompt, userMessage, tools, null, null);
+    }
+
+    private String callMessages(ModelSpec model, String systemPrompt, String userMessage,
+                                List<LlmTool> tools, String requiredToolName,
+                                String toolInputMessage) throws IOException {
         if (apiKey == null || apiKey.isBlank()) {
             throw new IOException("DeepSeek API key is not configured");
         }
@@ -169,9 +199,16 @@ public class DeepSeekProvider implements ModelProvider {
         List<LlmTool> activeTools = tools == null ? List.of() : tools;
         StringBuilder executedToolResults = new StringBuilder();
         List<Map<String, Object>> messages = buildMessages(systemPrompt, userMessage, activeTools);
+        if (requiredToolName != null && !requiredToolName.isBlank()) {
+            executeRequiredTool(messages, requiredToolName, activeTools,
+                toolInputMessage == null ? userMessage : toolInputMessage, executedToolResults);
+            messages.add(Map.of("role", "user", "content", forcedFinalAnswerPrompt(executedToolResults)));
+            JsonNode finalResponse = send(buildRequestBody(model, messages, List.of()));
+            return extractText(finalResponse);
+        }
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
-            JsonNode response = send(buildRequestBody(model, messages, activeTools));
+            JsonNode response = send(buildRequestBody(model, messages, activeTools, requiredToolName));
             String text = extractText(response);
             if (activeTools.isEmpty()) {
                 return text;
@@ -236,21 +273,55 @@ public class DeepSeekProvider implements ModelProvider {
 
     Map<String, Object> buildRequestBody(ModelSpec model, String systemPrompt, String userMessage,
                                          List<LlmTool> tools) {
-        return buildRequestBody(model, buildMessages(systemPrompt, userMessage, tools), tools);
+        return buildRequestBody(model, buildMessages(systemPrompt, userMessage, tools), tools, null);
+    }
+
+    Map<String, Object> buildRequestBody(ModelSpec model, String systemPrompt, String userMessage,
+                                         List<LlmTool> tools, String requiredToolName) {
+        return buildRequestBody(model, buildMessages(systemPrompt, userMessage, tools), tools, requiredToolName);
     }
 
     private Map<String, Object> buildRequestBody(ModelSpec model, List<Map<String, Object>> messages,
                                                  List<LlmTool> tools) {
+        return buildRequestBody(model, messages, tools, null);
+    }
+
+    private Map<String, Object> buildRequestBody(ModelSpec model, List<Map<String, Object>> messages,
+                                                 List<LlmTool> tools, String requiredToolName) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model.modelName());
         body.put("messages", messages);
-        body.put("max_tokens", 4096);
+        body.put("max_tokens", maxTokens);
         body.put("thinking", Map.of("type", "disabled"));
         if (tools != null && !tools.isEmpty()) {
             body.put("tools", tools.stream().map(this::toAnthropicTool).toList());
-            body.put("tool_choice", Map.of("type", "auto"));
+            body.put("tool_choice", toolChoice(requiredToolName));
         }
         return body;
+    }
+
+    private Map<String, Object> toolChoice(String requiredToolName) {
+        if (requiredToolName == null || requiredToolName.isBlank()) {
+            return Map.of("type", "auto");
+        }
+        return Map.of("type", "tool", "name", requiredToolName);
+    }
+
+    private void executeRequiredTool(List<Map<String, Object>> messages, String requiredToolName,
+                                     List<LlmTool> tools, String userMessage,
+                                     StringBuilder executedToolResults) {
+        LlmTool tool = findTool(requiredToolName, tools);
+        String arguments = tool == null ? "{}" : ToolCallSupport.defaultArgumentsJson(tool, userMessage);
+        String result = tool == null ? "Error: tool not found: " + requiredToolName : tool.call(arguments);
+        appendExecutedToolResult(executedToolResults, requiredToolName, tool == null ? "(none)" : tool.name(), arguments, result);
+        messages.add(Map.of("role", "assistant", "content", requiredToolName));
+        messages.add(Map.of("role", "user", "content", """
+            The runtime executed the required tool before asking the model to answer.
+            Requested tool: %s
+            Arguments: %s
+            Result:
+            %s
+            """.formatted(requiredToolName, arguments, result)));
     }
 
     private void appendDegradedToolResult(List<Map<String, Object>> messages, String assistantText,
@@ -277,11 +348,7 @@ public class DeepSeekProvider implements ModelProvider {
         String fullPrompt = systemPrompt == null || systemPrompt.isBlank()
             ? ToolCallSupport.toolUseInstruction(userMessage, tools)
             : systemPrompt + "\n\n" + ToolCallSupport.toolUseInstruction(userMessage, tools);
-        if (systemPrompt != null && !systemPrompt.isBlank()) {
-            messages.add(Map.of("role", "user", "content", fullPrompt + "\n\n" + (userMessage == null ? "" : userMessage)));
-        } else {
-            messages.add(Map.of("role", "user", "content", fullPrompt + "\n\n" + (userMessage == null ? "" : userMessage)));
-        }
+        messages.add(Map.of("role", "user", "content", fullPrompt + "\n\n" + (userMessage == null ? "" : userMessage)));
         return messages;
     }
 
@@ -627,26 +694,27 @@ public class DeepSeekProvider implements ModelProvider {
             return null;
         }
         String normalized = normalizeToolName(toolName);
-        String canonical = canonicalToolName(normalized);
-        return tools.stream()
-            .filter(candidate -> {
-                String candidateName = normalizeToolName(candidate.name());
-                return candidate.name().equals(toolName)
-                    || candidateName.equals(normalized)
-                    || candidateName.equals(canonical);
-            })
-            .findFirst()
-            .orElse(null);
+        LlmTool best = null;
+        for (LlmTool candidate : tools) {
+            String candidateName = normalizeToolName(candidate.name());
+            if (candidate.name().equals(toolName) || candidateName.equals(normalized)) {
+                return candidate;
+            }
+            if (candidateName.contains(normalized) || normalized.contains(candidateName)) {
+                best = candidate;
+            }
+        }
+        return best;
     }
 
     private Map<String, Object> normalizeArguments(String toolName, Map<String, Object> arguments) {
         Map<String, Object> normalized = new LinkedHashMap<>(arguments == null ? Map.of() : arguments);
-        String canonical = canonicalToolName(normalizeToolName(toolName));
-        if ("weather_query".equals(canonical)) {
+        String name = normalizeToolName(toolName);
+        if (name.contains("weather")) {
             copyFirstPresent(normalized, "city", "location", "place", "cityName", "city_name");
-        } else if ("calculator".equals(canonical)) {
+        } else if (name.contains("calculator") || name.contains("calc")) {
             copyFirstPresent(normalized, "expression", "expr", "formula", "input", "calculation");
-        } else if ("web_search".equals(canonical)) {
+        } else if (name.contains("search") || name.contains("web_search")) {
             copyFirstPresent(normalized, "query", "q", "keyword", "keywords", "searchQuery", "search_query");
         }
         return normalized;
@@ -667,15 +735,6 @@ public class DeepSeekProvider implements ModelProvider {
 
     private static String normalizeToolName(String value) {
         return value == null ? "" : value.trim().replaceAll("[.\\-]", "_").toLowerCase(Locale.ROOT);
-    }
-
-    private static String canonicalToolName(String normalized) {
-        return switch (normalized) {
-            case "calculate", "math_calculate" -> "calculator";
-            case "weather", "forecast", "weather_forecast" -> "weather_query";
-            case "search", "web" -> "web_search";
-            default -> normalized;
-        };
     }
 
     private static String decodeDsmlValue(String value) {

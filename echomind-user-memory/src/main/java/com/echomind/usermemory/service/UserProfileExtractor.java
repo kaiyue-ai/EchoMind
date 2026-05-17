@@ -19,6 +19,8 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -149,16 +151,27 @@ public class UserProfileExtractor {
         return result;
     }
 
+    private static final Pattern JSON_ARRAY_BLOCK = Pattern.compile(
+        "```(?:json)?\\s*(\\[.*?\\])\\s*```|(\\[.*?\\])",
+        Pattern.DOTALL);
+
     private String extractJsonArray(String response) {
         if (response == null || response.isBlank()) {
             return null;
         }
+        Matcher m = JSON_ARRAY_BLOCK.matcher(response);
+        while (m.find()) {
+            String match = m.group(1) != null ? m.group(1) : m.group(2);
+            if (match != null && !match.isBlank()) {
+                return match.trim();
+            }
+        }
         int start = response.indexOf('[');
         int end = response.lastIndexOf(']');
-        if (start < 0 || end < start) {
-            return null;
+        if (start >= 0 && end > start) {
+            return response.substring(start, end + 1);
         }
-        return response.substring(start, end + 1);
+        return null;
     }
 
     private String text(JsonNode node) {

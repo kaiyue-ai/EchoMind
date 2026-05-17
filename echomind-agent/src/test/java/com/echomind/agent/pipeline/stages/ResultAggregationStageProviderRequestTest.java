@@ -62,6 +62,8 @@ class ResultAggregationStageProviderRequestTest {
         assertThat(request.attachments()).hasSize(1);
         assertThat(request.tools()).hasSize(1);
         assertThat(request.tools().get(0).name()).isEqualTo("web_search");
+        assertThat(request.requiredToolName()).isEqualTo("web_search");
+        assertThat(request.toolInputMessage()).isEqualTo("帮我看图并搜索这张图里是什么");
     }
 
     private record CapturingProvider(String providerId, AtomicReference<ProviderRequest> captured)

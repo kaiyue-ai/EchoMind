@@ -56,12 +56,12 @@ public class PersistentChatMemoryStore {
             && "user".equals(message.role())) {
             session.setTitle(truncate(message.content(), TITLE_MAX_CHARS));
         }
-        session.setMessageCount((int) messageRepository.countBySessionId(sessionId) + 1);
         session.setLastActivity(message.timestamp() != null ? message.timestamp() : Instant.now());
-        sessionRepository.save(session);
 
         ChatMessageEntity entity = toEntity(sessionId, message);
         ChatMessageEntity saved = messageRepository.save(entity);
+        session.setMessageCount((int) messageRepository.countBySessionId(sessionId));
+        sessionRepository.save(session);
         log.debug("Saved chat message session={} id={} role={}", sessionId, saved.getId(), saved.getRole());
         return saved;
     }

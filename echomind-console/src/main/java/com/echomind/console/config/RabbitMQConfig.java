@@ -1,5 +1,6 @@
 package com.echomind.console.config;
 
+import com.echomind.common.messaging.ChatMemoryShardSupport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
@@ -18,9 +19,11 @@ public class RabbitMQConfig {
     public static final String QUEUE_CHAT_MEMORY_PERSIST_REQUESTS = "echomind.chat-memory.persist.requests";
     public static final String CHAT_MEMORY_PERSIST_QUEUE_PROPERTY =
         "${echomind.memory.persist-queue-name:" + QUEUE_CHAT_MEMORY_PERSIST_REQUESTS + "}";
+    public static final String CHAT_MEMORY_PERSIST_SHARDS_PROPERTY = "${echomind.memory.persist-shards:8}";
     public static final String CHAT_REQUEST_LISTENER_FACTORY = "chatRequestRabbitListenerContainerFactory";
     public static final String CHAT_RESPONSE_LISTENER_FACTORY = "chatResponseRabbitListenerContainerFactory";
     public static final String CHAT_MEMORY_PERSIST_LISTENER_FACTORY = "chatMemoryPersistRabbitListenerContainerFactory";
+    public static final String CHAT_MEMORY_PERSIST_QUEUE_NAMES_BEAN = "chatMemoryPersistQueueNames";
 
     @Bean
     public Queue chatRequestsQueue() {
@@ -32,9 +35,10 @@ public class RabbitMQConfig {
         return new Queue(QUEUE_CHAT_RESPONSES, true);
     }
 
-    @Bean
-    public Queue chatMemoryPersistRequestsQueue(@Value(CHAT_MEMORY_PERSIST_QUEUE_PROPERTY) String queueName) {
-        return new Queue(queueName, true);
+    @Bean(name = CHAT_MEMORY_PERSIST_QUEUE_NAMES_BEAN)
+    public String[] chatMemoryPersistQueueNames(@Value(CHAT_MEMORY_PERSIST_QUEUE_PROPERTY) String queueName,
+                                                @Value(CHAT_MEMORY_PERSIST_SHARDS_PROPERTY) int shardCount) {
+        return ChatMemoryShardSupport.queueNames(queueName, shardCount).toArray(String[]::new);
     }
 
     @Bean
@@ -65,11 +69,9 @@ public class RabbitMQConfig {
     @Bean(name = CHAT_MEMORY_PERSIST_LISTENER_FACTORY)
     public SimpleRabbitListenerContainerFactory chatMemoryPersistRabbitListenerContainerFactory(
             ConnectionFactory connectionFactory,
-            Jackson2JsonMessageConverter converter,
-            @Value("${echomind.rabbitmq.chat-memory-persist.concurrent-consumers:4}") int concurrentConsumers,
-            @Value("${echomind.rabbitmq.chat-memory-persist.max-concurrent-consumers:8}") int maxConcurrentConsumers,
-            @Value("${echomind.rabbitmq.chat-memory-persist.prefetch:10}") int prefetchCount) {
-        return listenerFactory(connectionFactory, converter, concurrentConsumers, maxConcurrentConsumers, prefetchCount);
+            Jackson2JsonMessageConverter converter) {
+        // 每个分片队列只能有 1 个 consumer；整体并发靠分片数扩展，保证同一 sessionId 不乱序。
+        return listenerFactory(connectionFactory, converter, 1, 1, 1);
     }
 
     @Bean

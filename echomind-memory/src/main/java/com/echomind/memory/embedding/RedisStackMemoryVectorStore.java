@@ -1,23 +1,15 @@
 package com.echomind.memory.embedding;
 
 import com.echomind.memory.redis.RedisKeyScanner;
-import io.lettuce.core.codec.ByteArrayCodec;
-import io.lettuce.core.output.ArrayOutput;
-import io.lettuce.core.output.CommandOutput;
-import io.lettuce.core.output.StatusOutput;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.lettuce.LettuceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Base64;
 import java.util.List;
+
+import static com.echomind.memory.embedding.RedisStackVectorStoreSupport.*;
 
 /**
  * Redis Stack 向量检索实现。
@@ -82,8 +74,7 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
         }
         try {
             ensureIndex(queryVector.length);
-            List<MemorySearchHit> hits = searchRedis(sessionId, queryVector, topK);
-            return hits;
+            return searchRedis(sessionId, queryVector, topK);
         } catch (Exception e) {
             log.warn("Redis Stack memory vector search failed session={}: {}", sessionId, e.getMessage());
             return List.of();
@@ -96,7 +87,7 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
             return;
         }
         try {
-            keyScanner.deleteByPattern(keyPrefix + encodedSessionId(sessionId) + ":*");
+            keyScanner.deleteByPattern(keyPrefix + encodeId(sessionId) + ":*");
         } catch (Exception e) {
             log.warn("Failed to delete Redis Stack memory vectors for session {}: {}", sessionId, e.getMessage());
         }
@@ -237,122 +228,7 @@ public class RedisStackMemoryVectorStore implements MemoryVectorStore {
             : null;
     }
 
-    private byte[] vectorBytes(double[] vector) {
-        ByteBuffer buffer = ByteBuffer.allocate(vector.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-        for (double value : vector) {
-            buffer.putFloat((float) value);
-        }
-        return buffer.array();
-    }
-
     private String key(String sessionId, Long messageId) {
-        return keyPrefix + encodedSessionId(sessionId) + ":" + messageId;
-    }
-
-    private String encodedSessionId(String sessionId) {
-        return Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(sessionId.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private String escapeTag(String value) {
-        StringBuilder sb = new StringBuilder();
-        for (char c : value.toCharArray()) {
-            if (Character.isLetterOrDigit(c) || c == '_') {
-                sb.append(c);
-            } else {
-                sb.append('\\').append(c);
-            }
-        }
-        return sb.toString();
-    }
-
-    private boolean isIndexAlreadyExists(Exception e) {
-        String message = exceptionMessage(e);
-        return message.contains("index already exists") || message.contains("already exists");
-    }
-
-    private Object executeArrayCommand(RedisConnection connection, String command, byte[]... args) {
-        return executeCommand(connection, command, new ArrayOutput<>(ByteArrayCodec.INSTANCE), args);
-    }
-
-    private Object executeStatusCommand(RedisConnection connection, String command, byte[]... args) {
-        return executeCommand(connection, command, new StatusOutput<>(ByteArrayCodec.INSTANCE), args);
-    }
-
-    private Object executeCommand(RedisConnection connection, String command,
-                                  CommandOutput<byte[], byte[], ?> output, byte[]... args) {
-        if (connection instanceof LettuceConnection lettuceConnection) {
-            return lettuceConnection.execute(command, output, args);
-        }
-        return connection.execute(command, args);
-    }
-
-    private String exceptionMessage(Throwable throwable) {
-        StringBuilder message = new StringBuilder();
-        Throwable cursor = throwable;
-        while (cursor != null) {
-            if (cursor.getMessage() != null) {
-                message.append(cursor.getMessage()).append(' ');
-            }
-            cursor = cursor.getCause();
-        }
-        return message.toString().toLowerCase();
-    }
-
-    private static byte[] bytes(String value) {
-        return (value == null ? "" : value).getBytes(StandardCharsets.UTF_8);
-    }
-
-    private String text(Object value) {
-        if (value instanceof byte[] bytes) {
-            return new String(bytes, StandardCharsets.UTF_8);
-        }
-        return value == null ? null : String.valueOf(value);
-    }
-
-    private Long parseLong(Object value) {
-        try {
-            return Long.parseLong(text(value));
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private double parseDouble(Object value) {
-        try {
-            return Double.parseDouble(text(value));
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
-    private List<?> asList(Object raw) {
-        if (raw instanceof List<?> list) {
-            return list;
-        }
-        if (raw instanceof Object[] array) {
-            return Arrays.asList(array);
-        }
-        return List.of();
-    }
-
-    private List<?> findValue(List<?> fields, String name) {
-        for (int i = 0; i + 1 < fields.size(); i += 2) {
-            if (name.equals(text(fields.get(i)))) {
-                return asList(fields.get(i + 1));
-            }
-        }
-        return List.of();
-    }
-
-    private double distanceToSimilarity(double distance) {
-        if (Double.isNaN(distance) || Double.isInfinite(distance)) {
-            return 0;
-        }
-        return Math.max(0, Math.min(1, 1 - distance));
-    }
-
-    private String blankToDefault(String value, String defaultValue) {
-        return value == null || value.isBlank() ? defaultValue : value;
+        return keyPrefix + encodeId(sessionId) + ":" + messageId;
     }
 }

@@ -23,9 +23,7 @@ public class UserMemoryConsumer {
         } catch (Exception e) {
             String sessionId = event == null ? null : event.sessionId();
             log.warn("Failed to process user memory event sessionId={}: {}", sessionId, e.getMessage());
-            if (properties.isEnabled()) {
-                throw new IllegalStateException(e);
-            }
+            // 不 re-throw，让 RabbitMQ ack 此消息，避免坏消息阻塞整个消费者
         }
     }
 }

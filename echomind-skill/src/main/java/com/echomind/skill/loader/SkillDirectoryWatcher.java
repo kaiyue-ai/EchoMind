@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -58,6 +59,7 @@ public class SkillDirectoryWatcher {
      * 使用{@link ConcurrentHashMap#newKeySet()}创建线程安全的Set。
      */
     private final Set<String> loadedFiles = ConcurrentHashMap.newKeySet();
+    private final Map<String, String> loadedFileToSkillId = new ConcurrentHashMap<>();
 
     /** 监视器运行状态标志，使用volatile确保线程间可见 */
     private volatile boolean running;
@@ -176,6 +178,7 @@ public class SkillDirectoryWatcher {
             SkillJarLoader.SkillLoadResult result = jarLoader.load(jarPath);
             registry.register(result.skill(), result.classLoader());
             loadedFiles.add(key);
+            loadedFileToSkillId.put(key, result.skill().metadata().skillId());
             log.info("Auto-loaded skill from: {}", key);
         } catch (Exception e) {
             log.error("Failed to auto-load skill: {}", key, e);
@@ -192,5 +195,9 @@ public class SkillDirectoryWatcher {
     private void unloadJar(Path jarPath) {
         String key = jarPath.getFileName().toString();
         loadedFiles.remove(key);
+        String skillId = loadedFileToSkillId.remove(key);
+        if (skillId != null) {
+            registry.unregister(skillId);
+        }
     }
 }

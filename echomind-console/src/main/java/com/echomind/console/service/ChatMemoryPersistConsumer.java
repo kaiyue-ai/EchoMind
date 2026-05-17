@@ -19,7 +19,7 @@ public class ChatMemoryPersistConsumer {
     private final UserMemoryPersistPublisher userMemoryPublisher;
 
     @RabbitListener(
-        queues = RabbitMQConfig.CHAT_MEMORY_PERSIST_QUEUE_PROPERTY,
+        queues = "#{@" + RabbitMQConfig.CHAT_MEMORY_PERSIST_QUEUE_NAMES_BEAN + "}",
         containerFactory = RabbitMQConfig.CHAT_MEMORY_PERSIST_LISTENER_FACTORY
     )
     public void onPersistEvent(ChatMemoryPersistEvent event) {

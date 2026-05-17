@@ -45,6 +45,8 @@ class TeamBlackboardServicePromptTest {
         assertThat(prompt).contains("旧天气查询");
         assertThat(prompt).contains("补充天气风险和备用方案");
         assertThat(prompt).contains("预算300元/人");
+        assertThat(prompt).contains("Do not create a final integration");
+        assertThat(prompt).contains("The Reviewer is responsible for the final report");
     }
 
     @Test

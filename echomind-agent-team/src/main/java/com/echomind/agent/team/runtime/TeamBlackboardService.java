@@ -189,22 +189,6 @@ public class TeamBlackboardService {
         return getRun(teamId, runId);
     }
 
-    public TeamRunSnapshot executeRunBlocking(String teamId, String task) {
-        TeamRunSnapshot created = createRun(teamId, task);
-        while (true) {
-            TeamRunSnapshot current = getRun(teamId, created.runId());
-            if (isTerminal(current.status())) {
-                return current;
-            }
-            try {
-                Thread.sleep(300L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while waiting for team run", e);
-            }
-        }
-    }
-
     private void executeRunSafely(String runId) {
         try {
             executeRun(runId);
@@ -301,6 +285,8 @@ public class TeamBlackboardService {
         return """
             You are the Planner in an Agent Team. Decompose the user's task into 2-5 executable subtasks.
             Write all user-visible text in Simplified Chinese.
+            Plan only information-gathering or analysis subtasks for Executors.
+            Do not create a final integration, final report, final方案整合, 汇总输出, or 可执行方案撰写 step. The Reviewer is responsible for the final report.
             Respond only with JSON:
             {
               "steps": [
@@ -707,6 +693,9 @@ public class TeamBlackboardService {
         stepRepository.deleteByRunId(run.getRunId());
         int index = 1;
         for (PlannedStep item : planned) {
+            if (isFinalIntegrationStep(item)) {
+                continue;
+            }
             TeamStepEntity step = new TeamStepEntity();
             step.setStepId("step-" + index + "-" + UUID.randomUUID().toString().substring(0, 8));
             step.setRunId(run.getRunId());
@@ -719,6 +708,41 @@ public class TeamBlackboardService {
             stepRepository.save(step);
             index++;
         }
+    }
+
+    private boolean isFinalIntegrationStep(PlannedStep item) {
+        if (item == null) {
+            return false;
+        }
+        String text = (nullToBlank(item.title()) + " " + nullToBlank(item.description()) + " "
+            + nullToBlank(item.acceptanceCriteria())).toLowerCase();
+        return containsAny(text,
+            "最终报告",
+            "最终方案",
+            "可执行方案",
+            "整合输出",
+            "综合方案",
+            "汇总输出",
+            "汇总成",
+            "整合成",
+            "撰写完整",
+            "final report",
+            "final deliverable",
+            "integration",
+            "integrated report"
+        );
+    }
+
+    private boolean containsAny(String text, String... values) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        for (String value : values) {
+            if (text.contains(value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Transactional

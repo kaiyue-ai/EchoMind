@@ -1,7 +1,6 @@
 package com.echomind.console.controller.rest;
 
 import com.echomind.console.dto.TeamCreateRequest;
-import com.echomind.console.dto.TeamExecuteRequest;
 import com.echomind.console.dto.TeamResumeRequest;
 import com.echomind.console.dto.TeamRunCreateRequest;
 import com.echomind.console.dto.TeamRunView;
@@ -52,16 +51,6 @@ public class TeamController {
     public ResponseEntity<Void> deleteTeam(@PathVariable String teamId) {
         teamService.deleteTeam(teamId);
         return ResponseEntity.noContent().build();
-    }
-
-    /**
-     * 执行Agent团队任务。
-     * 团队协作流程：Planner分解 → Executor执行 → Reviewer评审 → 汇总输出
-     */
-    @PostMapping("/{teamId}/execute")
-    public ResponseEntity<?> executeTask(@PathVariable String teamId,
-                                         @RequestBody TeamExecuteRequest request) {
-        return ResponseEntity.ok(teamService.executeTask(teamId, request));
     }
 
     /**

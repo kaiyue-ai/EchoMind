@@ -32,7 +32,7 @@ class OpenAICompatibleProviderTest {
 
         Method toolMethod = OpenAICompatibleProvider.class.getDeclaredMethod(
             "callChatCompletions",
-            ModelSpec.class, String.class, String.class, List.class, List.class);
+            ModelSpec.class, String.class, String.class, List.class, List.class, String.class, String.class);
         toolMethod.setAccessible(true);
 
         try {
@@ -47,7 +47,9 @@ class OpenAICompatibleProviderTest {
                     "Search the web",
                     Map.of("properties", Map.of("query", Map.of("type", "string"))),
                     ignored -> "ok"
-                ))
+                )),
+                null,
+                null
             );
         } catch (Exception ignored) {
             // Request will fail without a live endpoint; this test only checks helper behavior below.
@@ -57,6 +59,33 @@ class OpenAICompatibleProviderTest {
             "查询 https://deepseek.com/",
             List.of(new LlmTool("web_search", "Search the web", Map.of(), ignored -> "ok"))
         )).contains("must emit a formal tool call");
+    }
+
+    @Test
+    void requiredToolNameUsesOpenAiRequiredToolChoice() throws Exception {
+        OpenAICompatibleProvider provider = new OpenAICompatibleProvider(
+            "openai-compatible", "https://example.com", "test-key");
+        Method method = OpenAICompatibleProvider.class.getDeclaredMethod(
+            "buildChatCompletionsBody",
+            ModelSpec.class, List.class, List.class, boolean.class, String.class);
+        method.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) method.invoke(
+            provider,
+            new ModelSpec("openai-compatible", "gpt", Set.of(ModelCapability.TEXT), true),
+            List.of(Map.of("role", "user", "content", "搜一下https://example.com")),
+            List.of(new LlmTool(
+                "web_search",
+                "Search the web",
+                Map.of("type", "object", "properties", Map.of("query", Map.of("type", "string"))),
+                ignored -> "ok"
+            )),
+            false,
+            "web_search"
+        );
+
+        assertThat(body).containsEntry("tool_choice", "required");
     }
 
     @Test
@@ -196,6 +225,64 @@ class OpenAICompatibleProviderTest {
             assertThat(requestBodies.get(1)).doesNotContain("\"stream\":true");
             assertThat(requestBodies.get(1)).contains("\"role\":\"tool\"", "\"tool_call_id\":\"call_1\"");
             assertThat(toolInput.get()).isEqualTo("{\"expression\":\"2+2\"}");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void requiredToolExecutesBeforeCallingModel() throws Exception {
+        AtomicInteger requestCount = new AtomicInteger();
+        List<String> requestBodies = new ArrayList<>();
+        AtomicReference<String> toolInput = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            requestCount.incrementAndGet();
+            requestBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = """
+                {"choices":[{"message":{"content":"已经读取网页"}}]}
+                """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+
+        try {
+            OpenAICompatibleProvider provider = new OpenAICompatibleProvider(
+                "aliyun-bailian",
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                "test-key"
+            );
+            LlmTool webSearch = new LlmTool(
+                "web_search",
+                "Search the web",
+                Map.of(
+                    "type", "object",
+                    "properties", Map.of("query", Map.of("type", "string")),
+                    "required", List.of("query")
+                ),
+                input -> {
+                    toolInput.set(input);
+                    return "Fetched web page: JVM article";
+                }
+            );
+
+            String answer = provider.chat(new ProviderRequest(
+                new ModelSpec("aliyun-bailian", "qwen-plus", Set.of(ModelCapability.TEXT), true),
+                "你是助手",
+                "搜一下https://example.com/article",
+                List.of(),
+                List.of(webSearch),
+                "web_search"
+            ));
+
+            assertThat(answer).isEqualTo("已经读取网页");
+            assertThat(toolInput.get()).isEqualTo("{\"query\":\"https://example.com/article\"}");
+            assertThat(requestCount.get()).isEqualTo(1);
+            assertThat(requestBodies.get(0)).contains("\"role\":\"tool\"");
+            assertThat(requestBodies.get(0)).doesNotContain("\"tools\"");
         } finally {
             server.stop(0);
         }

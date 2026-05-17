@@ -66,7 +66,9 @@ public class ResultAggregationStage implements PipelineStage {
                 ctx.getSystemPrompt(),
                 message,
                 ctx.attachmentsForModel(),
-                llmTools(tools, ctx)
+                llmTools(tools, ctx),
+                requiredToolName(tools, ctx),
+                ctx.getUserMessage()
             );
             ctx.setFinalResponse(provider.chat(request));
         } catch (Exception e) {
@@ -100,9 +102,22 @@ public class ResultAggregationStage implements PipelineStage {
             ctx.getSystemPrompt(),
             message,
             ctx.attachmentsForModel(),
-            llmTools(tools, ctx)
+            llmTools(tools, ctx),
+            requiredToolName(tools, ctx),
+            ctx.getUserMessage()
         );
         return provider.stream(request);
+    }
+
+    private String requiredToolName(List<Tool> tools, PipelineContext ctx) {
+        if (tools == null || tools.size() != 1) {
+            return null;
+        }
+        Object mode = ctx.getAttributes().get("toolMatchMode");
+        if (!"keyword".equals(mode)) {
+            return null;
+        }
+        return functionName(tools.get(0));
     }
 
     private List<LlmTool> llmTools(List<Tool> tools, PipelineContext ctx) {
@@ -125,10 +140,10 @@ public class ResultAggregationStage implements PipelineStage {
         List<Tool> allowedTools;
         List<Tool> keywordMatched;
         if (allowedObj instanceof List<?> allowed) {
-            allowedTools = toolRouter.listForAgentSkillIds(allowed);
+            allowedTools = toolRouter.filterCompatibleTools(ctx.getUserMessage(), toolRouter.listForAgentSkillIds(allowed));
             keywordMatched = toolRouter.matchForAgentSkillIds(ctx.getUserMessage(), allowed);
         } else {
-            allowedTools = toolRouter.listForAgentSkillIds(List.of());
+            allowedTools = toolRouter.filterCompatibleTools(ctx.getUserMessage(), toolRouter.listForAgentSkillIds(List.of()));
             keywordMatched = toolRouter.matchForAgentSkillIds(ctx.getUserMessage(), List.of());
         }
         if (!keywordMatched.isEmpty()) {

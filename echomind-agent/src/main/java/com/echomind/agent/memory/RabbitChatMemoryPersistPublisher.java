@@ -2,6 +2,7 @@ package com.echomind.agent.memory;
 
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.ChatMemoryPersistEvent;
+import com.echomind.common.messaging.ChatMemoryShardSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
@@ -12,23 +13,29 @@ import java.util.List;
 public class RabbitChatMemoryPersistPublisher implements ChatMemoryPersistPublisher {
 
     private final RabbitTemplate rabbitTemplate;
-    private final String queueName;
+    private final String exchangeName;
+    private final int shardCount;
     private final boolean enabled;
 
-    public RabbitChatMemoryPersistPublisher(RabbitTemplate rabbitTemplate, String queueName, boolean enabled) {
+    public RabbitChatMemoryPersistPublisher(RabbitTemplate rabbitTemplate, String exchangeName,
+                                            int shardCount, boolean enabled) {
         this.rabbitTemplate = rabbitTemplate;
-        this.queueName = queueName;
+        this.exchangeName = exchangeName;
+        this.shardCount = ChatMemoryShardSupport.normalizeShardCount(shardCount);
         this.enabled = enabled;
     }
 
     @Override
     public void publish(String sessionId, String agentId, List<AgentMessage> messages) {
-        if (!enabled || rabbitTemplate == null || queueName == null || queueName.isBlank()
+        if (!enabled || rabbitTemplate == null || exchangeName == null || exchangeName.isBlank()
             || sessionId == null || sessionId.isBlank() || messages == null || messages.isEmpty()) {
             return;
         }
         try {
-            rabbitTemplate.convertAndSend(queueName, new ChatMemoryPersistEvent(sessionId, agentId, messages));
+            int shardIndex = ChatMemoryShardSupport.shardIndex(sessionId, shardCount);
+            String routingKey = ChatMemoryShardSupport.routingKey(shardIndex);
+            rabbitTemplate.convertAndSend(exchangeName, routingKey,
+                new ChatMemoryPersistEvent(sessionId, agentId, messages));
         } catch (Exception e) {
             log.warn("Failed to publish chat memory persist event sessionId={}: {}", sessionId, e.getMessage());
         }

@@ -75,7 +75,9 @@ public class OpenAICompatibleProvider implements ModelProvider {
                 request.systemPrompt(),
                 request.userMessage(),
                 request.attachments(),
-                request.tools()
+                request.tools(),
+                request.requiredToolName(),
+                request.toolInputMessage()
             );
         } catch (Exception e) {
             log.error("{} API call failed", providerId, e);
@@ -92,7 +94,9 @@ public class OpenAICompatibleProvider implements ModelProvider {
                 request.systemPrompt(),
                 request.userMessage(),
                 request.attachments(),
-                request.tools()
+                request.tools(),
+                request.requiredToolName(),
+                request.toolInputMessage()
             );
         } catch (Exception e) {
             log.error("{} streaming API call failed", providerId, e);
@@ -108,9 +112,15 @@ public class OpenAICompatibleProvider implements ModelProvider {
      */
     private String callChatCompletions(ModelSpec model, String systemPrompt, String userMessage,
                                        List<MessageAttachment> attachments,
-                                       List<LlmTool> tools) throws IOException {
+                                       List<LlmTool> tools,
+                                       String requiredToolName,
+                                       String toolInputMessage) throws IOException {
         List<Map<String, Object>> messages = buildMessages(systemPrompt, userMessage, attachments, tools);
-        Map<String, Object> body = buildChatCompletionsBody(model, messages, tools, false);
+        if (requiredToolName != null && !requiredToolName.isBlank()) {
+            executeRequiredTool(messages, requiredToolName, tools, toolInputMessage == null ? userMessage : toolInputMessage);
+            return continueAfterToolCalls(model, messages);
+        }
+        Map<String, Object> body = buildChatCompletionsBody(model, messages, tools, false, requiredToolName);
         JsonNode root = sendChatCompletions(body);
         JsonNode message = root.path("choices").path(0).path("message");
         JsonNode toolCalls = message.path("tool_calls");
@@ -140,6 +150,31 @@ public class OpenAICompatibleProvider implements ModelProvider {
         return content;
     }
 
+    private void executeRequiredTool(List<Map<String, Object>> messages, String requiredToolName,
+                                     List<LlmTool> tools, String userMessage) {
+        LlmTool tool = findTool(requiredToolName, tools);
+        if (tool == null) {
+            messages.add(Map.of("role", "system", "content", "Required tool not found: " + requiredToolName));
+            return;
+        }
+        String arguments = ToolCallSupport.defaultArgumentsJson(tool, userMessage);
+        String callId = "required-" + tool.name();
+        messages.add(Map.of(
+            "role", "assistant",
+            "content", "",
+            "tool_calls", List.of(Map.of(
+                "id", callId,
+                "type", "function",
+                "function", Map.of("name", tool.name(), "arguments", arguments)
+            ))
+        ));
+        messages.add(Map.of(
+            "role", "tool",
+            "tool_call_id", callId,
+            "content", tool.call(arguments)
+        ));
+    }
+
     private List<Map<String, Object>> buildMessages(String systemPrompt, String userMessage,
                                                     List<MessageAttachment> attachments,
                                                     List<LlmTool> tools) {
@@ -156,6 +191,12 @@ public class OpenAICompatibleProvider implements ModelProvider {
 
     private Map<String, Object> buildChatCompletionsBody(ModelSpec model, List<Map<String, Object>> messages,
                                                          List<LlmTool> tools, boolean stream) {
+        return buildChatCompletionsBody(model, messages, tools, stream, null);
+    }
+
+    private Map<String, Object> buildChatCompletionsBody(ModelSpec model, List<Map<String, Object>> messages,
+                                                         List<LlmTool> tools, boolean stream,
+                                                         String requiredToolName) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model.modelName());
         body.put("messages", messages);
@@ -164,9 +205,16 @@ public class OpenAICompatibleProvider implements ModelProvider {
         }
         if (tools != null && !tools.isEmpty()) {
             body.put("tools", tools.stream().map(this::toOpenAiTool).toList());
-            body.put("tool_choice", "auto");
+            body.put("tool_choice", toolChoice(requiredToolName));
         }
         return body;
+    }
+
+    private Object toolChoice(String requiredToolName) {
+        if (requiredToolName == null || requiredToolName.isBlank()) {
+            return "auto";
+        }
+        return "required";
     }
 
     private JsonNode sendChatCompletions(Map<String, Object> body) throws IOException {
@@ -188,12 +236,26 @@ public class OpenAICompatibleProvider implements ModelProvider {
 
     private Flux<String> streamChatCompletions(ModelSpec model, String systemPrompt, String userMessage,
                                                List<MessageAttachment> attachments,
-                                               List<LlmTool> tools) {
+                                               List<LlmTool> tools,
+                                               String requiredToolName,
+                                               String toolInputMessage) {
         return Flux.<String>create(sink -> {
             try {
                 List<Map<String, Object>> messages = buildMessages(systemPrompt, userMessage, attachments, tools);
+                if (requiredToolName != null && !requiredToolName.isBlank()) {
+                    executeRequiredTool(messages, requiredToolName, tools,
+                        toolInputMessage == null ? userMessage : toolInputMessage);
+                    String finalAnswer = continueAfterToolCalls(model, messages);
+                    if (!finalAnswer.isEmpty() && !sink.isCancelled()) {
+                        sink.next(finalAnswer);
+                    }
+                    if (!sink.isCancelled()) {
+                        sink.complete();
+                    }
+                    return;
+                }
                 StreamingOpenAiResult result = streamChatCompletionsBody(
-                    buildChatCompletionsBody(model, messages, tools, true), sink);
+                    buildChatCompletionsBody(model, messages, tools, true, requiredToolName), sink);
 
                 if (!result.toolCalls().isEmpty() && tools != null && !tools.isEmpty() && !sink.isCancelled()) {
                     appendOpenAiToolResults(messages, result.toolCalls(), tools);

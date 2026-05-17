@@ -1,11 +1,11 @@
 package com.echomind.memory.knowledge;
 
 import com.echomind.memory.embedding.EmbeddingClient;
+import com.echomind.memory.embedding.RedisStackVectorStoreSupport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Pageable;
 
-import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Optional;
 
@@ -53,14 +53,9 @@ class AgentKnowledgeServiceHybridSearchTest {
     }
 
     @Test
-    void redisDistanceIsConvertedToSimilarity() throws Exception {
-        AgentKnowledgeService service = service(mock(AgentKnowledgeChunkRepository.class),
-            text -> Optional.of(new double[] {1, 0}), 0.25);
-        Method method = AgentKnowledgeService.class.getDeclaredMethod("distanceToSimilarity", double.class);
-        method.setAccessible(true);
-
-        assertThat((double) method.invoke(service, 0.2)).isEqualTo(0.8);
-        assertThat((double) method.invoke(service, 1.3)).isZero();
+    void redisDistanceIsConvertedToSimilarity() {
+        assertThat(RedisStackVectorStoreSupport.distanceToSimilarity(0.2)).isEqualTo(0.8);
+        assertThat(RedisStackVectorStoreSupport.distanceToSimilarity(1.3)).isZero();
     }
 
     private AgentKnowledgeService service(AgentKnowledgeChunkRepository chunkRepository,

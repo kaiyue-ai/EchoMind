@@ -48,4 +48,52 @@ class ToolCallSupportTest {
         assertThat(ToolCallSupport.defaultArguments(webSearch, "搜索 deepseek 最新消息"))
             .containsEntry("query", "deepseek 最新消息");
     }
+
+    @Test
+    void doesNotCopyUserTextIntoEveryOptionalNowcoderParameter() {
+        LlmTool nowcoder = new LlmTool(
+            "fetch_nowcoder_java_interview_article",
+            "抓取牛客网 Java 面经文章",
+            Map.of(
+                "type", "object",
+                "properties", Map.of(
+                    "url", Map.of("type", "string"),
+                    "random", Map.of("type", "boolean"),
+                    "keyword", Map.of("type", "string"),
+                    "maxAttempts", Map.of("type", "integer"),
+                    "includeHtml", Map.of("type", "boolean")
+                )
+            ),
+            ignored -> "ok"
+        );
+
+        assertThat(ToolCallSupport.defaultArguments(nowcoder, "帮我抓取一篇java面经"))
+            .containsEntry("random", true)
+            .containsEntry("keyword", "Java")
+            .doesNotContainKeys("url", "maxAttempts", "includeHtml");
+    }
+
+    @Test
+    void dateQueryUsesEmptyArgumentsForCurrentDateQuestion() {
+        LlmTool dateQuery = new LlmTool(
+            "date_query",
+            "Query current date",
+            Map.of(
+                "type", "object",
+                "properties", Map.of(
+                    "date", Map.of("type", "string"),
+                    "zoneId", Map.of("type", "string"),
+                    "offsetDays", Map.of("type", "integer"),
+                    "format", Map.of("type", "string"),
+                    "locale", Map.of("type", "string")
+                )
+            ),
+            ignored -> "ok"
+        );
+
+        assertThat(ToolCallSupport.defaultArguments(dateQuery, "今天日期是多少")).isEmpty();
+        assertThat(ToolCallSupport.defaultArguments(dateQuery, "明天星期几"))
+            .containsEntry("offsetDays", 1)
+            .doesNotContainKeys("date", "zoneId", "format");
+    }
 }

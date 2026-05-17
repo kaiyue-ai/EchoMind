@@ -101,7 +101,7 @@ public class MemoryManager {
      * @param memoryKey 会话 ID
      * @return 可直接传给模型的历史上下文
      */
-    public List<AgentMessage> getPromptContext(String memoryKey, String currentUserMessage) {
+    public List<AgentMessage> getPromptContext(String memoryKey) {
         List<AgentMessage> result = new ArrayList<>();
         result.addAll(getRecentMessages(memoryKey));
         return result;

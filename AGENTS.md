@@ -61,8 +61,8 @@ npm.cmd run build
 cd D:\claudeWorkSpace\ai-agent
 mvn.cmd -q clean package "-Dmaven.test.skip=true"
 docker build -f Dockerfile.runtime -t ai-agent-backend:latest .
-docker build -t ai-agent-frontend:latest .\echomind-web
-docker compose up -d skywalking-oap otel-collector skywalking-ui backend frontend
+docker build -f .\echomind-web\Dockerfile.runtime -t ai-agent-frontend:latest .\echomind-web
+docker compose up -d --remove-orphans backend frontend
 ```
 
 部署后验证：
@@ -74,17 +74,10 @@ Invoke-RestMethod http://localhost:8080/api/mcp/servers
 Invoke-RestMethod http://localhost:8080/api/mcp/tools
 ```
 
-链路追踪验证：
-
-```powershell
-Invoke-RestMethod http://localhost:8081
-# 调一次 /api/chat/sync 后，在 SkyWalking UI 中搜索 service=echomind-backend
-```
-
 说明：
 
-- 当前 Compose 已集成 OpenTelemetry Collector 和 SkyWalking，默认只采集后端 Trace。
-- 这是本地演示型部署，不包含指标和日志，也不承诺长期保留 Trace 数据。
+- 当前 Compose 默认只部署业务依赖和前后端，不再内置 OpenTelemetry Collector / SkyWalking。
+- 如需链路追踪，使用独立观测栈接入，不要让后端启动依赖观测组件健康状态。
 
 也可以使用 harness 命令入口：
 

@@ -73,6 +73,7 @@ echomind:
       deepseek:
         api-key: ${DEEPSEEK_API_KEY:${ANTHROPIC_API_KEY:}}
         base-url: ${DEEPSEEK_BASE_URL:${ANTHROPIC_BASE_URL:https://api.deepseek.com/anthropic}}
+        max-tokens: ${DEEPSEEK_MAX_TOKENS:4096}
         models:
           - name: deepseek-v4-flash
             capabilities: [text, function]
@@ -123,6 +124,9 @@ echomind:
     # 已弃用：普通聊天历史不再在主链路做向量召回，保留为兼容配置。
     retrieval-top-k: ${ECHOMIND_MEMORY_RETRIEVAL_TOP_K:0}
     persist-queue-name: ${ECHOMIND_MEMORY_PERSIST_QUEUE_NAME:echomind.chat-memory.persist.requests}
+    persist-exchange-name: ${ECHOMIND_MEMORY_PERSIST_EXCHANGE_NAME:echomind.chat-memory.persist.exchange}
+    # 普通聊天记忆按 sessionId hash 到多个队列；每个分片单消费者，避免同一会话乱序。
+    persist-shards: ${ECHOMIND_MEMORY_PERSIST_SHARDS:8}
     async-persist-enabled: ${ECHOMIND_MEMORY_ASYNC_PERSIST_ENABLED:true}
     summary-max-chars: 3000
     summary-refresh-interval: 6

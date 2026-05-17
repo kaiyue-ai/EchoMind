@@ -11,8 +11,7 @@ import com.echomind.agent.team.runtime.TeamStepSnapshot;
 import com.echomind.agent.team.state.TeamRole;
 import com.echomind.agent.team.state.TeamRunStatus;
 import com.echomind.console.dto.TeamCreateRequest;
-import com.echomind.console.dto.TeamExecuteRequest;
-import com.echomind.console.dto.TeamExecutionResponse;
+import com.echomind.console.dto.TeamMemberRequest;
 import com.echomind.console.dto.TeamRunCreateRequest;
 import com.echomind.console.dto.TeamRunView;
 import org.junit.jupiter.api.Test;
@@ -21,7 +20,6 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -43,26 +41,12 @@ class TeamApplicationServiceTest {
         when(blackboard.createTeam(eq("测试团队"), any())).thenReturn(snapshot);
         when(blackboard.listTeams()).thenReturn(List.of(snapshot));
 
-        var created = service.createTeam(new TeamCreateRequest("测试团队", "planner", "executor", "reviewer"));
+        var created = service.createTeam(teamCreateRequest("测试团队"));
 
         assertThat(created.name()).isEqualTo("测试团队");
         assertThat(created.roles()).containsExactlyInAnyOrder("PLANNER", "EXECUTOR", "REVIEWER");
         assertThat(service.listTeams()).extracting("teamId").contains("team-1");
         verify(blackboard).createTeam(eq("测试团队"), any());
-    }
-
-    @Test
-    void executeTaskUsesBlockingRunCompatibilityPath() {
-        TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
-        TeamApplicationService service = new TeamApplicationService(blackboard, mock(TeamMessageBus.class));
-        TeamRunSnapshot run = runSnapshot(TeamRunStatus.COMPLETED, "完成");
-        when(blackboard.executeRunBlocking("team-1", "整理需求")).thenReturn(run);
-
-        TeamExecutionResponse response = service.executeTask("team-1", new TeamExecuteRequest("整理需求"));
-
-        assertThat(response.teamId()).isEqualTo("team-1");
-        assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(response.finalOutput()).isEqualTo("完成");
     }
 
     @Test
@@ -89,29 +73,30 @@ class TeamApplicationServiceTest {
     }
 
     @Test
-    void legacyRequestRequiresExplicitReviewer() {
+    void createTeamDelegatesExplicitReviewerMember() {
         TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
         TeamApplicationService service = new TeamApplicationService(blackboard, mock(TeamMessageBus.class));
+        when(blackboard.createTeam(eq("团队"), any())).thenReturn(teamSnapshot());
 
-        assertThatThrownBy(() -> service.createTeam(new TeamCreateRequest("兼容团队", "planner", "executor", null)))
-            .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("Reviewer agent is required");
-    }
+        service.createTeam(teamCreateRequest("团队"));
 
-    @Test
-    void legacyRequestUsesExplicitReviewerMember() {
-        TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
-        TeamApplicationService service = new TeamApplicationService(blackboard, mock(TeamMessageBus.class));
-        when(blackboard.createTeam(eq("兼容团队"), any())).thenReturn(teamSnapshot());
-
-        service.createTeam(new TeamCreateRequest("兼容团队", "planner", "executor", "reviewer"));
-
-        verify(blackboard).createTeam(eq("兼容团队"), org.mockito.ArgumentMatchers.argThat(specs -> {
+        verify(blackboard).createTeam(eq("团队"), org.mockito.ArgumentMatchers.argThat(specs -> {
             @SuppressWarnings("unchecked")
             List<TeamMemberSpec> members = (List<TeamMemberSpec>) specs;
             return members.stream().anyMatch(member ->
                 member.role() == TeamRole.REVIEWER && member.agentId().equals("reviewer"));
         }));
+    }
+
+    private TeamCreateRequest teamCreateRequest(String name) {
+        return new TeamCreateRequest(
+            name,
+            List.of(
+                new TeamMemberRequest("planner", "PLANNER", List.of("planning"), 10),
+                new TeamMemberRequest("executor", "EXECUTOR", List.of("general"), 20),
+                new TeamMemberRequest("reviewer", "REVIEWER", List.of("review"), 30)
+            )
+        );
     }
 
     private TeamSnapshot teamSnapshot() {

@@ -45,30 +45,44 @@ public class AgentOrchestrator {
         return execute(agentId, sessionId, userMessage, null, List.of(), false);
     }
 
-    private PipelineContext execute(String agentId, String sessionId, String userMessage, String modelId,
-                                    List<MessageAttachment> attachments, boolean memoryPersistenceEnabled) {
+    private Agent resolveAgent(String agentId) {
         Agent agent = agentFactory.get(agentId);
         if (agent == null) {
             log.warn("Agent not found: {}, using first available", agentId);
             var agents = agentFactory.allAgents();
             if (agents.isEmpty()) {
-                PipelineContext ctx = new PipelineContext();
-                ctx.setFinalResponse("[Error] No agents configured");
-                return ctx;
+                return null;
             }
             agent = agents.values().iterator().next();
         }
+        return agent;
+    }
+
+    private PipelineContext buildPipelineContext(Agent agent, String sessionId, String userMessage,
+                                                  String modelId, List<MessageAttachment> attachments) {
         PipelineContext ctx = new PipelineContext();
         ctx.setAgentId(agent.getAgentId());
         ctx.setSessionId(sessionId != null ? sessionId : UUID.randomUUID().toString());
         ctx.setUserMessage(userMessage);
         ctx.setSystemPrompt(agent.getSystemPrompt());
         ctx.setModelId(modelId != null && !modelId.isBlank() ? modelId : agent.getDefaultModelId());
-        ctx.setMemoryPersistenceEnabled(memoryPersistenceEnabled);
         if (attachments != null) {
             ctx.getAttachments().addAll(attachments);
         }
         ctx.getAttributes().put("agentSkillIds", agent.getSkillIds());
+        return ctx;
+    }
+
+    private PipelineContext execute(String agentId, String sessionId, String userMessage, String modelId,
+                                    List<MessageAttachment> attachments, boolean memoryPersistenceEnabled) {
+        Agent agent = resolveAgent(agentId);
+        if (agent == null) {
+            PipelineContext ctx = new PipelineContext();
+            ctx.setFinalResponse("[Error] No agents configured");
+            return ctx;
+        }
+        PipelineContext ctx = buildPipelineContext(agent, sessionId, userMessage, modelId, attachments);
+        ctx.setMemoryPersistenceEnabled(memoryPersistenceEnabled);
 
         log.info("[Orchestrator] Agent={} model={} session={} msg={}", agent.getAgentId(),
             ctx.getModelId(), ctx.getSessionId(),
@@ -90,26 +104,12 @@ public class AgentOrchestrator {
     /** 执行流式对话，可携带图片等多模态附件。 */
     public Flux<String> executeStream(String agentId, String sessionId, String userMessage, String modelId,
                                       List<MessageAttachment> attachments) {
-        Agent agent = agentFactory.get(agentId);
+        Agent agent = resolveAgent(agentId);
         if (agent == null) {
-            log.warn("Agent not found: {}, using first available", agentId);
-            var agents = agentFactory.allAgents();
-            if (agents.isEmpty()) {
-                return Flux.just("[Error] No agents configured");
-            }
-            agent = agents.values().iterator().next();
+            return Flux.just("[Error] No agents configured");
         }
 
-        PipelineContext ctx = new PipelineContext();
-        ctx.setAgentId(agent.getAgentId());
-        ctx.setSessionId(sessionId != null ? sessionId : UUID.randomUUID().toString());
-        ctx.setUserMessage(userMessage);
-        ctx.setSystemPrompt(agent.getSystemPrompt());
-        ctx.setModelId(modelId != null && !modelId.isBlank() ? modelId : agent.getDefaultModelId());
-        if (attachments != null) {
-            ctx.getAttachments().addAll(attachments);
-        }
-        ctx.getAttributes().put("agentSkillIds", agent.getSkillIds());
+        PipelineContext ctx = buildPipelineContext(agent, sessionId, userMessage, modelId, attachments);
 
         log.info("[Orchestrator:stream] Agent={} model={} session={} msg={}", agent.getAgentId(),
             ctx.getModelId(), ctx.getSessionId(),
