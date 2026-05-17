@@ -54,4 +54,15 @@ public class PipelineContext {
         String conversation = sessionId != null && !sessionId.isBlank() ? sessionId : agentId;
         return owner + ":" + conversation;
     }
+
+    /** 用户长期事实和画像按用户全局共享，不再按 session 或 Agent 切分。 */
+    public String getUserMemoryKey() {
+        String owner = userId != null && !userId.isBlank() ? userId : "default";
+        return "user:" + owner;
+    }
+
+    /** 用户画像快照的用户 ID。 */
+    public String getProfileUserId() {
+        return userId != null && !userId.isBlank() ? userId : "default";
+    }
 }

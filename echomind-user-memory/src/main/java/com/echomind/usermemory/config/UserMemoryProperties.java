@@ -11,8 +11,17 @@ public class UserMemoryProperties {
     private String queueName = "echomind.user-memory.requests";
     private String vectorIndexName = "idx:user:memory:vectors";
     private String vectorKeyPrefix = "user:memory:vector:";
+    private String profileKeyPrefix = "echomind:user-profile:snapshot:";
+    private String bufferKeyPrefix = "echomind:user-memory:buffer:";
+    private String bufferMetaKeyPrefix = "echomind:user-memory:buffer-meta:";
+    private String bufferLockKeyPrefix = "echomind:user-memory:buffer-lock:";
     private int existingProfileLimit = 30;
     private int maxExtractedEntries = 10;
+    private int batchSize = 5;
+    private int relatedFactTopK = 12;
+    private int profileMaxChars = 2000;
+    private int bufferLockTtlSeconds = 60;
+    private int bufferTtlDays = 7;
     private String extractorModelId;
     private String embeddingBaseUrl = "https://dashscope.aliyuncs.com";
     private String embeddingApiKey;

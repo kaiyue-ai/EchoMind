@@ -5,8 +5,11 @@ import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryHit;
 import com.echomind.memory.usermemory.UserMemoryStore;
+import com.echomind.memory.usermemory.UserProfileSnapshot;
+import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,7 +25,8 @@ class UserMemoryRetrievalStageTest {
     void skipsWhenDisabled() {
         EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
         UserMemoryStore store = mock(UserMemoryStore.class);
-        UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(embeddingClient, store, false, 5, 0.3);
+        UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
+            embeddingClient, store, UserProfileSnapshotStore.noop(), false, 5, 0.3);
         PipelineContext ctx = context();
 
         stage.process(ctx);
@@ -36,12 +40,13 @@ class UserMemoryRetrievalStageTest {
         EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
         UserMemoryStore store = mock(UserMemoryStore.class);
         when(embeddingClient.embed("我喜欢简洁代码")).thenReturn(Optional.empty());
-        UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(embeddingClient, store, true, 5, 0.3);
+        UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
+            embeddingClient, store, UserProfileSnapshotStore.noop(), true, 5, 0.3);
         PipelineContext ctx = context();
 
         stage.process(ctx);
 
-        verify(store, never()).search("default:session-1", new double[] {1}, 5, 0.3);
+        verify(store, never()).search("user:default", new double[] {1}, 5, 0.3);
         assertThat(ctx.getMessages()).isEmpty();
     }
 
@@ -51,18 +56,43 @@ class UserMemoryRetrievalStageTest {
         UserMemoryStore store = mock(UserMemoryStore.class);
         double[] vector = new double[] {0.1, 0.2};
         when(embeddingClient.embed("我喜欢简洁代码")).thenReturn(Optional.of(vector));
-        when(store.search("default:session-1", vector, 5, 0.3)).thenReturn(List.of(
+        when(store.search("user:default", vector, 5, 0.3)).thenReturn(List.of(
             new UserMemoryHit("entry-1", UserMemoryCategory.PREFERENCE, "用户喜欢简洁代码", "用户说喜欢简洁代码", 0.9, 0.8)
         ));
-        UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(embeddingClient, store, true, 5, 0.3);
+        UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
+            embeddingClient, store, UserProfileSnapshotStore.noop(), true, 5, 0.3);
         PipelineContext ctx = context();
 
         stage.process(ctx);
 
         assertThat(ctx.getMessages()).hasSize(1);
         assertThat(ctx.getMessages().get(0).role()).isEqualTo("system");
-        assertThat(ctx.getMessages().get(0).content()).contains("用户长期画像", "用户喜欢简洁代码");
+        assertThat(ctx.getMessages().get(0).content()).contains("用户相关长期事实", "用户喜欢简洁代码");
         assertThat(ctx.getAttributes()).containsKey("userMemoryHits");
+    }
+
+    @Test
+    void injectsProfileSnapshotBeforeRelatedFacts() {
+        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
+        UserMemoryStore store = mock(UserMemoryStore.class);
+        UserProfileSnapshotStore snapshotStore = mock(UserProfileSnapshotStore.class);
+        double[] vector = new double[] {0.1, 0.2};
+        when(snapshotStore.get("default")).thenReturn(Optional.of(
+            new UserProfileSnapshot("default", "用户长期使用 Windows 和 PowerShell", 1, Instant.now())
+        ));
+        when(embeddingClient.embed("我喜欢简洁代码")).thenReturn(Optional.of(vector));
+        when(store.search("user:default", vector, 5, 0.3)).thenReturn(List.of(
+            new UserMemoryHit("entry-1", UserMemoryCategory.PREFERENCE, "用户喜欢简洁代码", "用户说喜欢简洁代码", 0.9, 0.8)
+        ));
+        UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
+            embeddingClient, store, snapshotStore, true, 5, 0.3);
+        PipelineContext ctx = context();
+
+        stage.process(ctx);
+
+        assertThat(ctx.getMessages()).hasSize(2);
+        assertThat(ctx.getMessages().get(0).content()).contains("用户画像快照", "Windows");
+        assertThat(ctx.getMessages().get(1).content()).contains("用户相关长期事实", "简洁代码");
     }
 
     private PipelineContext context() {

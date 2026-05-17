@@ -94,15 +94,22 @@ POST /api/chat/sync
   -> Agent.chat
   -> ExecutionPipeline
   -> ContextEnrichStage
+  -> UserMemoryRetrievalStage
+  -> KnowledgeRetrievalStage
   -> ToolResolutionStage
   -> ResultAggregationStage
   -> MemoryPersistStage
 ```
 
+`UserMemoryRetrievalStage` 按当前 `userId` 读取 Redis 用户画像快照，并从 Redis Stack 用户事实层召回
+与本轮问题相关的长期事实；普通聊天短期上下文仍由 `ContextEnrichStage` 从 Redis 最近 50 条读取。
+
 `MemoryPersistStage` 只发布普通聊天记忆事件，不在主线程写 MySQL、Redis 或向量库。
 事件进入 `echomind.chat-memory.persist.exchange`，事件体带 `userId`，按 `sessionId` hash 到
 `echomind.chat-memory.persist.requests.shard.N`。每个分片队列只能单消费者，整体并发靠分片数扩展；
 不要把单个聊天记忆分片改成多消费者，否则同一会话的历史可能乱序。
+后台 `ChatMemoryPersistConsumer` 写 MySQL 完整历史和 Redis 最近 50 条后，发布用户记忆事件；
+`echomind-user-memory` 按用户全局缓冲满 5 轮，再批量更新 Redis Stack 用户事实和 Redis 用户画像快照。
 
 异步聊天：
 

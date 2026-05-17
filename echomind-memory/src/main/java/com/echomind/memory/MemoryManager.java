@@ -3,7 +3,6 @@ package com.echomind.memory;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.SessionSummary;
 import com.echomind.memory.cache.RecentMemoryCache;
-import com.echomind.memory.embedding.MemoryEmbeddingService;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
@@ -31,28 +30,17 @@ public class MemoryManager {
     private final RecentMemoryCache recentCache;
     private final MemorySummaryService summaryService;
     private final int summaryRefreshInterval;
-    private final MemoryEmbeddingService embeddingService;
 
     public MemoryManager(WindowConfig windowConfig,
                          PersistentChatMemoryStore chatStore,
                          RecentMemoryCache recentCache,
                          MemorySummaryService summaryService,
                          int summaryRefreshInterval) {
-        this(windowConfig, chatStore, recentCache, summaryService, summaryRefreshInterval, null);
-    }
-
-    public MemoryManager(WindowConfig windowConfig,
-                         PersistentChatMemoryStore chatStore,
-                         RecentMemoryCache recentCache,
-                         MemorySummaryService summaryService,
-                         int summaryRefreshInterval,
-                         MemoryEmbeddingService embeddingService) {
         this.windowConfig = windowConfig;
         this.chatStore = chatStore;
         this.recentCache = recentCache;
         this.summaryService = summaryService;
         this.summaryRefreshInterval = summaryRefreshInterval;
-        this.embeddingService = embeddingService;
     }
 
     /**
@@ -65,30 +53,24 @@ public class MemoryManager {
         addMessage(memoryKey, null, message);
     }
 
-    /** 保存消息到 MySQL、刷新 Redis 近期缓存并建立向量索引。只允许异步消费者调用。 */
+    /** 保存消息到 MySQL 并刷新 Redis 近期缓存。只允许异步消费者调用。 */
     public void addMessage(String memoryKey, String agentId, AgentMessage message) {
         if (isBlank(memoryKey) || message == null) {
             return;
         }
-        var saved = chatStore.saveMessage("default", memoryKey, agentId, message);
+        chatStore.saveMessage("default", memoryKey, agentId, message);
         recentCache.append(memoryKey, message);
-        if (embeddingService != null) {
-            embeddingService.indexMessage(memoryKey, saved.getId(), message);
-        }
         refreshSummaryIfNeeded("default", memoryKey);
     }
 
-    /** 保存用户会话消息到 MySQL、刷新 Redis 近期缓存并建立向量索引。只允许异步消费者调用。 */
+    /** 保存用户会话消息到 MySQL 并刷新 Redis 近期缓存。只允许异步消费者调用。 */
     public void addMessage(String userId, String memoryKey, String agentId, AgentMessage message) {
         if (isBlank(memoryKey) || message == null) {
             return;
         }
         String cacheKey = memoryKey(userId, memoryKey);
-        var saved = chatStore.saveMessage(normalizeUserId(userId), memoryKey, agentId, message);
+        chatStore.saveMessage(normalizeUserId(userId), memoryKey, agentId, message);
         recentCache.append(cacheKey, message);
-        if (embeddingService != null) {
-            embeddingService.indexMessage(cacheKey, saved.getId(), message);
-        }
         refreshSummaryIfNeeded(normalizeUserId(userId), memoryKey);
     }
 
@@ -130,9 +112,6 @@ public class MemoryManager {
     public void clearSession(String memoryKey) {
         recentCache.clear(memoryKey);
         chatStore.deleteSession(memoryKey);
-        if (embeddingService != null) {
-            embeddingService.deleteSession(memoryKey);
-        }
     }
 
     /** 清除指定用户会话的全部正式历史和近期缓存。 */
@@ -140,9 +119,6 @@ public class MemoryManager {
         String cacheKey = memoryKey(userId, memoryKey);
         recentCache.clear(cacheKey);
         chatStore.deleteSession(normalizeUserId(userId), memoryKey);
-        if (embeddingService != null) {
-            embeddingService.deleteSession(cacheKey);
-        }
     }
 
     /** 当前会话近期缓存大小。 */

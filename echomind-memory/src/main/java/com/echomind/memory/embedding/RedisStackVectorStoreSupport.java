@@ -17,8 +17,8 @@ import java.util.List;
 /**
  * Redis Stack 向量存储公共工具方法。
  *
- * <p>被 {@link RedisStackMemoryVectorStore}、{@code UserMemoryVectorStore}、
- * {@code AgentKnowledgeService} 共用，避免每个类重复实现 Redis 命令执行、
+ * <p>被 {@code UserMemoryVectorStore}、{@code AgentKnowledgeService} 共用，
+ * 避免每个类重复实现 Redis 命令执行、
  * TAG 转义、向量字节转换等基础操作。</p>
  */
 public final class RedisStackVectorStoreSupport {

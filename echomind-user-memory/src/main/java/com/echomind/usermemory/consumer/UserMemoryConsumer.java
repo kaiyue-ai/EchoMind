@@ -18,6 +18,9 @@ public class UserMemoryConsumer {
 
     @RabbitListener(queues = "#{@userMemoryQueue.name}")
     public void onEvent(UserMemoryEvent event) {
+        if (!properties.isEnabled()) {
+            return;
+        }
         try {
             userMemoryService.process(event);
         } catch (Exception e) {

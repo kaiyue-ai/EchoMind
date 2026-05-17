@@ -1,6 +1,6 @@
 # 数据库与存储硬约束
 
-本文档用于约束 EchoMind 的持久化设计。核心原则是：可审计业务配置和普通聊天历史进 MySQL，LLM 短期上下文和向量检索进 Redis Stack，运行时 Map 只做索引。用户长期画像和知识库向量由 Redis Stack 承担事实和检索来源。
+本文档用于约束 EchoMind 的持久化设计。核心原则是：可审计业务配置和普通聊天历史进 MySQL，LLM 短期上下文进 Redis，用户长期事实和知识库向量进 Redis Stack，运行时 Map 只做索引。用户画像快照是 Redis 中的派生摘要，不替代事实层。
 
 ## 存储分工
 
@@ -9,10 +9,10 @@
 | Agent 配置 | MySQL `echomind_agents` | `AgentFactory` |
 | Skill 市场状态 | MySQL `echomind_skills` + Skill JAR | `SkillRegistry`、`CapabilityRegistry` |
 | 会话列表 | MySQL `echomind_chat_sessions`，按 `user_id + session_id` 隔离 | 前端 Pinia store |
-| 会话消息 | MySQL `echomind_chat_messages`，按 `user_id + session_id` 保存，仅用于前端展示/审计 | Redis 最近 100 条是 LLM 上下文来源 |
+| 会话消息 | MySQL `echomind_chat_messages`，按 `user_id + session_id` 保存，仅用于前端展示/审计 | Redis 最近 50 条是 LLM 上下文来源 |
 | 用户账号 | MySQL `echomind_users`，含用户名、密码哈希、状态和 `avatar_uri` | 头像二进制在 OSS / 本地对象存储 |
 | 会话向量 | Redis Stack 向量索引 | 后台异步写入，主链路不等待 |
-| 用户长期画像 | Redis Stack `idx:user:memory:vectors` | 主应用 Pipeline 按 `userId + sessionId` KNN 召回 |
+| 用户长期记忆 | Redis Stack `idx:user:memory:vectors` 按 `userId` 保存细粒度事实；Redis `echomind:user-profile:snapshot:*` 保存画像快照 | 主应用 Pipeline 读取画像快照并按 `userId` KNN 召回相关事实 |
 | Agent 知识库文档 | MySQL 文档表 + 对象存储文件，切片正文/元数据进 MySQL | Redis Stack 知识库向量索引 |
 | 上传文件 | 阿里云 OSS 或本地对象目录 | 数据库只保存引用信息 |
 | 外部 MCP 运行状态 | 配置文件或后续 MySQL 配置表 | `ExternalMcpRuntimeService` 子进程和工具 provider |
@@ -49,18 +49,18 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 
 ## Redis Stack 负责什么
 
-Redis Stack 负责速度和向量检索；用户长期画像和知识库向量由 Redis Stack 承担事实来源：
+Redis 和 Redis Stack 负责速度、短期上下文和向量检索；用户长期事实和知识库向量由 Redis Stack 承担事实来源：
 
-- 最近 100 条上下文热缓存，是 LLM prompt 的聊天历史来源。
-- 会话语义召回向量索引，后台异步写入。
+- 最近 50 条上下文热缓存，是 LLM prompt 的聊天历史来源。
 - Agent 知识库向量索引，KNN 检索只走 Redis Stack。
-- 用户长期画像条目和画像向量，按 `userId + sessionId` 隔离。
+- 用户长期事实向量，按 `userId` 全局隔离。
+- 用户画像快照，存 Redis Hash，是长期事实的固定长度压缩摘要。
 - 可以重建的临时检索结构。
 
 Redis 里的数据必须满足：
 
 - 普通聊天 Redis 窗口丢失后不阻塞 LLM；可由后台任务从 MySQL 预热或随新对话重新累积。
-- 用户长期画像丢失后不从 MySQL 恢复，只能由后续对话重新沉淀。
+- 用户长期事实和画像快照丢失后不从 MySQL 恢复，只能由后续对话重新沉淀。
 - 查询不能依赖全量 `KEYS`。
 - 读取上下文时按窗口、topK、token 或字符预算裁剪。
 
@@ -80,8 +80,9 @@ Agent、Skill、MCP、Team 仍是全局资源，不在本阶段引入 RBAC、租
 
 - 当前 Agent 的 system prompt。
 - 当前用户消息。
-- Redis 最近窗口内的短期历史。
-- 按 `userId + sessionId` 召回的用户长期画像。
+- Redis 最近 50 条短期历史。
+- 按 `userId` 读取的用户画像快照。
+- 按 `userId` 召回的相关用户长期事实。
 - Agent 知识库召回片段。
 
 不要从 MySQL 全量或回源拼接历史。`prompt-max-chars`、`prompt-max-history-message-chars` 等配置必须生效。

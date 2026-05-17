@@ -31,10 +31,7 @@ import com.echomind.memory.cache.RedisRecentMemoryCache;
 import com.echomind.memory.embedding.DashScopeEmbeddingClient;
 import com.echomind.memory.embedding.DisabledEmbeddingClient;
 import com.echomind.memory.embedding.EmbeddingClient;
-import com.echomind.memory.embedding.MemoryEmbeddingService;
-import com.echomind.memory.embedding.MemoryVectorStore;
-import com.echomind.memory.embedding.NoopMemoryVectorStore;
-import com.echomind.memory.embedding.RedisStackMemoryVectorStore;
+import com.echomind.memory.embedding.LegacyChatMessageVectorCleaner;
 import com.echomind.memory.persistence.ChatMessageRepository;
 import com.echomind.memory.persistence.ChatSessionRepository;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
@@ -42,8 +39,10 @@ import com.echomind.memory.knowledge.AgentKnowledgeChunkRepository;
 import com.echomind.memory.knowledge.AgentKnowledgeDocumentRepository;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
 import com.echomind.memory.usermemory.NoopUserMemoryStore;
+import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserMemoryStore;
 import com.echomind.memory.usermemory.UserMemoryVectorStore;
+import com.echomind.memory.usermemory.RedisUserProfileSnapshotStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
 import com.echomind.common.messaging.ChatMemoryShardSupport;
@@ -68,7 +67,6 @@ import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -268,35 +266,6 @@ public class EchoMindAutoConfiguration {
     }
 
     @Bean
-    @Primary
-    public MemoryVectorStore memoryVectorStore(EchoMindProperties props,
-                                               ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
-        String type = props.getMemory().getVectorStore();
-        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
-        if (factory == null) {
-            log.warn("Redis Stack vector store requested but RedisConnectionFactory is unavailable; using no-op vector store");
-            return new NoopMemoryVectorStore();
-        }
-        log.info("Using Redis Stack memory vector store");
-        return new RedisStackMemoryVectorStore(
-            factory,
-            props.getMemory().getVectorIndexName(),
-            props.getMemory().getVectorKeyPrefix()
-        );
-    }
-
-    @Bean
-    public MemoryEmbeddingService memoryEmbeddingService(EmbeddingClient embeddingClient,
-                                                         MemoryVectorStore vectorStore,
-                                                         EchoMindProperties props) {
-        return new MemoryEmbeddingService(
-            embeddingClient,
-            vectorStore,
-            props.getMemory().isEmbeddingEnabled()
-        );
-    }
-
-    @Bean
     public MemorySummaryService memorySummaryService(EchoMindProperties props) {
         return new MemorySummaryService(
             props.getMemory().getShortTermWindow(),
@@ -309,15 +278,13 @@ public class EchoMindAutoConfiguration {
                                        PersistentChatMemoryStore chatStore,
                                        RecentMemoryCache recentCache,
                                        MemorySummaryService summaryService,
-                                       MemoryEmbeddingService embeddingService,
                                        EchoMindProperties props) {
         return new MemoryManager(
             wc,
             chatStore,
             recentCache,
             summaryService,
-            props.getMemory().getSummaryRefreshInterval(),
-            embeddingService
+            props.getMemory().getSummaryRefreshInterval()
         );
     }
 
@@ -375,6 +342,35 @@ public class EchoMindAutoConfiguration {
             props.getUserMemory().getVectorIndexName(),
             props.getUserMemory().getVectorKeyPrefix()
         );
+    }
+
+    @Bean
+    public UserProfileSnapshotStore userProfileSnapshotStore(EchoMindProperties props,
+                                                             ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
+        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
+        if (factory == null) {
+            log.warn("RedisConnectionFactory unavailable; user profile snapshot retrieval disabled");
+            return UserProfileSnapshotStore.noop();
+        }
+        return new RedisUserProfileSnapshotStore(
+            factory,
+            props.getUserMemory().getProfileKeyPrefix()
+        );
+    }
+
+    @Bean
+    public Object legacyChatMessageVectorCleaner(EchoMindProperties props,
+                                                 ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
+        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
+        if (factory == null) {
+            return new Object();
+        }
+        new LegacyChatMessageVectorCleaner(
+            factory,
+            props.getMemory().getLegacyVectorIndexName(),
+            props.getMemory().getLegacyVectorKeyPrefix()
+        ).clean();
+        return new Object();
     }
 
     @Bean
@@ -537,6 +533,7 @@ public class EchoMindAutoConfiguration {
                                                  AgentKnowledgeService knowledgeService,
                                                  EmbeddingClient embeddingClient,
                                                  ObjectProvider<UserMemoryStore> userMemoryStore,
+                                                 ObjectProvider<UserProfileSnapshotStore> userProfileSnapshotStore,
                                                  ChatMemoryPersistPublisher chatMemoryPersistPublisher,
                                                 CapabilityRegistry capabilityRegistry,
                                                 DynamicModelRouter router, ModelProviderRegistry providerReg,
@@ -548,6 +545,7 @@ public class EchoMindAutoConfiguration {
             new UserMemoryRetrievalStage(
                 embeddingClient,
                 userMemoryStore.getIfAvailable(NoopUserMemoryStore::new),
+                userProfileSnapshotStore.getIfAvailable(UserProfileSnapshotStore::noop),
                 props.getUserMemory().isEnabled(),
                 props.getUserMemory().getTopK(),
                 props.getUserMemory().getMinConfidence()

@@ -20,9 +20,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *         base-url: ...
  *         models: [...]
  *   memory:
- *     short-term-window: 100
+     *     short-term-window: 50
  *     redis-ttl-seconds: 604800
- *     vector-store: redis-stack
  *     embedding-model: tongyi-embedding-vision-plus
  *   skill:
  *     auto-load-path: ./skills/
@@ -120,26 +119,22 @@ public class EchoMindProperties {
      */
     @Data
     public static class Memory {
-        /** LLM prompt 使用的 Redis 近期上下文最大消息数，默认 100 条。完整历史保存在 MySQL 中。 */
-        private int shortTermWindow = 100;
+        /** LLM prompt 使用的 Redis 近期上下文最大消息数，默认 50 条。完整历史保存在 MySQL 中。 */
+        private int shortTermWindow = 50;
         /** Redis 近期缓存的 TTL（秒），默认 604800（7 天）；0 或负数表示永不过期 */
         private long redisTtlSeconds = 604800;
         /** 向量检索开关。 */
         private boolean embeddingEnabled = true;
-        /** 向量索引实现，正式路径为 redis-stack。 */
-        private String vectorStore = "redis-stack";
-        /** Redis Stack RediSearch 索引名。 */
-        private String vectorIndexName = "idx:echomind:memory:vectors";
-        /** Redis Stack 向量 Hash key 前缀。 */
-        private String vectorKeyPrefix = "echomind:memory:vector:";
         /** 百炼向量接口 Base URL，默认使用 DashScope 原生地址。 */
         private String embeddingBaseUrl = "https://dashscope.aliyuncs.com";
         /** 百炼向量 API Key，默认从 ALIYUN_BAILIAN_API_KEY 读取。 */
         private String embeddingApiKey;
         /** 向量模型，按需求默认使用 tongyi-embedding-vision-plus。 */
         private String embeddingModel = "tongyi-embedding-vision-plus";
-        /** 已弃用：普通聊天历史不再在主链路做向量召回。 */
-        private int retrievalTopK = 0;
+        /** 已废弃普通消息向量索引名，仅用于启动时幂等清理旧数据。 */
+        private String legacyVectorIndexName = "idx:echomind:memory:vectors";
+        /** 已废弃普通消息向量 key 前缀，仅用于启动时幂等清理旧数据。 */
+        private String legacyVectorKeyPrefix = "echomind:memory:vector:";
         /** 普通聊天记忆持久化 RabbitMQ 队列名。 */
         private String persistQueueName = "echomind.chat-memory.persist.requests";
         /** 普通聊天记忆持久化 RabbitMQ Direct Exchange 名。 */
@@ -205,6 +200,8 @@ public class EchoMindProperties {
         private String vectorIndexName = "idx:user:memory:vectors";
         /** Redis Stack 用户画像 Hash key 前缀。 */
         private String vectorKeyPrefix = "user:memory:vector:";
+        /** Redis 用户画像快照 key 前缀。 */
+        private String profileKeyPrefix = "echomind:user-profile:snapshot:";
         /** 微服务提取时最多读取多少条既有画像作为上下文。 */
         private int existingProfileLimit = 30;
         /** 单次提取最多写入多少条画像。 */

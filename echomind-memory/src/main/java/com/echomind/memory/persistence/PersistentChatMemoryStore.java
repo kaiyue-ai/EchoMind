@@ -143,7 +143,7 @@ public class PersistentChatMemoryStore {
         return messageRepository.countByUserIdAndSessionId(normalizeUserId(userId), sessionId);
     }
 
-    /** 删除会话和消息。向量索引由 MemoryEmbeddingService 统一清理。 */
+    /** 删除会话和消息。Redis 近期缓存由 MemoryManager 统一清理。 */
     @Transactional
     public void deleteSession(String sessionId) {
         deleteSession("default", sessionId);

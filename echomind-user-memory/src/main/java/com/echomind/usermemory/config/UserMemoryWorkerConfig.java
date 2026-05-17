@@ -10,6 +10,8 @@ import com.echomind.llm.router.ModelSpec;
 import com.echomind.memory.embedding.DashScopeEmbeddingClient;
 import com.echomind.memory.embedding.DisabledEmbeddingClient;
 import com.echomind.memory.embedding.EmbeddingClient;
+import com.echomind.memory.usermemory.RedisUserProfileSnapshotStore;
+import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserMemoryVectorStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -58,6 +60,12 @@ public class UserMemoryWorkerConfig {
             properties.getVectorIndexName(),
             properties.getVectorKeyPrefix()
         );
+    }
+
+    @Bean
+    public UserProfileSnapshotStore userProfileSnapshotStore(UserMemoryProperties properties,
+                                                            RedisConnectionFactory connectionFactory) {
+        return new RedisUserProfileSnapshotStore(connectionFactory, properties.getProfileKeyPrefix());
     }
 
     @Bean

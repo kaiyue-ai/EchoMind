@@ -2,9 +2,6 @@ package com.echomind.memory;
 
 import com.echomind.common.model.AgentMessage;
 import com.echomind.memory.cache.InMemoryRecentMemoryCache;
-import com.echomind.memory.embedding.EmbeddingClient;
-import com.echomind.memory.embedding.MemoryEmbeddingService;
-import com.echomind.memory.embedding.NoopMemoryVectorStore;
 import com.echomind.memory.persistence.ChatMessageRepository;
 import com.echomind.memory.persistence.ChatSessionId;
 import com.echomind.memory.persistence.ChatSessionRepository;
@@ -23,7 +20,6 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -108,8 +104,7 @@ class MemoryManagerTest {
             persistentChatMemoryStore,
             new InMemoryRecentMemoryCache(2),
             new MemorySummaryService(2, 1000),
-            3,
-            null
+            3
         );
 
         assertThat(freshManager.getPromptContext("session-3")).isEmpty();
@@ -138,45 +133,20 @@ class MemoryManagerTest {
         }
 
         @org.springframework.context.annotation.Bean
-        EmbeddingClient embeddingClient() {
-            return text -> Optional.of(vectorFor(text));
-        }
-
-        @org.springframework.context.annotation.Bean
-        MemoryEmbeddingService memoryEmbeddingService(EmbeddingClient embeddingClient) {
-            return new MemoryEmbeddingService(
-                embeddingClient,
-                new NoopMemoryVectorStore(),
-                true
-            );
-        }
-
-        @org.springframework.context.annotation.Bean
         MemorySummaryService memorySummaryService() {
             return new MemorySummaryService(2, 1000);
         }
 
         @org.springframework.context.annotation.Bean
         MemoryManager memoryManager(PersistentChatMemoryStore store,
-                                    MemorySummaryService summaryService,
-                                    MemoryEmbeddingService embeddingService) {
+                                    MemorySummaryService summaryService) {
             return new MemoryManager(
                 new WindowConfig(2),
                 store,
                 new InMemoryRecentMemoryCache(2),
                 summaryService,
-                3,
-                embeddingService
+                3
             );
-        }
-
-        private static double[] vectorFor(String text) {
-            String value = text == null ? "" : text;
-            return new double[] {
-                value.contains("拿铁") || value.contains("喜欢喝") ? 1.0 : 0.1,
-                value.length() % 7,
-                1.0
-            };
         }
     }
 }
