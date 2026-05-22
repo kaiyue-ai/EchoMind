@@ -22,10 +22,15 @@ import java.util.stream.Collectors;
 public class UserMemoryRetrievalStage implements PipelineStage {
 
     private final EmbeddingClient embeddingClient;
+    // 用户长期记忆的向量存储,用向量搜索跟用户相关的历史事实
     private final UserMemoryStore vectorStore;
+    // 用户画像快照存储,存的是压缩后的长期用户画像摘要
     private final UserProfileSnapshotStore snapshotStore;
+    // 如果这个成员变量为flase,则直接跳过整个流程
     private final boolean enabled;
+    // 搜索结果数量
     private final int topK;
+    // 向量检索的最低执行度阈值,低于这个值回直接过滤掉
     private final double minConfidence;
 
     @Override
@@ -35,14 +40,17 @@ public class UserMemoryRetrievalStage implements PipelineStage {
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
+        // 如果不需要获取用户画像和历史事实的记忆就直接跳过
         if (!enabled || ctx.getUserMemoryKey() == null || ctx.getUserMemoryKey().isBlank()) {
             log.debug("Skip user memory retrieval enabled={} userMemoryKey={}", enabled, ctx.getUserMemoryKey());
             return ctx;
         }
+        // 获取用户画像,如果存在,就直接存入系统提示词里面,作为依据
         snapshotStore.get(ctx.getProfileUserId()).ifPresent(snapshot -> injectSnapshot(ctx, snapshot));
         if (vectorStore == null || topK <= 0) {
             return ctx;
         }
+        // 从历史事实向量数据库
         return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, ctx.getUserMessage())
             .map(vector -> {
                 List<UserMemoryHit> hits = vectorStore.search(ctx.getUserMemoryKey(), vector, topK, minConfidence);

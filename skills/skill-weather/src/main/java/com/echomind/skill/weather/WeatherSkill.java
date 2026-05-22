@@ -62,7 +62,7 @@ public class WeatherSkill implements Skill {
         return new SkillMetadata(
             "weather-query",
             "1.0.0",
-            "Get weather and forecast for a city. Powered by wttr.in",
+            "查询指定城市的实时天气和天气预报，支持常见中文城市名，数据来自 wttr.in；网络不可用时返回明确的降级结果。",
             Map.of(
                 "properties", Map.of(
                     "city", Map.of("type", "string", "description", "City name")

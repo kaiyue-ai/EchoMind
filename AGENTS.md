@@ -14,13 +14,15 @@
 
 ## 项目定位
 
-EchoMind 是一个 Java 17 / Spring Boot 3.3 + Vue 3 的 AI Agent 平台。
+EchoMind 是一个 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 
 当前架构是：
 
 - 管理面：MVC Controller + Application Service。
 - 智能执行：`AgentOrchestrator -> Agent -> ExecutionPipeline`。
 - 工具能力：已启用 Skill 和已挂载外部 MCP 工具统一进入 `CapabilityRegistry`。
+- 工具路由：`ToolRouter` 只做入口；URL/domain 兼容、关键词评分、确定性消歧和直调参数提取分别由独立模块承接。
+- 模型协议：`echomind-llm` 通过 Spring AI adapter 接入 OpenAI-compatible 和 DeepSeek Chat Completions；EchoMind 的 Agent、Skill、MCP、Memory 边界不交给 Spring AI 接管。
 - 记忆和知识库：MySQL 保存普通聊天历史和知识库元数据；Redis Stack 做近期上下文、向量检索和用户长期画像。
 - 前端：Vue 3 + Pinia，跨页面状态必须放 store，不要只放组件局部变量。
 
@@ -34,6 +36,7 @@ EchoMind 是一个 Java 17 / Spring Boot 3.3 + Vue 3 的 AI Agent 平台。
 - 主项目只接入外部 MCP Server，不恢复“主项目暴露 MCP Server”的旧功能。
 - Skill 只进入 Agent 工具视图，不要自动暴露成 MCP Server。
 - 禁用 Skill 或卸载 MCP 后，必须同步移除 `CapabilityRegistry` 中的工具。
+- Provider 不要按具体 Skill 名称硬编码工具参数、工具选择或最终答案策略；使用工具 metadata，例如 `keywords`、`aliases`、`host:`、`direct-result`。
 - Controller 只做 HTTP 适配；业务流程放 Application Service；执行能力放运行时模块。
 - 单 Agent 执行逻辑放 `echomind-agent`；团队协作编排放 `echomind-agent-team`。
 - 不要回滚不属于当前任务的改动。工作区可能本来就是脏的。
@@ -46,6 +49,7 @@ EchoMind 是一个 Java 17 / Spring Boot 3.3 + Vue 3 的 AI Agent 平台。
 ```powershell
 mvn.cmd -q test
 mvn.cmd -q -DskipTests compile
+mvn.cmd -q -pl echomind-agent,echomind-llm,echomind-boot -am "-Dtest=ToolRouterTest,OpenAICompatibleProviderTest,DeepSeekProviderTest,ResultAggregationStageProviderRequestTest,AgentRuntimeBootstrapperTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 mvn.cmd -q clean package "-Dmaven.test.skip=true"
 ```
 
@@ -60,10 +64,7 @@ npm.cmd run build
 
 ```powershell
 cd D:\claudeWorkSpace\ai-agent
-mvn.cmd -q clean package "-Dmaven.test.skip=true"
-docker build -f Dockerfile.runtime -t ai-agent-backend:latest .
-docker build -f .\echomind-web\Dockerfile.runtime -t ai-agent-frontend:latest .\echomind-web
-docker compose up -d --remove-orphans backend frontend
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-runtime.ps1
 ```
 
 部署后验证：
@@ -77,8 +78,8 @@ Invoke-RestMethod http://localhost:8080/api/mcp/tools
 
 说明：
 
-- 当前 Compose 默认只部署业务依赖和前后端，不再内置 OpenTelemetry Collector / SkyWalking。
-- 如需链路追踪，使用独立观测栈接入，不要让后端启动依赖观测组件健康状态。
+- 当前 Compose 默认部署业务依赖、前后端、OpenTelemetry Collector 和 Jaeger，管理端 Trace 页面开箱即可查询新链路。
+- 后端只等待 Collector 容器启动，不依赖观测组件健康状态；如需关闭导出，设置 `OTEL_TRACES_EXPORTER=none`。
 
 也可以使用 harness 命令入口：
 
@@ -86,6 +87,7 @@ Invoke-RestMethod http://localhost:8080/api/mcp/tools
 cd D:\claudeWorkSpace\ai-agent\docs\harness
 make check
 make test
+make migrate
 make deploy
 ```
 

@@ -9,6 +9,7 @@ public class UserMemoryProperties {
 
     private boolean enabled = true;
     private String queueName = "echomind.user-memory.requests";
+    private String flushQueueName = "echomind.user-memory.flush.requests";
     private String vectorIndexName = "idx:user:memory:vectors";
     private String vectorKeyPrefix = "user:memory:vector:";
     private String profileKeyPrefix = "echomind:user-profile:snapshot:";
@@ -18,6 +19,10 @@ public class UserMemoryProperties {
     private int existingProfileLimit = 30;
     private int maxExtractedEntries = 10;
     private int batchSize = 5;
+    private int bufferMaxChars = 8000;
+    private int bufferIdleFlushSeconds = 1800;
+    private int scanIdleBuffersSeconds = 60;
+    private double importantSignalConfidenceThreshold = 0.7;
     private int relatedFactTopK = 12;
     private int profileMaxChars = 2000;
     private int bufferLockTtlSeconds = 60;
@@ -28,7 +33,7 @@ public class UserMemoryProperties {
     private String embeddingModel = "tongyi-embedding-vision-plus";
     private String deepSeekApiKey;
     private String deepSeekBaseUrl;
-    private String deepSeekModel = "deepseek-v4-flash";
+    private String deepSeekModel = "deepseek-chat";
     private String openAiCompatibleProvider = "aliyun-bailian";
     private String openAiCompatibleApiKey;
     private String openAiCompatibleBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";

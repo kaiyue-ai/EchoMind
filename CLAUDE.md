@@ -12,17 +12,18 @@
 
 ## 项目速览
 
-EchoMind 是 Java 17 / Spring Boot 3.3 + Vue 3 的 AI Agent 平台。
+EchoMind 是 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 
 核心模块：
 
 - `echomind-common`：公共模型、异常、Schema 校验。
 - `echomind-skill-api`：Skill SPI。
 - `echomind-skill`：Skill 加载、注册、热加载、市场状态。
-- `echomind-llm`：模型 Provider 和模型路由。
+- `echomind-llm`：模型 Provider 和模型路由；Provider implementation 通过 Spring AI adapter 调用 OpenAI-compatible / DeepSeek Chat Completions。
 - `echomind-memory`：会话记忆、Redis Stack 向量检索、Agent 知识库。
 - `echomind-mcp`：外部 MCP 客户端和 stdio 通信。
 - `echomind-agent`：单 Agent 执行、Pipeline、能力注册表。
+- `echomind-agent/src/main/java/com/echomind/agent/tool`：工具注册、匹配、URL/domain 兼容、消歧和直调参数兜底。
 - `echomind-agent-team`：多 Agent 团队协作编排。
 - `echomind-console`：REST Controller、Application Service、CLI。
 - `echomind-boot`：Spring Boot 自动装配。
@@ -44,9 +45,12 @@ Controller / CLI
 - Controller 不直接拼业务流程。
 - Application Service 负责校验、持久化顺序和运行时同步。
 - `AgentFactory`、`SkillRegistry`、`CapabilityRegistry` 只是运行时索引。
-- MySQL 保存业务事实；Redis Stack 保存缓存和可重建向量索引。
+- MySQL 保存业务事实和完整会话历史；Redis 保存短期上下文和用户画像快照；Redis Stack 保存用户长期事实向量和 Agent 知识库向量。
+- `ToolRouter` 只作为工具路由入口；URL/domain 兼容性在 `ToolCompatibilityPolicy`，打分在 `ToolMatchScorer`，确定性消歧在 `ToolDisambiguationPolicy`，直调参数兜底在 `ToolParameterExtractor`。
+- LLM Provider 只处理模型协议；Spring AI 只放在 Provider adapter seam 内，不接管 Agent、Skill、MCP 或 Memory。Provider 不按具体 Skill 名称硬编码参数、工具选择或最终答案策略；工具可用 `direct-result` / `final-answer` tag 声明输出可直接交付。
 - 主项目只接入外部 MCP Server，不暴露自身 MCP Server。
 - 普通聊天记忆按 `userId + sessionId` 隔离；Agent、Skill、MCP、Team 仍是全局资源。
+- AI Infra 是现有 Agent 项目的项目三管理端，不新增独立网关或 OpenAI `/v1` 入口；脱敏、告警、Trace、Token 和配额治理都挂在现有 `/api/chat/*` 链路和 `/api/admin/*` 管理端。
 
 ## 常用命令
 
@@ -54,6 +58,7 @@ Controller / CLI
 cd D:\claudeWorkSpace\ai-agent
 mvn.cmd -q -DskipTests compile
 mvn.cmd -q test
+mvn.cmd -q -pl echomind-agent,echomind-llm,echomind-boot -am "-Dtest=ToolRouterTest,OpenAICompatibleProviderTest,DeepSeekProviderTest,ResultAggregationStageProviderRequestTest,AgentRuntimeBootstrapperTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 ```
 
 ```powershell
@@ -63,10 +68,7 @@ npm.cmd run build
 
 ```powershell
 cd D:\claudeWorkSpace\ai-agent
-mvn.cmd -q clean package "-Dmaven.test.skip=true"
-docker build -f Dockerfile.runtime -t ai-agent-backend:latest .
-docker build -f .\echomind-web\Dockerfile.runtime -t ai-agent-frontend:latest .\echomind-web
-docker compose up -d --remove-orphans backend frontend
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-runtime.ps1
 ```
 
 部署后：
@@ -77,6 +79,8 @@ Invoke-RestMethod http://localhost:8080/api/models
 Invoke-RestMethod http://localhost:8080/api/mcp/servers
 Invoke-RestMethod http://localhost:8080/api/mcp/tools
 ```
+
+本地 Compose 默认带 OpenTelemetry Collector 和 Jaeger，管理端 Trace 页面查询新产生的聊天链路；要临时关闭导出可设置 `OTEL_TRACES_EXPORTER=none`。
 
 ## 维护提醒
 

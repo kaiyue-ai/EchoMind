@@ -1,16 +1,23 @@
 <template>
-  <div :class="['workbench-shell', { 'sidebar-collapsed': sidebarCollapsed }]">
+  <div :class="['workbench-shell', { 'sidebar-collapsed': sidebarCollapsed, 'mobile-sidebar-open': mobileSidebarOpen }]">
+    <header class="mobile-workbench-bar">
+      <button type="button" class="mobile-menu-button" title="打开导航" @click="toggleMobileSidebar">
+        <el-icon><Menu /></el-icon>
+      </button>
+      <div class="mobile-brand-copy">
+        <strong>EchoMind</strong>
+        <span>Agent Workbench</span>
+      </div>
+      <el-button text title="退出登录" @click="logout">
+        <el-icon><SwitchButton /></el-icon>
+      </el-button>
+    </header>
+
+    <div v-if="mobileSidebarOpen" class="mobile-sidebar-scrim" @click="uiStore.closeMobileSidebar()"></div>
+
     <aside class="workbench-sidebar">
       <div class="brand-row">
-        <button class="brand-mark avatar-upload" type="button" title="更换头像" @click.stop="chooseAvatar">
-          <img v-if="authStore.user?.avatarUrl" :src="authStore.user.avatarUrl" alt="用户头像" />
-          <span v-else class="miku-mark avatar-fallback" aria-label="初音未来头像">
-            <span class="miku-hair left"></span>
-            <span class="miku-hair right"></span>
-            <span class="miku-face"></span>
-          </span>
-        </button>
-        <input ref="avatarInput" class="avatar-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" @change="uploadAvatar" />
+        <UserAvatarButton />
         <div v-if="!sidebarCollapsed" class="brand-copy">
           <strong>EchoMind</strong>
           <span>Agent Workbench</span>
@@ -24,6 +31,7 @@
           :to="item.path"
           :class="['nav-item', { active: currentRoute === item.path }]"
           :title="item.label"
+          @click="uiStore.closeMobileSidebar()"
         >
           <el-icon><component :is="item.icon" /></el-icon>
           <span v-if="!sidebarCollapsed">{{ item.label }}</span>
@@ -36,10 +44,10 @@
         :loading="sessionsLoading"
         :deleting-id="deletingSessionId"
         :active-session-id="activeSessionId"
-        @refresh="$emit('refreshSessions')"
-        @create="$emit('newSession')"
-        @open="$emit('openSession', $event)"
-        @delete="$emit('deleteSession', $event)"
+        @refresh="emit('refreshSessions')"
+        @create="handleNewSession"
+        @open="handleOpenSession"
+        @delete="emit('deleteSession', $event)"
       />
 
       <button v-else class="collapsed-session-button" type="button" title="展开会话" @click="uiStore.setSidebarCollapsed(false)">
@@ -71,24 +79,25 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  ChatDotRound,
-  ChatLineSquare,
   Connection,
   Cpu,
+  ChatDotRound,
+  ChatLineSquare,
   Expand,
   Fold,
   Grid,
+  Menu,
   SwitchButton,
   UserFilled
 } from '@element-plus/icons-vue'
 import { useUiStore } from '../../stores/ui'
 import { useAuthStore } from '../../stores/auth'
 import SessionList from './SessionList.vue'
+import UserAvatarButton from './UserAvatarButton.vue'
 
 defineProps({
   sessions: { type: Array, default: () => [] },
@@ -97,15 +106,13 @@ defineProps({
   activeSessionId: { type: String, default: null }
 })
 
-defineEmits(['refreshSessions', 'newSession', 'openSession', 'deleteSession'])
-
 const route = useRoute()
 const router = useRouter()
 const uiStore = useUiStore()
 const authStore = useAuthStore()
-const { sidebarCollapsed } = storeToRefs(uiStore)
+const { mobileSidebarOpen, sidebarCollapsed } = storeToRefs(uiStore)
 const currentRoute = computed(() => route.path)
-const avatarInput = ref(null)
+const emit = defineEmits(['refreshSessions', 'newSession', 'openSession', 'deleteSession'])
 
 const navItems = [
   { path: '/chat', label: '对话', icon: ChatDotRound },
@@ -115,28 +122,25 @@ const navItems = [
   { path: '/team', label: 'Team', icon: Cpu }
 ]
 
-function chooseAvatar() {
-  avatarInput.value?.click()
-}
-
-async function uploadAvatar(event) {
-  const file = event.target.files?.[0]
-  event.target.value = ''
-  if (!file) return
-  if (file.size > 2 * 1024 * 1024) {
-    ElMessage.warning('头像不能超过 2MB')
-    return
-  }
-  try {
-    await authStore.uploadAvatar(file)
-    ElMessage.success('头像已更新')
-  } catch (e) {
-    ElMessage.error(authStore.error || '头像上传失败')
-  }
-}
-
 async function logout() {
   await authStore.logout()
   router.replace('/login')
+}
+
+function toggleMobileSidebar() {
+  if (!mobileSidebarOpen.value) {
+    uiStore.setSidebarCollapsed(false)
+  }
+  uiStore.toggleMobileSidebar()
+}
+
+function handleNewSession() {
+  emit('newSession')
+  uiStore.closeMobileSidebar()
+}
+
+function handleOpenSession(sessionId) {
+  emit('openSession', sessionId)
+  uiStore.closeMobileSidebar()
 }
 </script>

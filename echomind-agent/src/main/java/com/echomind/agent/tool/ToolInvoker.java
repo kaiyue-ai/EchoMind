@@ -1,7 +1,10 @@
 package com.echomind.agent.tool;
 
 import com.echomind.agent.pipeline.PipelineContext;
+import com.echomind.common.observability.EchoMindTrace;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -23,21 +26,41 @@ public class ToolInvoker {
     private final PipelineContext context;
 
     public String call(String argumentsJson) {
+        Span span = EchoMindTrace.startSpan("echomind.tool.invoke");
+        span.setAttribute("echomind.tool_name", safe(tool.name()));
+        span.setAttribute("echomind.tool_source_type", safe(tool.sourceType()));
+        span.setAttribute("echomind.tool_source_id", safe(tool.sourceId()));
+        if (context != null) {
+            span.setAttribute("echomind.user_id", safe(context.getUserId()));
+            span.setAttribute("echomind.agent_id", safe(context.getAgentId()));
+            span.setAttribute("echomind.session_id", safe(context.getSessionId()));
+        }
         try {
-            log.info("Model selected tool {} with input {}", tool.name(), argumentsJson);
-            @SuppressWarnings("unchecked")
-            Map<String, Object> params = MAPPER.readValue(
-                argumentsJson == null || argumentsJson.isBlank() ? "{}" : argumentsJson,
-                Map.class
-            );
-            ToolResult result = tool.execute(params, context).join();
-            if (context != null) {
-                context.getSkillResults().add(tool.name());
+            try (Scope ignored = span.makeCurrent()) {
+                log.info("Model selected tool {} with input {}", tool.name(), argumentsJson);
+                @SuppressWarnings("unchecked")
+                Map<String, Object> params = MAPPER.readValue(
+                    argumentsJson == null || argumentsJson.isBlank() ? "{}" : argumentsJson,
+                    Map.class
+                );
+                ToolResult result = tool.execute(params, context).join();
+                span.setAttribute("echomind.tool_success", result.success());
+                span.setAttribute("echomind.tool_duration_ms", result.durationMs());
+                if (context != null) {
+                    context.getSkillResults().add(tool.name());
+                }
+                return result.success() ? result.output() : "Error: " + result.error();
             }
-            return result.success() ? result.output() : "Error: " + result.error();
         } catch (Exception e) {
+            EchoMindTrace.recordException(span, e);
             log.error("Tool invocation failed for {}: {}", tool.name(), e.getMessage());
             return "Error executing " + tool.name() + ": " + e.getMessage();
+        } finally {
+            span.end();
         }
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

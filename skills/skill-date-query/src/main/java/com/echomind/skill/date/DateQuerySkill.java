@@ -41,7 +41,7 @@ public class DateQuerySkill implements Skill {
         return new SkillMetadata(
             "date-query",
             "1.0.0",
-            "Query current date, time, weekday, or calculate date offsets in a specified timezone.",
+            "查询当前日期、时间、星期，或按指定时区计算昨天、明天、若干天后的日期，避免模型猜错真实时间。",
             Map.of(
                 "type", "object",
                 "properties", Map.of(

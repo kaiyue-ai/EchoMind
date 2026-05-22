@@ -24,17 +24,23 @@ public class MultimodalGuardStage implements PipelineStage {
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
+        // 如果没有图片,直接放行就行
         if (!ctx.hasImageAttachments()) {
             return ctx;
         }
 
-        String[] parts = ctx.getModelId() == null ? new String[0] : ctx.getModelId().split(":", 2);
-        if (parts.length != 2) {
-            throw new IllegalArgumentException("无法识别当前模型，不能处理图片消息");
+        // 获取模型消息
+        var model = ctx.getResolvedModel();
+        if (model == null) {
+            String[] parts = ctx.getModelId() == null ? new String[0] : ctx.getModelId().split(":", 2);
+            if (parts.length != 2) {
+                throw new IllegalArgumentException("无法识别当前模型，不能处理图片消息");
+            }
+            model = registry.find(parts[0], parts[1])
+                .orElseThrow(() -> new IllegalArgumentException("当前模型不存在: " + ctx.getModelId()));
+            ctx.setResolvedModel(model);
         }
-
-        var model = registry.find(parts[0], parts[1])
-            .orElseThrow(() -> new IllegalArgumentException("当前模型不存在: " + ctx.getModelId()));
+        // 检查是否包含模型多模态功能
         if (!model.capabilities().contains(ModelCapability.VISION)) {
             throw new IllegalArgumentException("当前模型不支持多模态图片输入，请切换到带 VISION 能力的模型");
         }

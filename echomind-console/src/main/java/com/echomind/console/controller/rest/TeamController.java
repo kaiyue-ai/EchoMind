@@ -11,14 +11,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Agent Team协作控制器。
  * 管理多Agent团队的创建、任务执行和协作流程可视化入口。
  *
- * <p>团队当前仍是运行时对象，Controller不直接保存团队实例，也不直接调用AgentFactory。
- * 所有团队编排统一放在{@link TeamApplicationService}，便于后续替换成数据库持久化。</p>
+ * <p>团队编排统一放在{@link TeamApplicationService}；Run/Step/Event由MySQL黑板持久化。</p>
  */
 @RestController
 @RequestMapping("/api/teams")
@@ -89,11 +87,4 @@ public class TeamController {
         return ResponseEntity.ok(teamService.resumeRun(teamId, runId, request));
     }
 
-    /**
-     * 获取团队消息总线的待处理消息数。
-     */
-    @GetMapping("/message-bus/pending")
-    public ResponseEntity<Map<String, Object>> getPendingMessages() {
-        return ResponseEntity.ok(teamService.pendingMessages());
-    }
 }

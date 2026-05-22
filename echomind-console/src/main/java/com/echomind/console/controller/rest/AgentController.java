@@ -4,8 +4,8 @@ import com.echomind.console.dto.AgentExecuteRequest;
 import com.echomind.console.dto.AgentSaveRequest;
 import com.echomind.console.dto.AgentView;
 import com.echomind.console.service.AgentApplicationService;
+import com.echomind.console.service.AgentKnowledgeApplicationService;
 import com.echomind.memory.knowledge.AgentKnowledgeDocument;
-import com.echomind.memory.knowledge.AgentKnowledgeService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -40,8 +40,8 @@ public class AgentController {
 
     /** Agent应用服务，收口HTTP层之外的校验、持久化和运行时同步逻辑。 */
     private final AgentApplicationService agentService;
-    /** Agent 私有知识库服务，负责文件切片、向量化和检索索引。 */
-    private final AgentKnowledgeService knowledgeService;
+    /** Agent 知识库应用服务，收口文件校验和 Memory 模块调用。 */
+    private final AgentKnowledgeApplicationService knowledgeService;
 
     /**
      * 列出所有 Agent。
@@ -97,15 +97,7 @@ public class AgentController {
     @PostMapping("/{agentId}/knowledge")
     public ResponseEntity<AgentKnowledgeDocument> uploadKnowledge(
             @PathVariable String agentId, @RequestParam("file") MultipartFile file) throws IOException {
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("知识库文件不能为空");
-        }
-        return ResponseEntity.ok(knowledgeService.upload(
-            agentId,
-            file.getOriginalFilename(),
-            file.getSize(),
-            file.getBytes()
-        ));
+        return ResponseEntity.ok(knowledgeService.upload(agentId, file));
     }
 
     /** 删除指定 Agent 的一份知识库文档。 */

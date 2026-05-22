@@ -1,5 +1,8 @@
 package com.echomind.agent.pipeline;
 
+import com.echomind.common.observability.EchoMindTrace;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
@@ -10,7 +13,7 @@ import java.util.List;
  * Agent 请求管线。
  *
  * <p>阶段按 {@link PipelineStage#order()} 排序后串行执行。任一阶段抛出异常时，
- * 管线停止，并把错误写入 {@link PipelineContext#getFinalResponse()}。</p>
+ * 管线停止，并把结构化错误写入 {@link PipelineContext}。</p>
  */
 @Slf4j
 public class ExecutionPipeline {
@@ -34,13 +37,30 @@ public class ExecutionPipeline {
         PipelineContext current = ctx;
         for (PipelineStage stage : stages) {
             if (stage.order() > maxOrderInclusive) break;
+            // 进行自定义埋点
+            Span span = EchoMindTrace.startSpan("echomind.pipeline.stage");
+            span.setAttribute("echomind.pipeline.stage", stage.name());
+            span.setAttribute("echomind.pipeline.order", stage.order());
+            span.setAttribute("echomind.user_id", safe(current.getUserId()));
+            span.setAttribute("echomind.agent_id", safe(current.getAgentId()));
+            span.setAttribute("echomind.session_id", safe(current.getSessionId()));
+            span.setAttribute("echomind.model_id", safe(current.getModelId()));
             try {
-                log.debug("[Pipeline] Running stage {} (order={})", stage.name(), stage.order());
-                current = stage.process(current);
+                try (Scope ignored = span.makeCurrent()) {
+                    log.debug("[Pipeline] Running stage {} (order={})", stage.name(), stage.order());
+                    current = stage.process(current);
+                    // 确保每个阶段都有 traceId
+                    if (current.getTraceId() == null || current.getTraceId().isBlank()) {
+                        current.setTraceId(EchoMindTrace.traceId(span));
+                    }
+                }
             } catch (Exception e) {
+                EchoMindTrace.recordException(span, e);
                 log.error("[Pipeline] Stage {} failed: {}", stage.name(), e.getMessage());
-                current.setFinalResponse("[Error] Pipeline stage '" + stage.name() + "' failed: " + e.getMessage());
+                current.markFailed("Pipeline stage '" + stage.name() + "' failed: " + e.getMessage());
                 return current;
+            } finally {
+                span.end(); //结束埋点,将埋点打包给 OpenTelemetry Collector
             }
         }
         return current;
@@ -55,5 +75,9 @@ public class ExecutionPipeline {
             }
         }
         return null;
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

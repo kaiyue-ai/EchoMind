@@ -1,6 +1,5 @@
 package com.echomind.console.dto;
 
-import com.echomind.agent.team.AgentTeam;
 import com.echomind.agent.team.runtime.TeamSnapshot;
 
 import java.util.List;
@@ -14,15 +13,6 @@ public record TeamView(
     List<String> roles,
     List<TeamMemberView> members
 ) {
-    public static TeamView from(AgentTeam team) {
-        return new TeamView(
-            team.getTeamId(),
-            team.getName(),
-            team.getRoles().stream().map(Enum::name).toList(),
-            List.of()
-        );
-    }
-
     public static TeamView from(TeamSnapshot team) {
         List<TeamMemberView> members = team.members().stream()
             .map(TeamMemberView::from)

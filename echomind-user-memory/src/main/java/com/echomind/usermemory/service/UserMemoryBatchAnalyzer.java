@@ -2,7 +2,7 @@ package com.echomind.usermemory.service;
 
 import com.echomind.common.model.AgentMessage;
 import com.echomind.llm.provider.ModelProvider;
-import com.echomind.llm.provider.ProviderRequest;
+import com.echomind.llm.provider.dto.ProviderRequest;
 import com.echomind.llm.router.DynamicModelRouter;
 import com.echomind.llm.router.ModelProviderRegistry;
 import com.echomind.llm.router.ModelSpec;

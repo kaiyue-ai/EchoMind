@@ -1,6 +1,5 @@
 package com.echomind.boot.autoconfigure;
 
-import com.echomind.agent.AgentConfig;
 import com.echomind.agent.AgentFactory;
 import com.echomind.agent.memory.ChatMemoryPersistPublisher;
 import com.echomind.agent.memory.NoopChatMemoryPersistPublisher;
@@ -84,9 +83,6 @@ import java.util.*;
 @Slf4j
 public class EchoMindAutoConfiguration {
 
-    private static final String MARKDOWN_CODE_SKILL = "markdown-code";
-    private static final String DATE_QUERY_SKILL = "date-query";
-
     // --- 大模型装配 ---
 
     @Bean
@@ -106,20 +102,14 @@ public class EchoMindAutoConfiguration {
         var config = providers.getOrDefault("deepseek", new EchoMindProperties.ProviderConfig());
         String key = firstNonBlank(config.getApiKey(), System.getenv("DEEPSEEK_API_KEY"), System.getenv("ANTHROPIC_API_KEY"));
         String url = firstNonBlank(config.getBaseUrl(), System.getenv("DEEPSEEK_BASE_URL"), System.getenv("ANTHROPIC_BASE_URL"));
-        if (isBlank(url)) {
-            url = "https://api.deepseek.com/anthropic";
-        }
-        if (!url.contains("/anthropic")) {
-            url = url.endsWith("/") ? url + "anthropic" : url + "/anthropic";
-        }
         return new DeepSeekProvider(url, key, config.getMaxTokens());
     }
 
     /**
      * 所有 OpenAI 兼容协议的 Provider。
      *
-     * <p>遍历 echomind.models.providers 中除 anthropic 以外的所有 Provider 配置，
-     * 为一个配置创建 OpenAICompatibleProvider。无 API key 的项自动跳过。</p>
+     * <p>遍历 echomind.models.providers 中除 anthropic/deepseek 以外的所有 Provider 配置，
+     * 为一个配置创建 OpenAICompatibleProvider。无 API key 或 base-url 的项自动跳过。</p>
      */
     @Bean
     public List<OpenAICompatibleProvider> openAiCompatibleProviders(EchoMindProperties props) {
@@ -135,7 +125,11 @@ public class EchoMindAutoConfiguration {
                 log.info("Skipping OpenAI-compatible provider '{}': no API key configured", pid);
                 continue;
             }
-            String url = config.getBaseUrl() != null ? config.getBaseUrl() : "https://api.openai.com";
+            String url = config.getBaseUrl();
+            if (url == null || url.isBlank()) {
+                log.info("Skipping OpenAI-compatible provider '{}': no base-url configured", pid);
+                continue;
+            }
             result.add(new OpenAICompatibleProvider(pid, url, key));
             log.info("Created OpenAI-compatible provider: {} (url={})", pid, url);
         }
@@ -225,16 +219,25 @@ public class EchoMindAutoConfiguration {
                                                ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
         RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
         if (factory != null) {
-            log.info("Using RedisRecentMemoryCache with window={} TTL={}s",
-                props.getMemory().getShortTermWindow(), props.getMemory().getRedisTtlSeconds());
+            log.info("Using RedisRecentMemoryCache with maxMessages={} maxChars={} messageMaxChars={} TTL={}s",
+                props.getMemory().getShortTermWindow(),
+                props.getMemory().getShortTermMaxChars(),
+                props.getMemory().getShortTermMessageMaxChars(),
+                props.getMemory().getRedisTtlSeconds());
             return new RedisRecentMemoryCache(
                 factory,
                 props.getMemory().getShortTermWindow(),
+                props.getMemory().getShortTermMaxChars(),
+                props.getMemory().getShortTermMessageMaxChars(),
                 props.getMemory().getRedisTtlSeconds()
             );
         }
         log.warn("No RedisConnectionFactory available, falling back to in-memory recent cache");
-        return new InMemoryRecentMemoryCache(props.getMemory().getShortTermWindow());
+        return new InMemoryRecentMemoryCache(
+            props.getMemory().getShortTermWindow(),
+            props.getMemory().getShortTermMaxChars(),
+            props.getMemory().getShortTermMessageMaxChars()
+        );
     }
 
     @Bean
@@ -521,7 +524,13 @@ public class EchoMindAutoConfiguration {
     @Bean
     public Object skillCapabilityInitializer(SkillCapabilityService capabilityService,
                                              SkillDirectoryWatcher watcher,
-                                             MarketplaceService marketplaceService) {
+                                             MarketplaceService marketplaceService,
+                                             EchoMindProperties props) {
+        EchoMindProperties.Runtime runtime = props.getRuntime() == null
+            ? new EchoMindProperties.Runtime()
+            : props.getRuntime();
+        RetiredSkillMigration retiredSkillMigration = new RetiredSkillMigration(runtime.getRetiredSkills());
+        marketplaceService.purgeRetiredSkills(retiredSkillMigration.retiredSkillIds());
         marketplaceService.restoreFromDatabase();
         capabilityService.syncEnabledSkills();
         return new Object();
@@ -551,10 +560,10 @@ public class EchoMindAutoConfiguration {
                 props.getUserMemory().getMinConfidence()
             ),
             new KnowledgeRetrievalStage(knowledgeService, embeddingClient, props.getMemory().getKnowledgeTopK()),
-            new ToolResolutionStage(router),
+            new ModelResolutionStage(router),
             new MultimodalGuardStage(providerReg),
             new AttachmentPreparationStage(storageService),
-            new ResultAggregationStage(router, providerReg, capabilityRegistry, promptBudget),
+            new ResultAggregationStage(providerReg, capabilityRegistry, promptBudget),
             new MemoryPersistStage(chatMemoryPersistPublisher)
         );
         return new ExecutionPipeline(stages);
@@ -607,89 +616,7 @@ public class EchoMindAutoConfiguration {
     @Bean
     public AgentFactory agentFactory(ExecutionPipeline pipeline, EchoMindProperties props,
                                      AgentPersistenceService persistenceService) {
-        AgentFactory factory = new AgentFactory(pipeline);
-        for (AgentConfig persisted : persistenceService.loadAll()) {
-            if (mergeDefaultAgentSkills(persisted, props)) {
-                persistenceService.save(persisted);
-            }
-            factory.create(persisted);
-        }
-        for (var def : props.getAgents()) {
-            if (persistenceService.exists(def.getAgentId())) {
-                continue;
-            }
-            AgentConfig config = new AgentConfig();
-            config.setAgentId(def.getAgentId());
-            config.setName(def.getName());
-            config.setSystemPrompt(def.getSystemPrompt());
-            config.setModelId(def.getModelId());
-            config.setSkillIds(def.getSkillIds());
-            persistenceService.save(config);
-            factory.create(config);
-        }
-        // 没有配置任何 Agent 时，补一个可直接使用的默认 Agent。
-        if (factory.allAgents().isEmpty()) {
-            AgentConfig config = new AgentConfig();
-            config.setAgentId("default");
-            config.setName("EchoMind Assistant");
-            config.setSystemPrompt("You are a helpful AI assistant. You have access to tools for web search, weather, calculations, and date/time queries. Always use these tools when the user asks for real-time information, current data, weather, math, dates, times, or weekdays — never guess when a tool can give a better answer.");
-            config.setModelId("deepseek:deepseek-v4-flash");
-            config.setSkillIds(List.of("weather-query", "calculator", "web-search", "markdown-code", "date-query"));
-            persistenceService.save(config);
-            factory.create(config);
-        }
-        return factory;
-    }
-
-    /**
-     * 对已存在于 MySQL 的默认 Agent 做轻量迁移。
-     *
-     * <p>数据库是事实来源，因此不会用 YAML 覆盖用户编辑过的名称、提示词、模型，
-     * 也不会把用户曾经移除的旧 Skill 强行加回来。这里只补平台默认配置中新加入的 Skill。</p>
-     */
-    private boolean mergeDefaultAgentSkills(AgentConfig persisted, EchoMindProperties props) {
-        if (persisted == null || props.getAgents() == null) {
-            return false;
-        }
-        for (var def : props.getAgents()) {
-            if (!Objects.equals(def.getAgentId(), persisted.getAgentId())) {
-                continue;
-            }
-            List<String> configuredSkillIds = def.getSkillIds();
-            if (configuredSkillIds == null || configuredSkillIds.isEmpty()) {
-                return false;
-            }
-            LinkedHashSet<String> merged = new LinkedHashSet<>(
-                persisted.getSkillIds() == null ? List.of() : persisted.getSkillIds());
-            boolean changed = false;
-            for (String skillId : defaultSkillsToMerge(configuredSkillIds)) {
-                if (merged.add(skillId)) {
-                    changed = true;
-                    log.info("Merged default skill {} into persisted agent {}", skillId, persisted.getAgentId());
-                }
-            }
-            if (changed) {
-                persisted.setSkillIds(List.copyOf(merged));
-            }
-            if (isLegacyAnthropicDeepSeekModel(persisted.getModelId())) {
-                persisted.setModelId(def.getModelId());
-                log.info("Migrated persisted agent {} model to {}", persisted.getAgentId(), def.getModelId());
-                changed = true;
-            }
-            return changed;
-        }
-        return false;
-    }
-
-    private List<String> defaultSkillsToMerge(List<String> configuredSkillIds) {
-        List<String> mergeCandidates = List.of(MARKDOWN_CODE_SKILL, DATE_QUERY_SKILL);
-        return mergeCandidates.stream()
-            .filter(configuredSkillIds::contains)
-            .toList();
-    }
-
-    private boolean isLegacyAnthropicDeepSeekModel(String modelId) {
-        return modelId != null && modelId.startsWith("anthropic:claude-");
+        return new AgentRuntimeBootstrapper(props).restore(pipeline, props, persistenceService);
     }
 
     @Bean
@@ -698,16 +625,6 @@ public class EchoMindAutoConfiguration {
     }
 
     // --- Agent Team 装配 ---
-
-    @Bean
-    public com.echomind.agent.team.messaging.TeamMessageBus teamMessageBus() {
-        return new com.echomind.agent.team.messaging.TeamMessageBus();
-    }
-
-    @Bean
-    public com.echomind.agent.team.visualization.TeamTraceRecorder teamTraceRecorder() {
-        return new com.echomind.agent.team.visualization.TeamTraceRecorder();
-    }
 
     @Bean
     public org.springframework.core.task.TaskExecutor teamTaskExecutor() {
@@ -719,14 +636,6 @@ public class EchoMindAutoConfiguration {
         executor.setQueueCapacity(100);
         executor.initialize();
         return executor;
-    }
-
-    /** Team 默认最多协作 3 轮，防止任务循环失控。 */
-    @Bean
-    public com.echomind.agent.team.TeamCoordinator teamCoordinator(AgentOrchestrator orchestrator,
-                                                                     com.echomind.agent.team.messaging.TeamMessageBus bus,
-                                                                     com.echomind.agent.team.visualization.TeamTraceRecorder recorder) {
-        return new com.echomind.agent.team.TeamCoordinator(orchestrator, bus, recorder, 3);
     }
 
     private boolean isBlank(String value) {

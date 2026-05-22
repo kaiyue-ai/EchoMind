@@ -3,16 +3,21 @@ package com.echomind.agent.team.runtime;
 import com.echomind.agent.team.model.PlannedStep;
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.team.model.TeamMember;
+import com.echomind.agent.team.state.TeamRiskLevel;
 import com.echomind.agent.team.state.TeamRole;
+import com.echomind.agent.team.state.TeamStepQualityStatus;
+import com.echomind.agent.team.state.TeamStepStatus;
 import com.echomind.agent.team.store.TeamRunEntity;
 import com.echomind.agent.orchestration.AgentOrchestrator;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -50,6 +55,58 @@ class TeamBlackboardServicePromptTest {
     }
 
     @Test
+    void plannerPromptIncludesPreviousExecutorResultsOnResultReplan() {
+        TeamBlackboardService service = new TeamBlackboardService(
+            null, null, null, null, null, null, null, null
+        );
+        TeamRunEntity run = new TeamRunEntity();
+        run.setTask("策划活动");
+        TeamSnapshot team = new TeamSnapshot(
+            "team-1",
+            "活动团队",
+            List.of(new TeamMember("executor", "Executor", TeamRole.EXECUTOR, List.of("weather"), 20, null)),
+            null,
+            null
+        );
+
+        String prompt = service.buildPlannerPrompt(
+            run,
+            team,
+            List.of(new PlannedStep("旧天气查询", "只查天气", List.of("weather"), "给出天气")),
+            "补充预算和人员协调任务",
+            List.of(new TeamStepSnapshot(
+                "step-1",
+                1,
+                "weather",
+                "旧天气查询",
+                "只查天气",
+                List.of("weather"),
+                List.of(),
+                TeamRiskLevel.LOW,
+                "",
+                "给出天气",
+                "executor",
+                TeamStepStatus.COMPLETED,
+                "旧执行结果：只有天气，没有预算。",
+                "",
+                "",
+                TeamStepQualityStatus.PASSED,
+                "",
+                "",
+                "",
+                0,
+                0,
+                Instant.parse("2026-05-12T12:00:00Z"),
+                Instant.parse("2026-05-12T12:05:00Z")
+            ))
+        );
+
+        assertThat(prompt).contains("Previous executor results");
+        assertThat(prompt).contains("旧执行结果：只有天气，没有预算。");
+        assertThat(prompt).contains("补充预算和人员协调任务");
+    }
+
+    @Test
     void reviewerDecisionRepairsInvalidJsonOnce() {
         AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
         TeamBlackboardService service = new TeamBlackboardService(
@@ -66,7 +123,7 @@ class TeamBlackboardServicePromptTest {
             """);
         when(orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), eq("原始审查提示")))
             .thenReturn(broken);
-        when(orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer-repair"), contains("Invalid response to repair")))
+        when(orchestrator.executeInternal(eq("reviewer"), startsWith("team-run-run-1-reviewer-repair-"), contains("Invalid response excerpt")))
             .thenReturn(repaired);
 
         var decision = service.executeReviewerDecision(reviewer, run, "原始审查提示", true);

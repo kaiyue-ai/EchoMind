@@ -6,9 +6,12 @@ import java.util.stream.IntStream;
 /** 普通聊天记忆 RabbitMQ 分片命名和路由规则。 */
 public final class ChatMemoryShardSupport {
 
+    // 默认分片数
     public static final int DEFAULT_SHARD_COUNT = 8;
+    // 默认交换机名称
     public static final String DEFAULT_EXCHANGE_NAME = "echomind.chat-memory.persist.exchange";
 
+    // 私有构造函数，避免实例化
     private ChatMemoryShardSupport() {
     }
 

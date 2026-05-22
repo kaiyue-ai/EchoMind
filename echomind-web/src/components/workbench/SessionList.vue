@@ -37,7 +37,7 @@
           title="删除会话"
           @click.stop="$emit('delete', session)"
         >
-          删除
+          <el-icon><Delete /></el-icon>
         </el-button>
       </div>
       <div v-if="!loading && sessions.length === 0" class="session-empty">
@@ -48,7 +48,7 @@
 </template>
 
 <script setup>
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { Delete, Plus, Refresh } from '@element-plus/icons-vue'
 
 defineProps({
   sessions: { type: Array, default: () => [] },

@@ -1,6 +1,7 @@
 package com.echomind.agent.tool;
 
 import com.echomind.agent.pipeline.PipelineContext;
+import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.skill.api.Skill;
 import com.echomind.skill.api.SkillContext;
 import com.echomind.skill.api.SkillMetadata;
@@ -17,6 +18,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import lombok.Getter;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 
 /**
  * 将 EchoMind 本地 {@link Skill} 适配为 Agent 管线内部统一的 {@link Tool}。
@@ -87,28 +90,32 @@ public class SkillToolAdapter implements Tool {
 
     @Override
     public CompletableFuture<ToolResult> execute(Map<String, Object> parameters, PipelineContext context) {
+        Context otelContext = Context.current();
         return CompletableFuture.supplyAsync(() -> {
-            long start = System.currentTimeMillis();
-            try {
-                if (registry != null && !registry.isEnabled(skillId, skill)) {
-                    return ToolResult.failure("Skill is disabled: " + skillId,
-                        System.currentTimeMillis() - start);
+            try (Scope ignored = otelContext.makeCurrent()) {
+                long start = System.currentTimeMillis();
+                try {
+                    if (registry != null && !registry.isEnabled(skillId, skill)) {
+                        return ToolResult.failure("Skill is disabled: " + skillId,
+                            System.currentTimeMillis() - start);
+                    }
+                    SkillContext skillContext = context == null ? null : new SkillContext(
+                        context.getSessionId(),
+                        context.getAgentId(),
+                        context.getAttributes()
+                    );
+                    SkillRequest request = new SkillRequest(parameters, skillContext, null);
+                    SkillResult result = skill.execute(request).join();
+                    long duration = System.currentTimeMillis() - start;
+                    if (result.isSuccess()) {
+                        return ToolResult.success(result.output(), duration);
+                    } else {
+                        return ToolResult.failure(result.error(), duration);
+                    }
+                } catch (Exception e) {
+                    EchoMindTrace.recordException(EchoMindTrace.currentSpan(), e);
+                    return ToolResult.failure(e.getMessage(), System.currentTimeMillis() - start);
                 }
-                SkillContext skillContext = context == null ? null : new SkillContext(
-                    context.getSessionId(),
-                    context.getAgentId(),
-                    context.getAttributes()
-                );
-                SkillRequest request = new SkillRequest(parameters, skillContext, null);
-                SkillResult result = skill.execute(request).join();
-                long duration = System.currentTimeMillis() - start;
-                if (result.isSuccess()) {
-                    return ToolResult.success(result.output(), duration);
-                } else {
-                    return ToolResult.failure(result.error(), duration);
-                }
-            } catch (Exception e) {
-                return ToolResult.failure(e.getMessage(), System.currentTimeMillis() - start);
             }
         }, executor);
     }

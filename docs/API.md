@@ -60,6 +60,12 @@
     "default": true
   },
   {
+    "providerId": "aliyun-bailian",
+    "modelName": "qwen3.7-max",
+    "capabilities": ["TEXT", "FUNCTION"],
+    "default": true
+  },
+  {
     "providerId": "mock",
     "modelName": "mock-model",
     "capabilities": ["TEXT", "FUNCTION"],
@@ -284,6 +290,9 @@
 
 ## 7. Agent Team 接口 `/api/teams`
 
+Team 定义仍是全局资源；每一次 Run 按当前登录用户写入 MySQL 黑板，不进入普通聊天会话历史。
+状态推进由 `TaskExecutor` 后台异步执行，前端 Team 看板用 0.25 秒轮询读取 Run/Step/Event。
+
 ### GET `/api/teams` — 列出所有团队
 ```json
 // 响应
@@ -343,29 +352,62 @@
 {
   "runId": "uuid",
   "teamId": "uuid",
+  "userId": "current-user-id",
   "task": "策划一场60人户外团建活动",
   "status": "PENDING",
+  "taskLevel": "COMPLEX",
   "steps": [],
   "events": []
 }
 ```
+
+### GET `/api/teams/{teamId}/runs` — 查询当前用户在该团队下的 Run
+```json
+[
+  {
+    "runId": "uuid",
+    "teamId": "uuid",
+    "userId": "current-user-id",
+    "status": "COMPLETED",
+    "taskLevel": "COMPLEX"
+  }
+]
+```
+
+### GET `/api/team-runs` — 查询当前用户所有 Team Run 历史
+该接口与 `/api/chat/sessions` 分离，用于前端单独展示团队协作历史。
 
 ### GET `/api/teams/{teamId}/runs/{runId}` — 查询 Run 黑板
 ```json
 {
   "runId": "uuid",
   "status": "EXECUTING",
+  "taskLevel": "COMPLEX",
   "clarificationStage": null,
   "planReviewJson": "{\"action\":\"CONTINUE\"}",
   "resultReviewJson": null,
+  "mergeOutput": null,
+  "globalReviewJson": null,
+  "conflictReportJson": null,
+  "arbitrationJson": null,
   "finalOutput": null,
   "mermaidDiagram": null,
+  "planRetryCount": 0,
+  "resultReplanCount": 0,
+  "partialReplanCount": 0,
+  "fullReplanCount": 0,
+  "arbitrationCount": 0,
   "steps": [
     {
       "stepId": "step-1-abcd",
+      "clientStepId": "venue",
       "title": "查询活动场地",
+      "dependsOnStepIds": [],
+      "riskLevel": "LOW",
+      "qualityStatus": "PENDING",
       "assignedAgentId": "default",
       "status": "RUNNING",
+      "reflectionJson": null,
       "retryCount": 0
     }
   ],
@@ -375,15 +417,21 @@
 }
 ```
 
+Planner 输出 DAG Step：`clientStepId` 是计划内稳定 ID，`dependsOn` 表示依赖关系；后端保存为
+`dependsOnStepIds` 后，只调度依赖已完成的 Step，能并发的 Step 会并发执行。
+Planner 不在计划里硬指定 Agent；执行前 `AgentSelector` 会把候选 Executor、能力标签、当前活跃 Step 负载、
+健康状态和规则评分交给模型自主选择，模型选择失败时才按规则评分兜底。
+`RiskPolicy` 是唯一风险裁决入口，裁决结果会写入 `RISK_DECIDED` 事件。
+
+Reviewer 决策支持 `CONTINUE`、`RETRY`、`PARTIAL_REPLAN`、`REPLAN`、`ASK_CLARIFICATION`、`FAILED`：
+`RETRY` 重跑指定 Step，`PARTIAL_REPLAN` 重跑局部 DAG 分支，`REPLAN` 回到 Planner 做整体重规划。
+每次重试都会把 Reviewer 错误原因、修改意见、上一轮输出摘要写入 `reflectionJson`，再带给 Executor。
+MergeAgent 后会写入 `conflictReportJson`；存在冲突时 Planner 仲裁结果写入 `arbitrationJson`，MergeAgent 带仲裁结果二次聚合。
+
 ### POST `/api/teams/{teamId}/runs/{runId}/resume` — 提交澄清并继续
 ```json
 // 请求
 { "clarificationAnswer": "活动日期是下周五，预算每人300元以内。" }
-```
-
-### GET `/api/teams/message-bus/pending` — 消息总线状态
-```json
-{ "pendingCount": 0 }
 ```
 
 ---
@@ -410,8 +458,9 @@ HTTP 状态码：
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | 是 | DeepSeek API 密钥 |
-| `DEEPSEEK_BASE_URL` | 是 | DeepSeek 兼容 API 地址，默认 `https://api.deepseek.com/anthropic` |
-| `OPENAI_API_KEY` | 否 | OpenAI API 密钥（可选） |
+| `DEEPSEEK_BASE_URL` | 是 | DeepSeek Chat Completions API 地址，默认 `https://api.deepseek.com` |
+| `ALIYUN_BAILIAN_API_KEY` | 否 | 阿里云百炼 API Key，启用 `aliyun-bailian` 模型列表 |
+| `ALIYUN_BAILIAN_BASE_URL` | 否 | 阿里云百炼 OpenAI-compatible 地址，默认 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 
 ---
 

@@ -96,7 +96,7 @@ public class WebSearchSkill implements Skill {
         return new SkillMetadata(
             "web-search",
             "1.1.0",
-            "Search the internet or read a public web page by URL. When the input contains an http/https URL, fetch and extract that page first. Use keyword search for current information, news, and facts beyond the model knowledge cutoff. Private network URLs are rejected for safety.",
+            "联网搜索公开信息或读取公开网页链接。输入包含 http/https 链接时优先抓取并提取正文；没有链接时通过 SearXNG 搜索最新资料。为安全起见会拒绝内网和 localhost 地址。",
             Map.of(
                 "type", "object",
                 "properties", Map.of(

@@ -2,159 +2,127 @@ package com.echomind.agent.team.visualization;
 
 import com.echomind.agent.team.runtime.TeamEventSnapshot;
 import com.echomind.agent.team.runtime.TeamStepSnapshot;
+import com.echomind.agent.team.state.TeamRunStatus;
 
 import java.util.List;
 
 /**
- * Mermaid 图生成器 —— 将 Agent Team 协作流程转换为 Mermaid.js 序列图源码。
- *
- * <p>生成的 Mermaid 序列图展示团队协作的标准流程：
- * <pre>{@code
- * sequenceDiagram
- *     title 团队名称 - Agent Team 协作
- *     participant 用户
- *     participant Planner
- *     participant Executor
- *     participant Reviewer
- *
- *     用户->>Planner: 分配任务
- *     Planner->>Planner: 分析并拆解
- *     Planner->>Executor: 子任务 1: "xxx"
- *     Executor->>Executor: 执行子任务 1
- *     Executor->>Planner: 返回结果 1
- *     ...
- *     Planner->>Reviewer: 提交结果审核
- *     Reviewer->>Reviewer: 评估并整合
- *     Reviewer->>用户: 最终整合回复
- * }</pre>
- *
- * <p>设计要点：
- * <ul>
- *   <li>子任务描述超过 40 字符时自动截断并附加 "..."，防止图表过宽。</li>
- *   <li>引导号在子任务文本中被转义为单引号，避免破坏 Mermaid 语法。</li>
- *   <li>当前版本固定使用 4 个参与者（用户/Planner/Executor/Reviewer）。</li>
- * </ul>
+ * Mermaid 图生成器：把 Team v2 管控状态转换为完整中文流程图。
  */
 public class MermaidGenerator {
 
-    /**
-     * 生成 Mermaid 序列图源码。
-     *
-     * <p>根据团队名称、子任务列表和执行结果生成标准序列图。
-     * 注意：当前版本的 events 参数预留用于未来基于实际事件
-     * 动态生成更精确的图表（当前未使用）。
-     *
-     * @param teamName 团队显示名称（用作图表标题）
-     * @param subtasks 子任务列表（用于生成 Executor 执行步骤）
-     * @param results  执行结果列表（当前版本未直接使用，预留扩展）
-     * @param events   跟踪事件列表（当前版本未直接使用，预留扩展）
-     * @return Mermaid.js 格式的序列图源码字符串
-     */
-    public static String generate(String teamName, List<String> subtasks,
-                                   List<String> results, List<TeamTraceRecorder.TraceEvent> events) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("sequenceDiagram\n");
-        sb.append("    title ").append(teamName).append(" - Agent Team 协作\n\n");
-
-        // 定义参与者
-        sb.append("    participant 用户\n");
-        sb.append("    participant Planner\n");
-        sb.append("    participant Executor\n");
-        sb.append("    participant Reviewer\n\n");
-
-        // 任务分配
-        sb.append("    用户->>Planner: 分配任务\n");
-
-        // 规划阶段
-        sb.append("    Planner->>Planner: 分析并拆解\n");
-
-        // 子任务执行步骤
-        for (int i = 0; i < subtasks.size(); i++) {
-            String task = subtasks.get(i).replace("\"", "'");
-            sb.append("    Planner->>Executor: 子任务 ").append(i + 1)
-                .append(": \"").append(task.length() > 40 ? task.substring(0, 40) + "..." : task)
-                .append("\"\n");
-            sb.append("    Executor->>Executor: 执行子任务 ").append(i + 1).append("\n");
-            sb.append("    Executor->>Planner: 返回结果 ").append(i + 1).append("\n");
-        }
-
-        // 审阅阶段
-        sb.append("    Planner->>Reviewer: 提交结果审核\n");
-        sb.append("    Reviewer->>Reviewer: 评估并整合\n");
-        sb.append("    Reviewer->>用户: 最终整合回复\n");
-
-        return sb.toString();
-    }
-
-    /**
-     * 根据黑板中的 Step/Event 生成更贴近真实执行过程的 Mermaid 序列图。
-     */
     public static String generateFromSnapshots(String teamName, List<TeamStepSnapshot> steps,
                                                List<TeamEventSnapshot> events) {
+        return generateFromSnapshots(teamName, TeamRunStatus.PENDING, "COMPLEX", steps, events);
+    }
+
+    public static String generateFromSnapshots(String teamName, TeamRunStatus status, String taskLevel,
+                                               List<TeamStepSnapshot> steps,
+                                               List<TeamEventSnapshot> events) {
+        String active = activeNode(status, taskLevel, events == null ? List.of() : events);
         StringBuilder sb = new StringBuilder();
-        sb.append("sequenceDiagram\n");
-        sb.append("    title ").append(escape(teamName)).append(" - Agent Team 黑板协作\n\n");
-        sb.append("    participant User as 用户\n");
-        sb.append("    participant Planner\n");
-        sb.append("    participant Reviewer\n");
-
-        List<String> executors = steps.stream()
-            .map(TeamStepSnapshot::assignedAgentId)
-            .filter(id -> id != null && !id.isBlank())
-            .distinct()
-            .toList();
-        for (String executor : executors) {
-            sb.append("    participant ").append(alias(executor)).append(" as ")
-                .append(escape(executor)).append("\n");
+        sb.append("flowchart LR\n");
+        sb.append("    A[\"外部提交任务\"] --> B[\"TaskPlanner 规划器\"]\n");
+        sb.append("    B --> C{\"任务等级判断\"}\n");
+        sb.append("    C -->|简易任务| D[\"直接生成初稿\"]\n");
+        sb.append("    D --> O[\"GlobalReviewer 简易终审\"]\n");
+        sb.append("    C -->|复杂任务| E[\"拆解 Step 并生成 DAG 依赖\"]\n");
+        sb.append("    E --> PR[\"PlannerReviewer 规划审查\"]\n");
+        sb.append("    PR -->|通过| F[\"TeamControlCenter 管控中心\"]\n");
+        sb.append("    PR -->|要求修改| B\n");
+        sb.append("    PR -->|需要澄清| W[\"暂停等待用户补充\"]\n");
+        sb.append("    F --> X{\"查找可执行 Step\"}\n");
+        sb.append("    X -->|依赖已完成| G[\"线程池并发分发 WorkerAgent\"]\n");
+        sb.append("    X -->|依赖未完成| Y[\"等待前置 Step 完成\"]\n");
+        sb.append("    G --> AS[\"AgentSelector 按能力/负载/健康度选择 Agent\"]\n");
+        sb.append("    AS --> H{\"RiskPolicy 风险裁决\"}\n");
+        sb.append("    H -->|低风险| I[\"WorkerAgent 输出 Step 结果\"]\n");
+        sb.append("    H -->|高风险| J[\"SubReviewer 子评审\"]\n");
+        sb.append("    J --> K{\"子评审通过?\"}\n");
+        sb.append("    K -->|通过| I\n");
+        sb.append("    K -->|需修改且未超限| G\n");
+        sb.append("    K -->|迭代超限| L[\"标记瑕疵放行\"]\n");
+        sb.append("    I --> Z{\"DAG 是否全部完成?\"}\n");
+        sb.append("    L --> Z\n");
+        sb.append("    Z -->|否| X\n");
+        sb.append("    Z -->|是| M[\"MergeAgent 聚合对齐\"]\n");
+        sb.append("    M --> N[\"冲突检测与统一规范\"]\n");
+        sb.append("    N --> U{\"存在冲突?\"}\n");
+        sb.append("    U -->|是| V[\"Planner 仲裁分歧\"]\n");
+        sb.append("    V --> M\n");
+        sb.append("    U -->|否| O[\"GlobalReviewer 全局终审\"]\n");
+        sb.append("    O --> P{\"终审结果\"}\n");
+        sb.append("    P -->|通过| Q[\"标准化最终报告\"]\n");
+        sb.append("    P -->|局部瑕疵| PART[\"局部子图重规划\"]\n");
+        sb.append("    PART --> F\n");
+        sb.append("    P -->|彻底不合格| R[\"任务回溯重规划\"]\n");
+        sb.append("    R --> B\n");
+        sb.append("    P -->|需求不清| W\n");
+        sb.append("    Q --> SAVE[\"写入 Team Run 最终结果\"]\n");
+        sb.append("    F --> S[\"超时熔断/限流/异常兜底\"]\n");
+        sb.append("    F --> T[\"深度与迭代次数拦截\"]\n");
+        sb.append("    classDef active fill:#116b5b,stroke:#26d7a5,color:#ffffff,stroke-width:2px;\n");
+        sb.append("    classDef failed fill:#5c1b1b,stroke:#ff6b6b,color:#ffffff,stroke-width:2px;\n");
+        sb.append("    classDef guard fill:#2b234d,stroke:#9d8cff,color:#ffffff;\n");
+        sb.append("    class S,T guard;\n");
+        if (status == TeamRunStatus.FAILED) {
+            sb.append("    class R failed;\n");
+        } else if (status == TeamRunStatus.COMPLETED) {
+            sb.append("    class Q,SAVE active;\n");
+        } else if (!active.isBlank()) {
+            sb.append("    class ").append(active).append(" active;\n");
         }
-        sb.append("\n");
-
-        sb.append("    User->>Planner: 提交初始需求\n");
-        sb.append("    Planner->>Planner: 拆解结构化 Step\n");
-        sb.append("    Planner->>Reviewer: 提交计划审查\n");
-        sb.append("    Reviewer-->>Planner: 计划审查通过/修改意见\n");
-
-        for (TeamStepSnapshot step : steps) {
-            String executor = step.assignedAgentId() == null || step.assignedAgentId().isBlank()
-                ? "Executor"
-                : alias(step.assignedAgentId());
-            String title = truncate(step.title());
-            sb.append("    Planner->>").append(executor).append(": ")
-                .append(escape(title)).append("\n");
-            sb.append("    ").append(executor).append("->>").append(executor)
-                .append(": 执行 ").append(escape(step.status().name())).append("\n");
-            if (step.retryCount() > 0) {
-                sb.append("    Reviewer-->>").append(executor).append(": 重试意见 x")
-                    .append(step.retryCount()).append("\n");
-            }
-            sb.append("    ").append(executor).append("-->>Reviewer: 返回原始结果\n");
-        }
-
-        boolean askedClarification = events.stream()
-            .anyMatch(event -> event.type() != null && "CLARIFICATION_REQUESTED".equals(event.type().name()));
-        if (askedClarification) {
-            sb.append("    Reviewer-->>User: 请求澄清\n");
-            sb.append("    User-->>Reviewer: 补充信息\n");
-        }
-        sb.append("    Reviewer->>Reviewer: 对照初始需求审查结果\n");
-        sb.append("    Reviewer-->>User: 输出最终报告\n");
         return sb.toString();
     }
 
-    private static String alias(String value) {
-        String cleaned = value == null ? "Executor" : value.replaceAll("[^A-Za-z0-9_]", "_");
-        if (cleaned.isBlank() || Character.isDigit(cleaned.charAt(0))) {
-            cleaned = "Agent_" + cleaned;
+    private static String activeNode(TeamRunStatus status, String taskLevel, List<TeamEventSnapshot> events) {
+        if (status == null) {
+            return "A";
         }
-        return cleaned;
+        if ("SIMPLE".equalsIgnoreCase(taskLevel) && status == TeamRunStatus.EXECUTING) {
+            return "D";
+        }
+        return switch (status) {
+            case PENDING -> "A";
+            case PLANNING -> "B";
+            case PLAN_REVIEWING -> "PR";
+            case EXECUTING -> executingNode(events);
+            case MERGING -> mergingNode(events);
+            case GLOBAL_REVIEWING, RESULT_REVIEWING -> "O";
+            case NEEDS_CLARIFICATION -> "W";
+            case COMPLETED -> "SAVE";
+            case FAILED -> "R";
+        };
     }
 
-    private static String truncate(String value) {
-        String text = value == null || value.isBlank() ? "子任务" : value.replace("\"", "'");
-        return text.length() > 40 ? text.substring(0, 40) + "..." : text;
+    private static String executingNode(List<TeamEventSnapshot> events) {
+        if (hasEvent(events, "STEP_SUB_REVIEW_STARTED")) {
+            return "J";
+        }
+        if (hasEvent(events, "RISK_DECIDED")) {
+            return "H";
+        }
+        if (hasEvent(events, "AGENT_SELECTED")) {
+            return "AS";
+        }
+        if (hasEvent(events, "TEAM_CONTROL_STARTED")) {
+            return "F";
+        }
+        return "G";
     }
 
-    private static String escape(String value) {
-        return (value == null ? "" : value).replace("\"", "'");
+    private static String mergingNode(List<TeamEventSnapshot> events) {
+        if (hasEvent(events, "ARBITRATION_STARTED") || hasEvent(events, "ARBITRATION_COMPLETED")) {
+            return "V";
+        }
+        if (hasEvent(events, "CONFLICT_DETECTED")) {
+            return "N";
+        }
+        return "M";
+    }
+
+    private static boolean hasEvent(List<TeamEventSnapshot> events, String type) {
+        return events.stream()
+            .anyMatch(event -> event.type() != null && type.equals(event.type().name()));
     }
 }

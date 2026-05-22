@@ -95,10 +95,12 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     environment:
       # LLM API 配置
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${ANTHROPIC_API_KEY:-}}
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://api.deepseek.com}}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ALIYUN_BAILIAN_API_KEY: ${ALIYUN_BAILIAN_API_KEY:-}
       ALIYUN_BAILIAN_BASE_URL: ${ALIYUN_BAILIAN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
@@ -133,7 +135,9 @@ services:
       ECHOMIND_RABBITMQ_CHAT_RESPONSE_MAX_CONSUMERS: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_MAX_CONSUMERS:-4}
       ECHOMIND_RABBITMQ_CHAT_RESPONSE_PREFETCH: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_PREFETCH:-10}
       # EchoMind 配置
-      ECHOMIND_MEMORY_SHORT_TERM_WINDOW: ${ECHOMIND_MEMORY_SHORT_TERM_WINDOW:-50}
+      ECHOMIND_MEMORY_SHORT_TERM_WINDOW: ${ECHOMIND_MEMORY_SHORT_TERM_WINDOW:-80}
+      ECHOMIND_MEMORY_SHORT_TERM_MAX_CHARS: ${ECHOMIND_MEMORY_SHORT_TERM_MAX_CHARS:-12000}
+      ECHOMIND_MEMORY_SHORT_TERM_MESSAGE_MAX_CHARS: ${ECHOMIND_MEMORY_SHORT_TERM_MESSAGE_MAX_CHARS:-1500}
       ECHOMIND_MEMORY_PERSIST_QUEUE_NAME: echomind.chat-memory.persist.requests
       ECHOMIND_MEMORY_PERSIST_EXCHANGE_NAME: echomind.chat-memory.persist.exchange
       ECHOMIND_MEMORY_PERSIST_SHARDS: ${ECHOMIND_MEMORY_PERSIST_SHARDS:-8}
@@ -141,14 +145,33 @@ services:
       ECHOMIND_MEMORY_EMBEDDING_MODEL: tongyi-embedding-vision-plus
       USER_MEMORY_ENABLED: ${USER_MEMORY_ENABLED:-true}
       USER_MEMORY_QUEUE_NAME: echomind.user-memory.requests
+      USER_MEMORY_FLUSH_QUEUE_NAME: echomind.user-memory.flush.requests
       USER_MEMORY_VECTOR_INDEX_NAME: "idx:user:memory:vectors"
       USER_MEMORY_VECTOR_KEY_PREFIX: "user:memory:vector:"
       USER_MEMORY_PROFILE_KEY_PREFIX: "echomind:user-profile:snapshot:"
       USER_MEMORY_BATCH_SIZE: ${USER_MEMORY_BATCH_SIZE:-5}
+      USER_MEMORY_BUFFER_MAX_CHARS: ${USER_MEMORY_BUFFER_MAX_CHARS:-8000}
+      USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS: ${USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS:-1800}
+      USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS: ${USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS:-60}
+      USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD: ${USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD:-0.7}
       USER_MEMORY_RELATED_FACT_TOP_K: ${USER_MEMORY_RELATED_FACT_TOP_K:-12}
       USER_MEMORY_PROFILE_MAX_CHARS: ${USER_MEMORY_PROFILE_MAX_CHARS:-2000}
       USER_MEMORY_BUFFER_LOCK_TTL_SECONDS: ${USER_MEMORY_BUFFER_LOCK_TTL_SECONDS:-60}
       USER_MEMORY_BUFFER_TTL_DAYS: ${USER_MEMORY_BUFFER_TTL_DAYS:-7}
+      # OpenTelemetry：本地管理端默认启用 Trace 导出，后端只等待 Collector 启动，不依赖观测健康状态。
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-echomind}
+      OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
+      OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
+      OTEL_LOGS_EXPORTER: ${OTEL_LOGS_EXPORTER:-none}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local}
+      ECHOMIND_OBSERVABILITY_JAEGER_ENABLED: ${ECHOMIND_OBSERVABILITY_JAEGER_ENABLED:-true}
+      ECHOMIND_OBSERVABILITY_JAEGER_QUERY_URL: ${ECHOMIND_OBSERVABILITY_JAEGER_QUERY_URL:-http://jaeger:16686}
+      ECHOMIND_OBSERVABILITY_JAEGER_PUBLIC_URL: ${ECHOMIND_OBSERVABILITY_JAEGER_PUBLIC_URL:-http://localhost:16686}
+      ECHOMIND_OBSERVABILITY_JAEGER_SERVICE_NAME: ${ECHOMIND_OBSERVABILITY_JAEGER_SERVICE_NAME:-echomind}
+      # 飞书自定义机器人告警 Webhook
+      Webhook: ${Webhook:-}
       SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
       ECHOMIND_SKILL_AUTO_LOAD_PATH: /app/skills/
       ECHOMIND_SKILL_MARKETPLACE_DIR: /app/data/marketplace/
@@ -197,17 +220,22 @@ services:
       RABBITMQ_PASSWORD: echomind_secret
       USER_MEMORY_ENABLED: ${USER_MEMORY_ENABLED:-true}
       USER_MEMORY_QUEUE_NAME: echomind.user-memory.requests
+      USER_MEMORY_FLUSH_QUEUE_NAME: echomind.user-memory.flush.requests
       USER_MEMORY_VECTOR_INDEX_NAME: "idx:user:memory:vectors"
       USER_MEMORY_VECTOR_KEY_PREFIX: "user:memory:vector:"
       USER_MEMORY_PROFILE_KEY_PREFIX: "echomind:user-profile:snapshot:"
       USER_MEMORY_BATCH_SIZE: ${USER_MEMORY_BATCH_SIZE:-5}
+      USER_MEMORY_BUFFER_MAX_CHARS: ${USER_MEMORY_BUFFER_MAX_CHARS:-8000}
+      USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS: ${USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS:-1800}
+      USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS: ${USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS:-60}
+      USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD: ${USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD:-0.7}
       USER_MEMORY_RELATED_FACT_TOP_K: ${USER_MEMORY_RELATED_FACT_TOP_K:-12}
       USER_MEMORY_PROFILE_MAX_CHARS: ${USER_MEMORY_PROFILE_MAX_CHARS:-2000}
       USER_MEMORY_BUFFER_LOCK_TTL_SECONDS: ${USER_MEMORY_BUFFER_LOCK_TTL_SECONDS:-60}
       USER_MEMORY_BUFFER_TTL_DAYS: ${USER_MEMORY_BUFFER_TTL_DAYS:-7}
       USER_MEMORY_EXTRACTOR_MODEL_ID: ${USER_MEMORY_EXTRACTOR_MODEL_ID:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${ANTHROPIC_API_KEY:-}}
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://api.deepseek.com}}
       ALIYUN_BAILIAN_API_KEY: ${ALIYUN_BAILIAN_API_KEY:-}
       ALIYUN_BAILIAN_BASE_URL: ${ALIYUN_BAILIAN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       ALIYUN_BAILIAN_EMBEDDING_BASE_URL: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com}
@@ -228,6 +256,51 @@ services:
         condition: service_healthy
     ports:
       - "80:80"
+    networks:
+      - echomind-network
+
+  # ===== EchoMind 管理端（项目三，独立端口） =====
+  admin-frontend:
+    image: ai-agent-admin-frontend:latest
+    build:
+      context: ./echomind-web
+      dockerfile: Dockerfile.admin-runtime
+    container_name: echomind-admin-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8081:80"
+    networks:
+      - echomind-network
+
+  # ===== OpenTelemetry Collector（本地 Trace 导出） =====
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.126.0
+    container_name: echomind-otel-collector
+    restart: unless-stopped
+    depends_on:
+      jaeger:
+        condition: service_started
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./docker/otel/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    networks:
+      - echomind-network
+
+  # ===== Jaeger 查询后端（管理端 Trace 页面读取） =====
+  jaeger:
+    image: jaegertracing/all-in-one:1.76.0
+    container_name: echomind-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
     networks:
       - echomind-network
 

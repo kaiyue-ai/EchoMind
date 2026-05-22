@@ -29,35 +29,13 @@ package com.echomind.agent.pipeline;
  */
 public interface PipelineStage {
 
-    /**
-     * 返回此阶段在管道中的执行顺序。
-     *
-     * <p>数值越小越先执行。标准阶段使用10、20、30、40、50留出间隔，
-     * 方便在现有阶段之间插入新阶段而无需修改已有代码。</p>
-     *
-     * @return 执行顺序值（越小越优先）
-     */
+    // 阶段的顺序值
     int order();
 
-    /**
-     * 处理管道上下文，执行此阶段的业务逻辑。
-     *
-     * <p>实现者应读取上下文中的相关数据，执行处理逻辑，
-     * 并将结果写回上下文。返回的上下文实例通常与传入的是同一个对象。</p>
-     *
-     * @param ctx 当前管道上下文，包含输入数据和之前阶段的处理结果
-     * @return 处理后的管道上下文（通常与输入是同一实例）
-     */
+   // 处理过程
     PipelineContext process(PipelineContext ctx);
 
-    /**
-     * 返回此阶段的名称，用于日志和调试。
-     *
-     * <p>默认实现返回类的简单名称（{@code getClass().getSimpleName()}）。
-     * 可以覆盖以提供更具描述性的名称。</p>
-     *
-     * @return 阶段名称
-     */
+   // 阶段名称
     default String name() {
         return getClass().getSimpleName();
     }

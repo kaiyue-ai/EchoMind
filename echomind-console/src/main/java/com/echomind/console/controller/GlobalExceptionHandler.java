@@ -1,6 +1,8 @@
 package com.echomind.console.controller;
 
 import com.echomind.common.exception.EchoMindException;
+import com.echomind.console.quota.TokenQuotaExceededException;
+import com.echomind.console.sensitive.SensitiveDataBlockedException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -32,6 +34,28 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleBadRequest(IllegalArgumentException e) {
         return ResponseEntity.badRequest()
             .body(Map.of("error", e.getMessage()));
+    }
+
+    @ExceptionHandler(TokenQuotaExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleQuotaExceeded(TokenQuotaExceededException e) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+            .body(Map.of(
+                "error", "Token 配额已超限",
+                "userId", e.userId(),
+                "scope", e.scope(),
+                "usedTokens", e.usedTokens(),
+                "limitTokens", e.limitTokens()
+            ));
+    }
+
+    @ExceptionHandler(SensitiveDataBlockedException.class)
+    public ResponseEntity<Map<String, Object>> handleSensitiveBlocked(SensitiveDataBlockedException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+            .body(Map.of(
+                "error", "请求或响应包含敏感数据，已被阻断",
+                "direction", e.direction().name(),
+                "ruleName", e.ruleName()
+            ));
     }
 
     @ExceptionHandler(MultipartException.class)

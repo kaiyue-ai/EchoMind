@@ -221,6 +221,20 @@ public class MarketplaceService {
     }
 
     /**
+     * 删除已退役的内置 Skill 记录，避免历史数据库记录在市场页继续展示。
+     */
+    public void purgeRetiredSkills(Set<String> retiredSkillNames) {
+        if (retiredSkillNames == null || retiredSkillNames.isEmpty()) {
+            return;
+        }
+        for (SkillRepository entity : repository.findAll()) {
+            if (retiredSkillNames.contains(entity.getName())) {
+                delete(toSkillId(entity));
+            }
+        }
+    }
+
+    /**
      * 从市场中删除指定的Skill。
      *
      * <p>删除流程：</p>

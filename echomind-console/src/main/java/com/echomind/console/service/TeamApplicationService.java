@@ -3,7 +3,7 @@ package com.echomind.console.service;
 import com.echomind.agent.team.runtime.TeamBlackboardService;
 import com.echomind.agent.team.runtime.TeamMemberSpec;
 import com.echomind.agent.team.state.TeamRole;
-import com.echomind.agent.team.messaging.TeamMessageBus;
+import com.echomind.console.auth.AuthContext;
 import com.echomind.console.dto.TeamCreateRequest;
 import com.echomind.console.dto.TeamMemberRequest;
 import com.echomind.console.dto.TeamResumeRequest;
@@ -14,19 +14,17 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Agent Team应用服务。
  *
- * <p>Team定义、Run、Step和Event均落MySQL；内存消息总线只保留运行中通知。</p>
+ * <p>Team定义是全局资源；Run、Step、Event按当前用户隔离并落MySQL黑板。</p>
  */
 @Service
 @RequiredArgsConstructor
 public class TeamApplicationService {
 
     private final TeamBlackboardService blackboardService;
-    private final TeamMessageBus messageBus;
 
     public List<TeamView> listTeams() {
         return blackboardService.listTeams().stream()
@@ -47,26 +45,28 @@ public class TeamApplicationService {
 
     public TeamRunView createRun(String teamId, TeamRunCreateRequest request) {
         String task = request == null ? null : request.task();
-        return TeamRunView.from(blackboardService.createRun(teamId, task));
+        return TeamRunView.from(blackboardService.createRun(teamId, AuthContext.userId(), task));
     }
 
     public List<TeamRunView> listRuns(String teamId) {
-        return blackboardService.listRuns(teamId).stream()
+        return blackboardService.listRuns(teamId, AuthContext.userId()).stream()
+            .map(TeamRunView::from)
+            .toList();
+    }
+
+    public List<TeamRunView> listCurrentUserRuns() {
+        return blackboardService.listRunsForUser(AuthContext.userId()).stream()
             .map(TeamRunView::from)
             .toList();
     }
 
     public TeamRunView getRun(String teamId, String runId) {
-        return TeamRunView.from(blackboardService.getRun(teamId, runId));
+        return TeamRunView.from(blackboardService.getRun(teamId, AuthContext.userId(), runId));
     }
 
     public TeamRunView resumeRun(String teamId, String runId, TeamResumeRequest request) {
         String answer = request == null ? null : request.clarificationAnswer();
-        return TeamRunView.from(blackboardService.resumeRun(teamId, runId, answer));
-    }
-
-    public Map<String, Object> pendingMessages() {
-        return Map.of("pendingCount", messageBus.pendingCount());
+        return TeamRunView.from(blackboardService.resumeRun(teamId, AuthContext.userId(), runId, answer));
     }
 
     private List<TeamMemberSpec> toMemberSpecs(TeamCreateRequest request) {

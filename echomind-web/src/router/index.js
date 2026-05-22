@@ -32,7 +32,6 @@ const routes = [
     component: () => import('../views/AgentsView.vue'),
     meta: { title: 'Agent 管理' }
   },
-
   {
     path: '/mcp',
     name: 'MCP',

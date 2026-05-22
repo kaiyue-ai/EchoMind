@@ -1,7 +1,9 @@
 package com.echomind.usermemory.service;
 
 import com.echomind.common.model.AgentMessage;
+import com.echomind.common.model.MemorySignal;
 import com.echomind.common.model.UserMemoryEvent;
+import com.echomind.common.model.UserMemoryFlushEvent;
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryEntry;
@@ -9,17 +11,18 @@ import com.echomind.memory.usermemory.UserMemoryHit;
 import com.echomind.memory.usermemory.UserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshot;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
+import com.echomind.memory.redis.RedisKeyScanner;
 import com.echomind.usermemory.config.UserMemoryProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,8 +40,14 @@ public class UserMemoryService {
     private final UserMemoryProperties properties;
     private final StringRedisTemplate redis;
     private final ObjectMapper mapper;
+    private final RabbitTemplate rabbitTemplate;
+    private RedisKeyScanner keyScanner;
 
     public void process(UserMemoryEvent event) {
+        ingest(event);
+    }
+
+    public void ingest(UserMemoryEvent event) {
         if (!properties.isEnabled() || event == null || event.sessionId() == null || event.sessionId().isBlank()
             || event.messages() == null || event.messages().isEmpty()) {
             return;
@@ -52,17 +61,45 @@ public class UserMemoryService {
             List.copyOf(event.messages())
         );
         appendTurn(userId, turn);
-        if (pendingTurns(userId) < batchSize()) {
+        String reason = flushReason(userId, event.memorySignal());
+        if (reason != null) {
+            publishFlush(userId, reason);
+        }
+    }
+
+    public void flush(UserMemoryFlushEvent event) {
+        if (!properties.isEnabled() || event == null) {
             return;
         }
-        processBatchIfLocked(userId);
+        processBatchIfLocked(normalizeUserId(event.userId()));
+    }
+
+    public void flushIdleBuffers() {
+        if (!properties.isEnabled()) {
+            return;
+        }
+        try {
+            String pattern = properties.getBufferMetaKeyPrefix() + "*";
+            for (String key : keyScanner().scan(pattern)) {
+                String userId = key.substring(properties.getBufferMetaKeyPrefix().length());
+                if (isIdle(userId)) {
+                    publishFlush(userId, "idle");
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to scan idle user memory buffers: {}", e.getMessage());
+        }
     }
 
     private void appendTurn(String userId, UserMemoryBatchTurn turn) {
         try {
-            redis.opsForList().rightPush(bufferKey(userId), mapper.writeValueAsString(turn));
-            redis.opsForHash().increment(metaKey(userId), "pendingTurns", 1);
+            String json = mapper.writeValueAsString(turn);
+            Long size = redis.opsForList().rightPush(bufferKey(userId), json);
+            redis.opsForHash().put(metaKey(userId), "pendingTurns", String.valueOf(size == null ? pendingTurns(userId) : size));
+            redis.opsForHash().put(metaKey(userId), "pendingChars", String.valueOf(bufferChars(userId)));
             redis.opsForHash().put(metaKey(userId), "updatedAt", Instant.now().toString());
+            Instant oldest = oldestTurnAt(userId);
+            redis.opsForHash().put(metaKey(userId), "oldestAt", (oldest == null ? turn.createdAt() : oldest).toString());
             applyBufferTtl(userId);
         } catch (Exception e) {
             log.warn("Failed to append user memory buffer userId={}: {}", userId, e.getMessage());
@@ -71,6 +108,7 @@ public class UserMemoryService {
 
     private void processBatchIfLocked(String userId) {
         String lockKey = lockKey(userId);
+        boolean processed = false;
         Boolean locked = redis.opsForValue().setIfAbsent(
             lockKey,
             UUID.randomUUID().toString(),
@@ -81,14 +119,21 @@ public class UserMemoryService {
         }
         try {
             List<UserMemoryBatchTurn> turns = readBatch(userId);
-            if (turns.size() < batchSize()) {
+            if (turns.isEmpty()) {
                 return;
             }
             if (processBatch(userId, turns)) {
                 removeProcessedTurns(userId, turns.size());
+                processed = true;
             }
         } finally {
             redis.delete(lockKey);
+        }
+        if (processed) {
+            String nextReason = flushReason(userId, MemorySignal.NONE);
+            if (nextReason != null) {
+                publishFlush(userId, nextReason);
+            }
         }
     }
 
@@ -214,7 +259,6 @@ public class UserMemoryService {
         return rows.stream()
             .map(this::parseTurn)
             .flatMap(Optional::stream)
-            .sorted(Comparator.comparing(UserMemoryBatchTurn::createdAt))
             .toList();
     }
 
@@ -230,11 +274,16 @@ public class UserMemoryService {
     private void removeProcessedTurns(String userId, int count) {
         try {
             redis.opsForList().trim(bufferKey(userId), count, -1);
-            redis.opsForHash().increment(metaKey(userId), "pendingTurns", -count);
             Long size = redis.opsForList().size(bufferKey(userId));
             if (size == null || size <= 0) {
                 redis.delete(bufferKey(userId));
                 redis.opsForHash().put(metaKey(userId), "pendingTurns", "0");
+                redis.opsForHash().put(metaKey(userId), "pendingChars", "0");
+                redis.opsForHash().delete(metaKey(userId), "oldestAt");
+            } else {
+                redis.opsForHash().put(metaKey(userId), "pendingTurns", String.valueOf(size));
+                redis.opsForHash().put(metaKey(userId), "pendingChars", String.valueOf(bufferChars(userId)));
+                redis.opsForHash().put(metaKey(userId), "oldestAt", oldestTurnAt(userId).toString());
             }
         } catch (Exception e) {
             log.warn("Failed to trim user memory buffer userId={}: {}", userId, e.getMessage());
@@ -244,6 +293,80 @@ public class UserMemoryService {
     private long pendingTurns(String userId) {
         Long size = redis.opsForList().size(bufferKey(userId));
         return size == null ? 0 : size;
+    }
+
+    private String flushReason(String userId, MemorySignal signal) {
+        if (signal != null && signal.shouldFlush(properties.getImportantSignalConfidenceThreshold())) {
+            return "important-signal";
+        }
+        if (pendingTurns(userId) >= batchSize()) {
+            return "turns";
+        }
+        long pendingChars = metaLong(userId, "pendingChars");
+        if (pendingChars >= Math.max(1, properties.getBufferMaxChars())) {
+            return "chars";
+        }
+        return isIdle(userId) ? "idle" : null;
+    }
+
+    private boolean isIdle(String userId) {
+        Instant oldest = oldestTurnAt(userId);
+        if (oldest == null || pendingTurns(userId) <= 0) {
+            return false;
+        }
+        long seconds = Duration.between(oldest, Instant.now()).getSeconds();
+        return seconds >= Math.max(1, properties.getBufferIdleFlushSeconds());
+    }
+
+    private void publishFlush(String userId, String reason) {
+        if (rabbitTemplate == null) {
+            processBatchIfLocked(userId);
+            return;
+        }
+        rabbitTemplate.convertAndSend(properties.getFlushQueueName(), new UserMemoryFlushEvent(userId, reason));
+    }
+
+    private long metaLong(String userId, String field) {
+        Object value = redis.opsForHash().get(metaKey(userId), field);
+        try {
+            return value == null ? 0 : Long.parseLong(String.valueOf(value));
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private int turnChars(UserMemoryBatchTurn turn) {
+        if (turn == null || turn.messages() == null) {
+            return 0;
+        }
+        return turn.messages().stream()
+            .filter(message -> message != null && message.content() != null)
+            .mapToInt(message -> message.content().length())
+            .sum();
+    }
+
+    private int bufferChars(String userId) {
+        List<UserMemoryBatchTurn> turns = readAll(userId);
+        return turns.stream().mapToInt(this::turnChars).sum();
+    }
+
+    private Instant oldestTurnAt(String userId) {
+        List<UserMemoryBatchTurn> turns = readAll(userId);
+        return turns.stream()
+            .map(UserMemoryBatchTurn::createdAt)
+            .min(Instant::compareTo)
+            .orElse(null);
+    }
+
+    private List<UserMemoryBatchTurn> readAll(String userId) {
+        List<String> rows = redis.opsForList().range(bufferKey(userId), 0, -1);
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        return rows.stream()
+            .map(this::parseTurn)
+            .flatMap(Optional::stream)
+            .toList();
     }
 
     private void applyBufferTtl(String userId) {
@@ -281,5 +404,12 @@ public class UserMemoryService {
         return value == null ? "" : value.toLowerCase()
             .replaceAll("\\s+", "")
             .replaceAll("[，。！？、；：“”‘’（）【】《》,.!?;:'\"()\\[\\]<>-]", "");
+    }
+
+    private RedisKeyScanner keyScanner() {
+        if (keyScanner == null) {
+            keyScanner = new RedisKeyScanner(redis);
+        }
+        return keyScanner;
     }
 }

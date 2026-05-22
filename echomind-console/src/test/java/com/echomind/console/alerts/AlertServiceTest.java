@@ -1,0 +1,138 @@
+package com.echomind.console.alerts;
+
+import com.echomind.console.sensitive.SensitiveAction;
+import com.echomind.console.sensitive.SensitiveDirection;
+import com.echomind.console.sensitive.SensitiveEventEntity;
+import com.echomind.console.usage.AiCallUsageRepository;
+import org.junit.jupiter.api.Test;
+
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class AlertServiceTest {
+
+    @Test
+    void sendsFeishuAlertWhenRuleIsActiveAndNotSilenced() {
+        AlertRuleRepository ruleRepository = mock(AlertRuleRepository.class);
+        AlertEventRepository eventRepository = mock(AlertEventRepository.class);
+        FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
+        AlertRuleEntity rule = activeRule();
+        when(ruleRepository.findFirstByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
+        when(eventRepository.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+            .thenReturn(false);
+        when(feishu.send(any())).thenReturn(new FeishuWebhookClient.SendResult(AlertStatus.SENT, null));
+        when(eventRepository.save(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleRepository, eventRepository, mock(AiCallUsageRepository.class), feishu);
+
+        service.emitSensitiveEvent(sensitiveEvent());
+
+        verify(feishu).send(any(AlertEventEntity.class));
+        verify(eventRepository).save(any(AlertEventEntity.class));
+    }
+
+    @Test
+    void createsSilencedEventWithoutSendingWebhookInsideQuietWindow() {
+        AlertRuleRepository ruleRepository = mock(AlertRuleRepository.class);
+        AlertEventRepository eventRepository = mock(AlertEventRepository.class);
+        FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
+        AlertRuleEntity rule = activeRule();
+        when(ruleRepository.findFirstByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
+        when(eventRepository.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+            .thenReturn(true);
+        when(eventRepository.save(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleRepository, eventRepository, mock(AiCallUsageRepository.class), feishu);
+
+        service.emitSensitiveEvent(sensitiveEvent());
+
+        verify(feishu, never()).send(any());
+        verify(eventRepository).save(org.mockito.ArgumentMatchers.argThat(event -> event.getStatus() == AlertStatus.SILENCED));
+    }
+
+    @Test
+    void sendsEscalatedAlertWhenQuietWindowSuppressionReachesThreshold() {
+        AlertRuleRepository ruleRepository = mock(AlertRuleRepository.class);
+        AlertEventRepository eventRepository = mock(AlertEventRepository.class);
+        FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
+        AlertRuleEntity rule = activeRule();
+        rule.setEscalationThreshold(3);
+        when(ruleRepository.findFirstByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
+        when(eventRepository.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+            .thenReturn(true);
+        when(eventRepository.countByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+            .thenReturn(2L);
+        when(eventRepository.existsByAlertTypeAndEscalatedTrueAndCreatedAtGreaterThanEqual(any(), any()))
+            .thenReturn(false);
+        when(feishu.send(any())).thenReturn(new FeishuWebhookClient.SendResult(AlertStatus.SENT, null, "ok"));
+        when(eventRepository.save(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleRepository, eventRepository, mock(AiCallUsageRepository.class), feishu);
+
+        service.emitSensitiveEvent(sensitiveEvent());
+
+        verify(eventRepository).save(argThat(event ->
+            event.getStatus() == AlertStatus.SILENCED && event.getSuppressedCount() == 3));
+        verify(feishu).send(argThat(event ->
+            event.isEscalated()
+                && event.getSeverity() == AlertSeverity.CRITICAL
+                && event.getSuppressedCount() == 3));
+        verify(eventRepository).save(argThat(event ->
+            event.isEscalated() && event.getStatus() == AlertStatus.SENT));
+    }
+
+    @Test
+    void doesNotSendDuplicateEscalationInsideSameQuietWindow() {
+        AlertRuleRepository ruleRepository = mock(AlertRuleRepository.class);
+        AlertEventRepository eventRepository = mock(AlertEventRepository.class);
+        FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
+        AlertRuleEntity rule = activeRule();
+        rule.setEscalationThreshold(3);
+        when(ruleRepository.findFirstByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
+        when(eventRepository.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+            .thenReturn(true);
+        when(eventRepository.countByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+            .thenReturn(5L);
+        when(eventRepository.existsByAlertTypeAndEscalatedTrueAndCreatedAtGreaterThanEqual(any(), any()))
+            .thenReturn(true);
+        when(eventRepository.save(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleRepository, eventRepository, mock(AiCallUsageRepository.class), feishu);
+
+        service.emitSensitiveEvent(sensitiveEvent());
+
+        verify(feishu, never()).send(any());
+        verify(eventRepository).save(argThat(event ->
+            event.getStatus() == AlertStatus.SILENCED && event.getSuppressedCount() == 6));
+    }
+
+    private AlertRuleEntity activeRule() {
+        AlertRuleEntity rule = new AlertRuleEntity();
+        rule.setRuleId("sensitive");
+        rule.setAlertType(AlertType.SENSITIVE_DATA);
+        rule.setRuleName("敏感数据事件");
+        rule.setSeverity(AlertSeverity.WARNING);
+        rule.setEnabled(true);
+        rule.setQuietMinutes(30);
+        rule.setEscalationEnabled(true);
+        rule.setEscalationThreshold(3);
+        return rule;
+    }
+
+    private SensitiveEventEntity sensitiveEvent() {
+        SensitiveEventEntity event = new SensitiveEventEntity();
+        event.setTraceId("trace-a");
+        event.setUserId("user-a");
+        event.setUsername("alice");
+        event.setAgentId("default");
+        event.setSessionId("session-a");
+        event.setRuleName("邮箱");
+        event.setDirection(SensitiveDirection.REQUEST);
+        event.setAction(SensitiveAction.MASK);
+        event.setMatchCount(1);
+        return event;
+    }
+}

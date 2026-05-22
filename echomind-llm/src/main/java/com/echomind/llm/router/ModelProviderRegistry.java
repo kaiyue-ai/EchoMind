@@ -4,13 +4,7 @@ import com.echomind.llm.provider.ModelProvider;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-
-/**
- * 模型提供商注册表 —— LLM 层的中央注册中心。
- * @see ModelProvider
- * @see ModelSpec
- * @see DynamicModelRouter
- */
+// 这里注册了所有的大模型,能够根据id\能力获取模型,还能够获取模型的信息
 public class ModelProviderRegistry {
 
     /**
@@ -51,12 +45,14 @@ public class ModelProviderRegistry {
         }
     }
 
+    // 包装在optional里面防止空指针异常
     /**
      * 根据提供商 ID 获取对应的 {@link ModelProvider} 实例。
      *
      * @param providerId 提供商唯一标识（如 "deepseek", "openai"）
      * @return 包装在 {@link Optional} 中的 ModelProvider，未找到时为空
      */
+    // 根据id获取模型
     public Optional<ModelProvider> getProvider(String providerId) {
         return Optional.ofNullable(providers.get(providerId));
     }
@@ -68,6 +64,7 @@ public class ModelProviderRegistry {
      * @param modelName  模型名称
      * @return 包装在 {@link Optional} 中的 ModelSpec，未找到时为空
      */
+    // 根据id和名称获取模型
     public Optional<ModelSpec> find(String providerId, String modelName) {
         return listByProvider(providerId).stream()
             .filter(m -> m.modelName().equals(modelName))

@@ -5,9 +5,12 @@ package com.echomind.agent.team.state;
  */
 public enum TeamStepStatus {
     PENDING,
+    BLOCKED,
+    READY,
     ASSIGNED,
     RUNNING,
     RETRYING,
     COMPLETED,
-    FAILED
+    FAILED,
+    SUPERSEDED
 }

@@ -29,6 +29,9 @@
         <module>skills/skill-websearch</module>
         <module>skills/skill-markdown-code</module>
         <module>skills/skill-date-query</module>
+        <module>skills/skill-github-intel</module>
+        <module>skills/skill-railway-12306</module>
+        <module>skills/skill-travel-planning</module>
     </modules>
 
     <properties>
@@ -37,7 +40,8 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <spring-boot.version>3.3.5</spring-boot.version>
+        <spring-boot.version>3.5.14</spring-boot.version>
+        <spring-ai.version>1.1.6</spring-ai.version>
         <spring-shell.version>3.3.3</spring-shell.version>
 
         <jackson.version>2.17.2</jackson.version>
@@ -49,6 +53,7 @@
         <knife4j.version>4.5.0</knife4j.version>
         <aliyun-oss.version>3.18.1</aliyun-oss.version>
         <pdfbox.version>2.0.31</pdfbox.version>
+        <opentelemetry.instrumentation.version>2.26.0</opentelemetry.instrumentation.version>
 
         <maven-surefire-plugin.version>3.3.1</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.3.1</maven-failsafe-plugin.version>
@@ -58,9 +63,23 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
+                <groupId>io.opentelemetry.instrumentation</groupId>
+                <artifactId>opentelemetry-instrumentation-bom</artifactId>
+                <version>${opentelemetry.instrumentation.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

@@ -6,30 +6,15 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
-
 /**
- * 动态模型路由器 —— EchoMind LLM 层的核心路由组件。
+ * 动态模型路由器，根据会话上下文解析最合适的模型规格。
  *
- * <p>根据 {@link SessionContext} 中的偏好设置和当前请求的能力需求，
- * 从 {@link ModelProviderRegistry} 中动态选择最合适的模型。
- * 支持三级路由策略：精确匹配 → 提供商默认回退 → 全局默认回退。
+ * <p>模型路由器会根据会话上下文（用户偏好、当前会话提供商）
+ * 确定最合适的模型规格，并返回给调用方。
  *
- * <p><b>路由优先级（从高到低）：</b>
- * <ol>
- *   <li>用户明确指定了 providerId + modelName → 精确查找该模型</li>
- *   <li>用户仅指定了 providerId → 使用该提供商的默认模型</li>
- *   <li>用户未指定任何偏好 → 使用全局默认模型</li>
- * </ol>
+ * <p>模型路由器会根据会话上下文（用户偏好、当前会话提供商）
+ * 确定最合适的模型规格，并返回给调用方。
  *
- * <p>当请求需要特定能力（如视觉、函数调用）时，会先解析基础模型，
- * 再检查其是否具备目标能力，不具备则在同一提供商下查找具备该能力的模型。
- *
- * <p><b>设计决策：</b>
- * <ul>
- *   <li>路由器本身无状态，所有模型信息委托给 {@link ModelProviderRegistry} 管理。</li>
- *   <li>解析失败时抛出 {@link ModelRoutingException}，由统一异常处理器转换为 RFC 7807 格式的错误响应。</li>
- *   <li>支持运行时切换模型，无需重启应用。</li>
- * </ul>
  *
  * @see ModelProviderRegistry
  * @see ModelSpec
@@ -38,6 +23,7 @@ import java.util.List;
  */
 @Slf4j
 @RequiredArgsConstructor
+// 这是所有大模型的路由器
 public class DynamicModelRouter {
 
     /** 模型提供商注册表，持有所有已注册的模型和提供商信息 */
@@ -50,15 +36,15 @@ public class DynamicModelRouter {
      * @throws ModelRoutingException 当无法找到任何可用模型时抛出
      */
     public ModelSpec resolve(SessionContext ctx) {
+        // 获取用户偏好
         String preferredProvider = ctx.preferredProvider();
+        // 获取用户偏好的模型
         String preferredModel = ctx.preferredModel();
-
         if (preferredProvider != null && preferredModel != null) {
             return registry.find(preferredProvider, preferredModel)
                 .orElseThrow(() -> new ModelRoutingException(
                     "Preferred model not found: " + preferredProvider + "/" + preferredModel));
         }
-
         if (preferredProvider != null) {
             List<ModelSpec> providerModels = registry.listByProvider(preferredProvider);
             return providerModels.stream()
@@ -68,7 +54,6 @@ public class DynamicModelRouter {
                     .orElseThrow(() -> new ModelRoutingException(
                         "No models available for provider: " + preferredProvider)));
         }
-
         return registry.defaultModel()
             .orElseThrow(() -> new ModelRoutingException("No default model configured"));
     }

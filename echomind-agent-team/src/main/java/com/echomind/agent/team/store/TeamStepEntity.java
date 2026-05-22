@@ -1,6 +1,8 @@
 package com.echomind.agent.team.store;
 
 import com.echomind.agent.team.state.TeamStepStatus;
+import com.echomind.agent.team.state.TeamRiskLevel;
+import com.echomind.agent.team.state.TeamStepQualityStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -42,6 +44,9 @@ public class TeamStepEntity {
     @Column(name = "step_index", nullable = false)
     private int stepIndex;
 
+    @Column(name = "client_step_id", length = 128)
+    private String clientStepId;
+
     @Column(nullable = false, length = 255)
     private String title;
 
@@ -52,6 +57,18 @@ public class TeamStepEntity {
     @Lob
     @Column(name = "required_capabilities_json", columnDefinition = "LONGTEXT")
     private String requiredCapabilitiesJson;
+
+    @Lob
+    @Column(name = "depends_on_step_ids_json", columnDefinition = "LONGTEXT")
+    private String dependsOnStepIdsJson;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "risk_level", nullable = false, length = 32)
+    private TeamRiskLevel riskLevel = TeamRiskLevel.LOW;
+
+    @Lob
+    @Column(name = "risk_reason", columnDefinition = "LONGTEXT")
+    private String riskReason;
 
     @Lob
     @Column(name = "acceptance_criteria", columnDefinition = "LONGTEXT")
@@ -83,6 +100,25 @@ public class TeamStepEntity {
     @Column(name = "review_status", length = 32)
     private String reviewStatus;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "quality_status", nullable = false, length = 32)
+    private TeamStepQualityStatus qualityStatus = TeamStepQualityStatus.PENDING;
+
+    @Lob
+    @Column(name = "sub_review_json", columnDefinition = "LONGTEXT")
+    private String subReviewJson;
+
+    @Lob
+    @Column(name = "last_review_reason", columnDefinition = "LONGTEXT")
+    private String lastReviewReason;
+
+    @Lob
+    @Column(name = "reflection_json", columnDefinition = "LONGTEXT")
+    private String reflectionJson;
+
+    @Column(name = "plan_iteration", nullable = false)
+    private int planIteration;
+
     @Column(name = "retry_count", nullable = false)
     private int retryCount;
 
@@ -105,6 +141,12 @@ public class TeamStepEntity {
         updatedAt = now;
         if (status == null) {
             status = TeamStepStatus.PENDING;
+        }
+        if (riskLevel == null) {
+            riskLevel = TeamRiskLevel.LOW;
+        }
+        if (qualityStatus == null) {
+            qualityStatus = TeamStepQualityStatus.PENDING;
         }
     }
 

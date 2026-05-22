@@ -14,8 +14,11 @@ export const useTeamStore = defineStore('team', {
     taskInput: '',
     teamResult: null,
     currentRun: null,
+    userRuns: [],
+    teamRuns: [],
     pollingTimer: null,
     loading: false,
+    loadingRuns: false,
     creating: false,
     deleting: false,
     executing: false,
@@ -36,11 +39,48 @@ export const useTeamStore = defineStore('team', {
         this.loading = false
       }
     },
+    async loadUserRuns() {
+      try {
+        this.userRuns = await api.team.listUserRuns()
+        return this.userRuns
+      } catch (error) {
+        this.error = api.parseError(error, '加载团队运行历史失败')
+        throw error
+      }
+    },
+    async loadTeamRuns(teamId = this.selectedTeam?.teamId) {
+      if (!teamId) {
+        this.teamRuns = []
+        return []
+      }
+      this.loadingRuns = true
+      this.error = null
+      try {
+        this.teamRuns = await api.team.listRuns(teamId)
+        return this.teamRuns
+      } catch (error) {
+        this.error = api.parseError(error, '加载团队运行历史失败')
+        throw error
+      } finally {
+        this.loadingRuns = false
+      }
+    },
     selectTeam(team) {
       this.selectedTeam = team
       this.teamResult = null
       this.currentRun = null
+      this.teamRuns = []
       this.stopPolling()
+    },
+    async openRun(run) {
+      if (!run || !this.selectedTeam) return null
+      this.stopPolling()
+      this.currentRun = run
+      const detail = await this.refreshRun(run.runId)
+      if (detail && !this.isTerminalRun(detail.status)) {
+        this.startPolling(detail.runId)
+      }
+      return detail
     },
     async createTeam(config) {
       this.creating = true
@@ -87,6 +127,7 @@ export const useTeamStore = defineStore('team', {
       this.currentRun = null
       try {
         this.currentRun = await api.team.createRun(this.selectedTeam.teamId, task)
+        await this.loadTeamRuns(this.selectedTeam.teamId).catch(() => {})
         this.startPolling(this.currentRun.runId)
         return this.currentRun
       } catch (error) {
@@ -103,6 +144,7 @@ export const useTeamStore = defineStore('team', {
         if (this.isTerminalRun(this.currentRun.status)) {
           this.stopPolling()
           this.teamResult = this.currentRun
+          this.loadTeamRuns(this.selectedTeam.teamId).catch(() => {})
         }
         return this.currentRun
       } catch (error) {
@@ -115,7 +157,7 @@ export const useTeamStore = defineStore('team', {
       this.stopPolling()
       this.pollingTimer = window.setInterval(() => {
         this.refreshRun(runId).catch(() => {})
-      }, 1500)
+      }, 250)
       this.refreshRun(runId).catch(() => {})
     },
     stopPolling() {

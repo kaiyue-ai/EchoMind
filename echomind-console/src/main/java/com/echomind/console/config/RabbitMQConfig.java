@@ -15,13 +15,13 @@ import org.springframework.context.annotation.Configuration;
 public class RabbitMQConfig {
 
     public static final String QUEUE_CHAT_REQUESTS = "echomind.chat.requests";
-    public static final String QUEUE_CHAT_RESPONSES = "echomind.chat.responses";
+    public static final String QUEUE_CHAT_STREAM_EVENTS = "echomind.chat.stream-events";
     public static final String QUEUE_CHAT_MEMORY_PERSIST_REQUESTS = "echomind.chat-memory.persist.requests";
     public static final String CHAT_MEMORY_PERSIST_QUEUE_PROPERTY =
         "${echomind.memory.persist-queue-name:" + QUEUE_CHAT_MEMORY_PERSIST_REQUESTS + "}";
     public static final String CHAT_MEMORY_PERSIST_SHARDS_PROPERTY = "${echomind.memory.persist-shards:8}";
     public static final String CHAT_REQUEST_LISTENER_FACTORY = "chatRequestRabbitListenerContainerFactory";
-    public static final String CHAT_RESPONSE_LISTENER_FACTORY = "chatResponseRabbitListenerContainerFactory";
+    public static final String CHAT_STREAM_EVENT_LISTENER_FACTORY = "chatStreamEventRabbitListenerContainerFactory";
     public static final String CHAT_MEMORY_PERSIST_LISTENER_FACTORY = "chatMemoryPersistRabbitListenerContainerFactory";
     public static final String CHAT_MEMORY_PERSIST_QUEUE_NAMES_BEAN = "chatMemoryPersistQueueNames";
 
@@ -31,8 +31,8 @@ public class RabbitMQConfig {
     }
 
     @Bean
-    public Queue chatResponsesQueue() {
-        return new Queue(QUEUE_CHAT_RESPONSES, true);
+    public Queue chatStreamEventsQueue() {
+        return new Queue(QUEUE_CHAT_STREAM_EVENTS, true);
     }
 
     @Bean(name = CHAT_MEMORY_PERSIST_QUEUE_NAMES_BEAN)
@@ -56,13 +56,13 @@ public class RabbitMQConfig {
         return listenerFactory(connectionFactory, converter, concurrentConsumers, maxConcurrentConsumers, prefetchCount);
     }
 
-    @Bean(name = CHAT_RESPONSE_LISTENER_FACTORY)
-    public SimpleRabbitListenerContainerFactory chatResponseRabbitListenerContainerFactory(
+    @Bean(name = CHAT_STREAM_EVENT_LISTENER_FACTORY)
+    public SimpleRabbitListenerContainerFactory chatStreamEventRabbitListenerContainerFactory(
             ConnectionFactory connectionFactory,
             Jackson2JsonMessageConverter converter,
-            @Value("${echomind.rabbitmq.chat-response.concurrent-consumers:4}") int concurrentConsumers,
-            @Value("${echomind.rabbitmq.chat-response.max-concurrent-consumers:4}") int maxConcurrentConsumers,
-            @Value("${echomind.rabbitmq.chat-response.prefetch:10}") int prefetchCount) {
+            @Value("${echomind.rabbitmq.chat-stream-event.concurrent-consumers:4}") int concurrentConsumers,
+            @Value("${echomind.rabbitmq.chat-stream-event.max-concurrent-consumers:4}") int maxConcurrentConsumers,
+            @Value("${echomind.rabbitmq.chat-stream-event.prefetch:50}") int prefetchCount) {
         return listenerFactory(connectionFactory, converter, concurrentConsumers, maxConcurrentConsumers, prefetchCount);
     }
 

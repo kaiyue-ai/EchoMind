@@ -19,10 +19,28 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessageEntity, 
     List<ChatMessageEntity> findByUserIdAndSessionIdOrderByTimestampDescIdDesc(String userId, String sessionId,
                                                                                Pageable pageable);
 
+    long countByUserId(String userId);
+
+    @org.springframework.data.jpa.repository.Query("""
+        select m.userId, count(m)
+        from ChatMessageEntity m
+        group by m.userId
+        """)
+    List<Object[]> countByUser();
+
+    @org.springframework.data.jpa.repository.Query("""
+        select m.id
+        from ChatMessageEntity m
+        where m.userId = :userId
+        """)
+    List<Long> findIdsByUserId(@org.springframework.data.repository.query.Param("userId") String userId);
+
     /** 删除指定会话的所有消息。 */
     void deleteBySessionId(String sessionId);
 
     void deleteByUserIdAndSessionId(String userId, String sessionId);
+
+    long deleteByUserId(String userId);
 
     /** 统计指定会话消息数量。 */
     long countBySessionId(String sessionId);

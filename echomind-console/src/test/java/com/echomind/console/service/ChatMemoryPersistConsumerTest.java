@@ -3,6 +3,7 @@ package com.echomind.console.service;
 import com.echomind.agent.usermemory.UserMemoryPersistPublisher;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.ChatMemoryPersistEvent;
+import com.echomind.common.model.MemorySignal;
 import com.echomind.memory.MemoryManager;
 import org.junit.jupiter.api.Test;
 
@@ -31,7 +32,7 @@ class ChatMemoryPersistConsumerTest {
         var ordered = inOrder(memoryManager, publisher);
         ordered.verify(memoryManager).addMessage("default", "session-1", "default", messages.get(0));
         ordered.verify(memoryManager).addMessage("default", "session-1", "default", messages.get(1));
-        ordered.verify(publisher).publish("default", "session-1", "default", messages);
+        ordered.verify(publisher).publish("default", "session-1", "default", messages, MemorySignal.NONE);
     }
 
     @Test
@@ -44,5 +45,6 @@ class ChatMemoryPersistConsumerTest {
 
         verify(memoryManager, never()).addMessage(any(), any(), any(), any());
         verify(publisher, never()).publish(any(), any(), any(), any());
+        verify(publisher, never()).publish(any(), any(), any(), any(), any());
     }
 }

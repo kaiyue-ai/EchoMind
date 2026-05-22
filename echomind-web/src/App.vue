@@ -1,6 +1,7 @@
 <template>
+  <router-view v-if="route.path === '/login'" />
   <WorkbenchShell
-    v-if="route.path !== '/login'"
+    v-else
     :sessions="sessions"
     :sessions-loading="sessionsLoading"
     :deleting-session-id="deletingId"
@@ -10,7 +11,6 @@
     @open-session="openSession"
     @delete-session="deleteSession"
   />
-  <router-view v-else />
 </template>
 
 <script setup>

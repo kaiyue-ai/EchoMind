@@ -23,6 +23,93 @@ function parseError(err, fallback = '请求失败') {
   return err.response?.data?.error || err.response?.data?.message || err.message || fallback
 }
 
+function sendChat(agentId, message, sessionId, modelId, attachments = []) {
+  return api.post('/chat', { agentId: agentId || 'default', message, sessionId, modelId, attachments })
+    .then(r => r.data)
+}
+
+function sendChatSync(agentId, message, sessionId, modelId, attachments = []) {
+  return api.post('/chat/sync', { agentId: agentId || 'default', message, sessionId, modelId, attachments })
+    .then(r => r.data)
+}
+
+function chatStreamQuery() {
+  const token = localStorage.getItem('echomind_auth_token')
+  return token ? `?token=${encodeURIComponent(token)}` : ''
+}
+
+function streamChatResult(requestId) {
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(`/api/chat/stream/${requestId}${chatStreamQuery()}`)
+    let timer
+    const finish = (callback) => {
+      clearTimeout(timer)
+      es.close()
+      callback()
+    }
+    es.addEventListener('result', (e) => {
+      finish(() => resolve(JSON.parse(e.data)))
+    })
+    es.addEventListener('failure', (e) => {
+      const data = JSON.parse(e.data)
+      finish(() => reject(new Error(data.error || 'SSE stream failed')))
+    })
+    es.onerror = () => {
+      finish(() => reject(new Error('SSE connection failed')))
+    }
+    // 5 分钟后仍无结果则主动超时。
+    timer = setTimeout(() => {
+      finish(() => reject(new Error('Request timed out')))
+    }, 300000)
+  })
+}
+
+function streamChat(agentId, message, sessionId, modelId, attachments = [], onToken, onDone, onError, onMeta) {
+  const fail = (error) => {
+    if (onError) onError(error)
+  }
+  try {
+    return sendChat(agentId, message, sessionId, modelId, attachments)
+      .then(({ requestId, sessionId: submittedSessionId, traceId }) => {
+        if (onMeta) onMeta({ sessionId: submittedSessionId, traceId, requestId })
+        const es = new EventSource(`/api/chat/stream/${requestId}${chatStreamQuery()}`)
+        let completed = false
+        let timer
+        const finish = (callback) => {
+          if (completed) return
+          completed = true
+          clearTimeout(timer)
+          es.close()
+          callback()
+        }
+        es.addEventListener('meta', (e) => {
+          if (onMeta) onMeta(JSON.parse(e.data))
+        })
+        es.addEventListener('token', (e) => {
+          const data = JSON.parse(e.data)
+          if (data.token && onToken) onToken(data.token)
+        })
+        es.addEventListener('result', () => finish(() => {
+          if (onDone) onDone()
+        }))
+        es.addEventListener('failure', (e) => {
+          const data = JSON.parse(e.data)
+          finish(() => fail(new Error(data.error || 'SSE stream failed')))
+        })
+        es.onerror = () => {
+          finish(() => fail(new Error('SSE connection failed')))
+        }
+        timer = setTimeout(() => {
+          finish(() => fail(new Error('Request timed out')))
+        }, 300000)
+      })
+      .catch(fail)
+  } catch (error) {
+    fail(error)
+    return Promise.resolve()
+  }
+}
+
 // 响应拦截器：统一处理错误
 api.interceptors.response.use(
   res => res,
@@ -50,79 +137,13 @@ export default {
   // ===== 聊天接口 =====
   chat: {
     /** 异步发送消息：立即拿到 requestId，结果通过 SSE 获取 */
-    send: (agentId, message, sessionId, modelId, attachments = []) =>
-      api.post('/chat', { agentId: agentId || 'default', message, sessionId, modelId, attachments })
-        .then(r => r.data),
+    send: sendChat,
     /** 同步发送消息：直接等待完整回复 */
-    sendSync: (agentId, message, sessionId, modelId, attachments = []) =>
-      api.post('/chat/sync', { agentId: agentId || 'default', message, sessionId, modelId, attachments })
-        .then(r => r.data),
+    sendSync: sendChatSync,
     /** 订阅异步结果 SSE 流 */
-    streamResult: (requestId) =>
-      new Promise((resolve, reject) => {
-        const token = localStorage.getItem('echomind_auth_token')
-        const query = token ? `?token=${encodeURIComponent(token)}` : ''
-        const es = new EventSource(`/api/chat/stream/${requestId}${query}`)
-        es.addEventListener('result', (e) => {
-          es.close()
-          resolve(JSON.parse(e.data))
-        })
-        es.onerror = (e) => {
-          es.close()
-          reject(new Error('SSE connection failed'))
-        }
-        // 5 分钟后仍无结果则主动超时。
-        setTimeout(() => {
-          es.close()
-          reject(new Error('Request timed out'))
-        }, 300000)
-      }),
-    /**
-     * 通过 POST SSE 接收模型流式文本片段。
-     * EventSource 只支持 GET，所以这里使用 fetch + ReadableStream。
-     */
-    stream: (agentId, message, sessionId, modelId, attachments = [], onToken, onDone, onError, onMeta) => {
-      const headers = { 'Content-Type': 'application/json' }
-      const token = localStorage.getItem('echomind_auth_token')
-      if (token) headers.Authorization = `Bearer ${token}`
-      fetch('/api/chat/stream', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ agentId: agentId || 'default', message, sessionId, modelId, attachments })
-      }).then(response => {
-        if (!response.ok) {
-          response.text().then(text => onError(new Error(text || ('HTTP ' + response.status))))
-          return
-        }
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-        function read() {
-          reader.read().then(({ done, value }) => {
-            if (done) { onDone(); return }
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
-            for (const line of lines) {
-              if (line.startsWith('event:')) continue
-              if (line.startsWith('data:')) {
-                const data = line.substring(5).trim()
-                if (data === '[DONE]') { onDone(); return }
-                if (data.startsWith('[ERROR]')) { onError(new Error(data.substring(8))); return }
-                try {
-                  const parsed = JSON.parse(data)
-                  if (parsed.token) onToken(parsed.token)
-                  else if (parsed.error) { onError(new Error(parsed.error)); return }
-                  else if (parsed.sessionId && onMeta) onMeta(parsed)
-                } catch (e) {}
-              }
-            }
-            read()
-          }).catch(onError)
-        }
-        read()
-      }).catch(onError)
-    },
+    streamResult: streamChatResult,
+    /** 提交异步聊天任务，再通过 SSE 接收模型流式文本片段和最终结果。 */
+    stream: streamChat,
     /** 获取会话历史 */
     history: (sessionId) =>
       api.get(`/chat/${sessionId}/history`).then(r => r.data),
@@ -230,10 +251,10 @@ export default {
     /** 列出团队Run */
     listRuns: (teamId) =>
       api.get(`/teams/${teamId}/runs`).then(r => r.data),
+    /** 当前用户的Team Run历史，和普通会话历史分开 */
+    listUserRuns: () => api.get('/team-runs').then(r => r.data),
     /** 提交澄清信息并继续Run */
     resumeRun: (teamId, runId, clarificationAnswer) =>
-      api.post(`/teams/${teamId}/runs/${runId}/resume`, { clarificationAnswer }).then(r => r.data),
-    /** 消息总线状态 */
-    messageBusStatus: () => api.get('/teams/message-bus/pending').then(r => r.data)
+      api.post(`/teams/${teamId}/runs/${runId}/resume`, { clarificationAnswer }).then(r => r.data)
   }
 }

@@ -56,7 +56,30 @@ spring:
     username: ${RABBITMQ_USERNAME:echomind}
     password: ${RABBITMQ_PASSWORD:echomind_secret}
 
+otel:
+  service:
+    name: ${OTEL_SERVICE_NAME:echomind}
+  traces:
+    exporter: ${OTEL_TRACES_EXPORTER:none}
+  metrics:
+    exporter: ${OTEL_METRICS_EXPORTER:none}
+  logs:
+    exporter: ${OTEL_LOGS_EXPORTER:none}
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}
+  resource:
+    attributes: deployment.environment=${ECHOMIND_ENV:local}
+
 echomind:
+  auth:
+    # 客户端用户 access token 使用 HS256 JWT；Filter 校验后写入 AuthContext ThreadLocal。
+    token-secret: ${ECHOMIND_AUTH_TOKEN_SECRET:echomind-dev-secret}
+    token-ttl-seconds: ${ECHOMIND_AUTH_TOKEN_TTL_SECONDS:604800}
+  admin:
+    # 管理端使用独立 HS256 JWT 和 AdminContext，不能和客户端 token 混用。
+    token-secret: ${ECHOMIND_ADMIN_TOKEN_SECRET:echomind-admin-dev-secret}
+    token-ttl-seconds: ${ECHOMIND_ADMIN_TOKEN_TTL_SECONDS:604800}
   rabbitmq:
     chat-request:
       # 固定较高消费者数并降低 prefetch，避免短突发压测时少量消费者预取过多消息。
@@ -67,40 +90,61 @@ echomind:
       concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_CONSUMERS:4}
       max-concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_MAX_CONSUMERS:4}
       prefetch: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_PREFETCH:10}
+  observability:
+    exporter:
+      traces-exporter: ${OTEL_TRACES_EXPORTER:none}
+      otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}
+      otlp-protocol: ${OTEL_EXPORTER_OTLP_PROTOCOL:http/protobuf}
+      service-name: ${OTEL_SERVICE_NAME:echomind}
+    jaeger:
+      enabled: ${ECHOMIND_OBSERVABILITY_JAEGER_ENABLED:false}
+      query-url: ${ECHOMIND_OBSERVABILITY_JAEGER_QUERY_URL:}
+      public-url: ${ECHOMIND_OBSERVABILITY_JAEGER_PUBLIC_URL:${ECHOMIND_OBSERVABILITY_JAEGER_QUERY_URL:}}
+      service-name: ${ECHOMIND_OBSERVABILITY_JAEGER_SERVICE_NAME:${OTEL_SERVICE_NAME:echomind}}
+      timeout-seconds: ${ECHOMIND_OBSERVABILITY_JAEGER_TIMEOUT_SECONDS:5}
+      default-limit: ${ECHOMIND_OBSERVABILITY_JAEGER_DEFAULT_LIMIT:20}
+  alerts:
+    feishu:
+      webhook-url: ${Webhook:}
   models:
     default-provider: deepseek
     providers:
       deepseek:
         api-key: ${DEEPSEEK_API_KEY:${ANTHROPIC_API_KEY:}}
-        base-url: ${DEEPSEEK_BASE_URL:${ANTHROPIC_BASE_URL:https://api.deepseek.com/anthropic}}
+        base-url: ${DEEPSEEK_BASE_URL:${ANTHROPIC_BASE_URL:https://api.deepseek.com}}
         max-tokens: ${DEEPSEEK_MAX_TOKENS:4096}
         models:
           - name: deepseek-v4-flash
             capabilities: [text, function]
             default: true
-      openai:
-        api-key: ${OPENAI_API_KEY:}
-        base-url: https://api.openai.com
-        models:
-          - name: gpt-4o
-            capabilities: [text, function, vision]
-            default: true
       aliyun-bailian:
         api-key: ${ALIYUN_BAILIAN_API_KEY:}
         base-url: ${ALIYUN_BAILIAN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
         models:
+          - name: qwen3.7-max
+            capabilities: [text, function]
+            default: true
+          - name: qwen3.6-plus
+            capabilities: [text, function, vision]
+            default: false
+          - name: qwen3.6-flash
+            capabilities: [text, function]
+            default: false
+          - name: qwen3.5-omni-plus
+            capabilities: [text, vision]
+            default: false
           - name: qwen-vl-plus
             capabilities: [text, vision]
-            default: true
-          - name: qwen-plus
-            capabilities: [text, function]
+            default: false
+          - name: qwen-vl-max
+            capabilities: [text, vision]
             default: false
       # ---- 以下为参考示例，取消注释并填入凭证即可启用 ----
       # tongyi:
       #   api-key: ${DASHSCOPE_API_KEY:}
       #   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       #   models:
-      #     - name: qwen-max
+      #     - name: qwen3.7-max
       #       capabilities: [text, function]
       #       default: true
       # ollama:
@@ -111,8 +155,10 @@ echomind:
       #       capabilities: [text, function]
       #       default: true
   memory:
-    short-term-window: ${ECHOMIND_MEMORY_SHORT_TERM_WINDOW:50}
-    # MySQL 保存完整会话供前端展示；Redis 只保存最近 short-term-window 条 LLM 上下文。
+    short-term-window: ${ECHOMIND_MEMORY_SHORT_TERM_WINDOW:80}
+    short-term-max-chars: ${ECHOMIND_MEMORY_SHORT_TERM_MAX_CHARS:12000}
+    short-term-message-max-chars: ${ECHOMIND_MEMORY_SHORT_TERM_MESSAGE_MAX_CHARS:1500}
+    # MySQL 保存完整会话供前端展示；Redis 只保存最近 short-term-window 条且不超过 short-term-max-chars 的 LLM 上下文。
     redis-ttl-seconds: 604800
     embedding-enabled: true
     embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com}
@@ -184,14 +230,55 @@ echomind:
           - -jar
           - ${NOWCODER_MCP_JAR:D:\claudeWorkSpace\nowcoder-java-interview-mcp-server\target\nowcoder-java-interview-mcp-server-1.0.0.jar}
         working-directory: ${NOWCODER_MCP_WORKDIR:D:\claudeWorkSpace\nowcoder-java-interview-mcp-server}
+  runtime:
+    agent-bootstrap:
+      default-skill-merge-ids: [markdown-code, date-query, github-intel, 12306, travel-planning]
+      model-migrations:
+        - from-prefix: anthropic:claude-
+          to-model-id: deepseek:deepseek-v4-flash
+        - from-prefix: openai:gpt-
+          to-model-id: deepseek:deepseek-v4-flash
+        - from: deepseek:deepseek-chat
+          to-model-id: deepseek:deepseek-v4-flash
+    retired-skills:
+      skill-ids: [qq-mail]
+      prompt-replacements:
+        - from: "、旅行规划和 QQ 邮箱工具"
+          to: "和旅行规划"
+        - from: "、旅行规划、QQ 邮箱工具"
+          to: "、旅行规划"
+        - from: "、QQ 邮箱工具"
+          to: ""
+        - from: "和 QQ 邮箱工具"
+          to: ""
+        - from: "QQ 邮箱工具"
+          to: ""
+        - from: "QQ邮箱工具"
+          to: ""
+        - from: "QQ Mail"
+          to: ""
+        - from: "and QQ Mail"
+          to: ""
+        - from: "or mail"
+          to: ""
+        - from: "mail,"
+          to: ""
+        - from: "邮箱工具"
+          to: ""
+        - from: "或邮件任务"
+          to: ""
+        - from: "、邮件"
+          to: ""
+        - from: "，邮件"
+          to: ""
   web-search:
     searxng-url: ${SEARXNG_URL:http://localhost:8082}
   agents:
     - agent-id: default
       name: EchoMind Assistant
-      system-prompt: "You are a helpful AI assistant. You have access to tools for web search, weather, calculations, date/time queries, and Markdown code formatting. When the user asks about current dates, times, weekdays, or date offsets, use the date-query tool instead of guessing. When outputting code, use fenced Markdown code blocks with the correct language label."
+      system-prompt: "You are a helpful AI assistant. You have access to tools for web search, weather, calculations, date/time queries, Markdown code formatting, GitHub repository intelligence, 12306 train queries, and travel planning. When the user asks about dates/times, train tickets, or itinerary planning, use the matching tool instead of guessing. For 12306 train tickets, return available seats and fares; when the user asks for transfers or there is no direct train, include transfer options. When outputting code, use fenced Markdown code blocks with the correct language label."
       model-id: deepseek:deepseek-v4-flash
-      skill-ids: [weather-query, calculator, web-search, markdown-code, date-query]
+      skill-ids: [weather-query, calculator, web-search, markdown-code, date-query, github-intel, 12306, travel-planning]
 
 knife4j:
   enable: true

@@ -54,7 +54,7 @@ public class SkillApplicationService {
 
         registry.listAll().forEach(reg -> {
             String skillId = reg.getSkillId();
-            merged.putIfAbsent(skillId, SkillView.from(reg));
+            merged.put(skillId, SkillView.from(reg));
         });
 
         return new ArrayList<>(merged.values());

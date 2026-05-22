@@ -61,6 +61,8 @@ public class EchoMindProperties {
     private UserMemory userMemory = new UserMemory();
     /** 外部MCP服务接入配置 */
     private Mcp mcp = new Mcp();
+    /** 运行时启动恢复和历史迁移配置。 */
+    private Runtime runtime = new Runtime();
     /** 预定义 Agent 列表 */
     private List<AgentDef> agents = List.of();
 
@@ -119,8 +121,12 @@ public class EchoMindProperties {
      */
     @Data
     public static class Memory {
-        /** LLM prompt 使用的 Redis 近期上下文最大消息数，默认 50 条。完整历史保存在 MySQL 中。 */
-        private int shortTermWindow = 50;
+        /** LLM prompt 使用的 Redis 近期上下文最大消息数，完整历史保存在 MySQL 中。 */
+        private int shortTermWindow = 80;
+        /** LLM prompt 使用的 Redis 近期上下文最大字符数。 */
+        private int shortTermMaxChars = 12000;
+        /** Redis 近期上下文中单条消息最大字符数。 */
+        private int shortTermMessageMaxChars = 1500;
         /** Redis 近期缓存的 TTL（秒），默认 604800（7 天）；0 或负数表示永不过期 */
         private long redisTtlSeconds = 604800;
         /** 向量检索开关。 */
@@ -271,6 +277,131 @@ public class EchoMindProperties {
         private List<String> command = List.of();
         /** 子进程工作目录，可为空。 */
         private String workingDirectory;
+    }
+
+    /**
+     * 运行时启动配置。
+     *
+     * <p>只描述启动恢复、默认 Agent seed 和历史迁移规则；业务事实仍以 MySQL 为准。</p>
+     */
+    @Data
+    public static class Runtime {
+        /** Agent 启动恢复配置。 */
+        private AgentBootstrap agentBootstrap = new AgentBootstrap();
+        /** 已退役 Skill 清理配置。 */
+        private RetiredSkills retiredSkills = new RetiredSkills();
+    }
+
+    /**
+     * Agent 启动恢复配置。
+     */
+    @Data
+    public static class AgentBootstrap {
+        /** 已持久化默认 Agent 启动时允许补齐的默认 Skill。 */
+        private List<String> defaultSkillMergeIds = List.of(
+            "markdown-code",
+            "date-query",
+            "github-intel",
+            "12306",
+            "travel-planning"
+        );
+        /** 旧模型 ID 到当前模型 ID 的启动迁移规则。 */
+        private List<ModelMigration> modelMigrations = defaultModelMigrations();
+        /** 极端情况下没有 MySQL Agent 且没有配置 Agent 时使用的兜底 Agent。 */
+        private AgentDef fallbackAgent = defaultFallbackAgent();
+
+        private static List<ModelMigration> defaultModelMigrations() {
+            ModelMigration anthropicClaude = new ModelMigration();
+            anthropicClaude.setFromPrefix("anthropic:claude-");
+            anthropicClaude.setToModelId("deepseek:deepseek-v4-flash");
+
+            ModelMigration openAiGpt = new ModelMigration();
+            openAiGpt.setFromPrefix("openai:gpt-");
+            openAiGpt.setToModelId("deepseek:deepseek-v4-flash");
+
+            ModelMigration oldDeepSeekChat = new ModelMigration();
+            oldDeepSeekChat.setFrom("deepseek:deepseek-chat");
+            oldDeepSeekChat.setToModelId("deepseek:deepseek-v4-flash");
+            return List.of(anthropicClaude, openAiGpt, oldDeepSeekChat);
+        }
+
+        private static AgentDef defaultFallbackAgent() {
+            AgentDef config = new AgentDef();
+            config.setAgentId("default");
+            config.setName("EchoMind Assistant");
+            config.setSystemPrompt("You are a helpful AI assistant. You have access to tools for web search, weather, calculations, date/time queries, Markdown code formatting, GitHub repository intelligence, 12306 train queries, and travel planning. Always use these tools when the user asks for real-time information, weather, math, dates, trains, itineraries, or GitHub repositories. For 12306 train tickets, return available seats and fares; when the user asks for transfers or there is no direct train, include transfer options.");
+            config.setModelId("deepseek:deepseek-v4-flash");
+            config.setSkillIds(List.of(
+                "weather-query",
+                "calculator",
+                "web-search",
+                "markdown-code",
+                "date-query",
+                "github-intel",
+                "12306",
+                "travel-planning"
+            ));
+            return config;
+        }
+    }
+
+    /**
+     * 旧模型迁移规则。
+     */
+    @Data
+    public static class ModelMigration {
+        /** 精确匹配的旧模型 ID。 */
+        private String from;
+        /** 前缀匹配的旧模型 ID。 */
+        private String fromPrefix;
+        /** 迁移目标模型 ID；若配置 Agent 声明了 model-id，则优先使用配置值。 */
+        private String toModelId;
+    }
+
+    /**
+     * 已退役 Skill 清理配置。
+     */
+    @Data
+    public static class RetiredSkills {
+        /** 已退役 Skill ID；同时匹配带版本后缀的 sourceId。 */
+        private List<String> skillIds = List.of("qq-mail");
+        /** 从持久化 Agent system prompt 中清理旧 Skill 文案的替换规则。 */
+        private List<TextReplacement> promptReplacements = defaultPromptReplacements();
+
+        private static List<TextReplacement> defaultPromptReplacements() {
+            return List.of(
+                replacement("、旅行规划和 QQ 邮箱工具", "和旅行规划"),
+                replacement("、旅行规划、QQ 邮箱工具", "、旅行规划"),
+                replacement("、QQ 邮箱工具", ""),
+                replacement("和 QQ 邮箱工具", ""),
+                replacement("QQ 邮箱工具", ""),
+                replacement("QQ邮箱工具", ""),
+                replacement("QQ Mail", ""),
+                replacement("and QQ Mail", ""),
+                replacement("or mail", ""),
+                replacement("mail,", ""),
+                replacement("邮箱工具", ""),
+                replacement("或邮件任务", ""),
+                replacement("、邮件", ""),
+                replacement("，邮件", "")
+            );
+        }
+
+        private static TextReplacement replacement(String from, String to) {
+            TextReplacement replacement = new TextReplacement();
+            replacement.setFrom(from);
+            replacement.setTo(to);
+            return replacement;
+        }
+    }
+
+    /**
+     * 文本替换规则。
+     */
+    @Data
+    public static class TextReplacement {
+        private String from;
+        private String to = "";
     }
 
     /**

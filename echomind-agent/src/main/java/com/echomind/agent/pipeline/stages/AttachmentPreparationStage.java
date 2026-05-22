@@ -10,16 +10,11 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Base64;
 
-/**
- * 准备模型调用使用的附件。
- *
- * <p>前端展示可以使用站内相对地址，例如 {@code /api/storage/objects/...}；
- * 但云端多模态模型只能读取公网 URL 或 data URL。本阶段只转换“发给模型”的副本，
- * 原始附件仍按对象存储 URI 写入对话记忆，避免把大段 base64 塞进历史记录。</p>
- */
+// 多模态模型能够通过公网的url或者base64编码的图片数据进行对话。
 @RequiredArgsConstructor
 public class AttachmentPreparationStage implements PipelineStage {
 
+    // 图片附件存储服务
     private final ObjectStorageService storageService;
 
     @Override
@@ -29,20 +24,25 @@ public class AttachmentPreparationStage implements PipelineStage {
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
+        // 没有图片附件，则跳过
         if (ctx.getAttachments().isEmpty()) {
             return ctx;
         }
 
+        // 将图片附件转为模型可读取的图片地址
         ctx.getModelAttachments().clear();
         for (MessageAttachment attachment : ctx.getAttachments()) {
             if (attachment == null || !attachment.isImage()) {
                 continue;
             }
+            // 模型可读取的图片地址
             ctx.getModelAttachments().add(attachment.withUrl(toModelReadableUrl(attachment)));
         }
+        // 清除图片附件
         return ctx;
     }
 
+    // 模型可读取的图片地址
     private String toModelReadableUrl(MessageAttachment attachment) {
         String url = attachment.url();
         if (isHttpUrl(url) || isDataUrl(url)) {
@@ -62,6 +62,7 @@ public class AttachmentPreparationStage implements PipelineStage {
         throw new IllegalArgumentException("图片附件缺少模型可读取的地址: " + attachment.uri());
     }
 
+    // 图片附件转为 base64
     private String toDataUrl(MessageAttachment attachment) {
         try {
             byte[] bytes = storageService.readObject(attachment.uri());
@@ -74,10 +75,12 @@ public class AttachmentPreparationStage implements PipelineStage {
         }
     }
 
+    // 判断是否是 HTTP URL
     private boolean isHttpUrl(String url) {
         return url != null && (url.startsWith("http://") || url.startsWith("https://"));
     }
 
+    // 判断是否是 Data URL
     private boolean isDataUrl(String url) {
         return url != null && url.startsWith("data:");
     }

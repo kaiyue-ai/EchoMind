@@ -1,28 +1,23 @@
 package com.echomind.console.service;
 
-import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.pipeline.PipelineContext;
-import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.ChatRequest;
 import com.echomind.common.model.ChatResponse;
-import com.echomind.common.model.MessageAttachment;
+import com.echomind.common.model.ChatStreamEvent;
+import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.console.auth.AuthContext;
 import com.echomind.console.dto.ChatMessageRequest;
 import com.echomind.console.dto.ChatSubmitResponse;
 import com.echomind.console.dto.ChatSyncResponse;
-import com.echomind.memory.MemoryManager;
-import com.echomind.skill.storage.ObjectStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Flux;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
 
-import java.io.IOException;
-import java.util.List;
-import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 聊天应用服务。
@@ -35,156 +30,112 @@ import java.util.UUID;
 @Slf4j
 public class ChatApplicationService {
 
-    private final AgentOrchestrator orchestrator;
+    private final AgentChatExecutor agentChatExecutor;
     private final ChatRabbitProducer rabbitProducer;
-    private final MemoryManager memoryManager;
-    private final ObjectStorageService storageService;
     private final SsePushService ssePushService;
+    private final ChatGovernanceService governanceService;
+    private final QueuedChatStreamExecutor queuedChatStreamExecutor;
+    private final ChatSessionCleanupService sessionCleanupService;
+
+    private final ChatRequestNormalizer requestNormalizer = new ChatRequestNormalizer();
 
     /** 提交异步聊天请求，立即返回 requestId 和 sessionId。 */
     public ChatSubmitResponse submitAsync(ChatMessageRequest request) {
-        NormalizedChatRequest normalized = normalize(request);
-        String requestId = UUID.randomUUID().toString();
-        ssePushService.registerRequest(requestId, normalized.userId());
-        try {
-            rabbitProducer.publish(new ChatRequest(
-                requestId,
-                normalized.userId(),
-                normalized.agentId(),
-                normalized.sessionId(),
-                normalized.message(),
-                normalized.modelId(),
-                normalized.attachments()
-            ));
+        NormalizedChatRequest normalized = requestNormalizer.normalize(request);
+        Span span = chatSpan("echomind.chat.submit", normalized);
+        try (Scope ignored = span.makeCurrent()) {
+            normalized = applyRequestGovernance(span, normalized);
+            String traceId = EchoMindTrace.traceId(span);
+            String requestId = UUID.randomUUID().toString();
+            ssePushService.registerRequest(requestId, normalized.userId());
+            try {
+                rabbitProducer.publish(new ChatRequest(
+                    requestId,
+                    normalized.userId(),
+                    normalized.agentId(),
+                    normalized.sessionId(),
+                    normalized.message(),
+                    normalized.modelId(),
+                    traceId,
+                    EchoMindTrace.injectContext().get("traceparent"),
+                    normalized.attachments()
+                ));
+            } catch (RuntimeException e) {
+                ssePushService.discardRequest(requestId);
+                throw e;
+            }
+            span.setAttribute("echomind.request_id", requestId);
+            return new ChatSubmitResponse(requestId, normalized.sessionId(), traceId);
         } catch (RuntimeException e) {
-            ssePushService.discardRequest(requestId);
+            EchoMindTrace.recordException(span, e);
             throw e;
+        } finally {
+            span.end();
         }
-        return new ChatSubmitResponse(requestId, normalized.sessionId());
     }
 
     /** 执行同步聊天，直接返回完整结果。 */
     public ChatSyncResponse executeSync(ChatMessageRequest request) {
-        NormalizedChatRequest n = normalize(request);
-        return ChatSyncResponse.from(execute(n.userId(), n.agentId(), n.sessionId(), n.message(), n.modelId(), n.attachments()));
-    }
-
-    /** 执行队列消费者拿到的聊天请求。 */
-    public ChatResponse executeQueued(ChatRequest request) {
-        try {
-            PipelineContext ctx = execute(request.agentId(), request.sessionId(), request.message(),
-                request.modelId(), request.attachments(), request.userId());
-            return ChatResponse.success(
-                request.requestId(),
-                ctx.getSessionId(),
-                ctx.getAgentId(),
-                ctx.getModelId(),
-                ctx.getFinalResponse(),
-                ctx.getSkillResults()
-            );
-        } catch (Exception e) {
-            return ChatResponse.error(request.requestId(), e.getMessage());
+        NormalizedChatRequest n = requestNormalizer.normalize(request);
+        Span span = chatSpan("echomind.chat.sync", n);
+        long startedNanos = System.nanoTime();
+        PipelineContext ctx = null;
+        boolean callErrorEmitted = false;
+        try (Scope ignored = span.makeCurrent()) {
+            String rawMessage = n.message();
+            n = applyRequestGovernance(span, n);
+            ctx = agentChatExecutor.execute(n.userId(), n.agentId(), n.sessionId(), n.message(), n.modelId(),
+                n.attachments(), rawMessage);
+            if (ctx.getTraceId() == null || ctx.getTraceId().isBlank()) {
+                ctx.setTraceId(EchoMindTrace.traceId(span));
+            }
+            callErrorEmitted = governanceService.emitCallErrorIfFailed(n.authUser(), ctx);
+            governanceService.inspectResponse(n.authUser(), ctx);
+            governanceService.recordSuccessAndWarnings(span, "echomind.chat.sync", n.authUser(), ctx, startedNanos);
+            return ChatSyncResponse.from(ctx);
+        } catch (RuntimeException e) {
+            EchoMindTrace.recordException(span, e);
+            if (ctx != null) {
+                governanceService.recordErrorQuietly(span, "echomind.chat.sync", n.authUser(), ctx, startedNanos, e.getMessage());
+                if (!callErrorEmitted) {
+                    governanceService.emitCallError(n.authUser(), ctx, e.getMessage());
+                }
+            }
+            throw e;
+        } finally {
+            span.end();
         }
     }
 
-    /** 准备流式聊天，返回 sessionId 与 token 流。 */
-    public StreamingChat prepareStream(ChatMessageRequest request) {
-        NormalizedChatRequest n = normalize(request);
-        Flux<String> tokens = orchestrator.executeStream(
-            n.userId(), n.agentId(), n.sessionId(), n.message(), n.modelId(), n.attachments());
-        return new StreamingChat(n.userId(), n.sessionId(), tokens);
+    /** 执行队列中的聊天请求，并把 token 事件发布给 SSE 网关。 */
+    public ChatResponse executeQueuedStream(ChatRequest request, Consumer<ChatStreamEvent> events) {
+        return queuedChatStreamExecutor.execute(request, events);
     }
 
     /** 删除单条普通聊天会话，并尽力回收历史消息中的附件对象。 */
     public Map<String, String> deleteSession(String sessionId) {
-        validateSessionId(sessionId);
-        String userId = AuthContext.userId();
-        Set<String> attachmentUris = collectManagedAttachmentUris(memoryManager.getFullContext(userId, sessionId));
-        memoryManager.clearSession(userId, sessionId);
-        deleteAttachmentsQuietly(sessionId, attachmentUris);
-        return Map.of("status", "deleted", "sessionId", sessionId);
+        return sessionCleanupService.deleteSession(AuthContext.userId(), sessionId);
     }
 
-    private PipelineContext execute(String userId, String agentId, String sessionId, String message, String modelId,
-                                    List<MessageAttachment> attachments) {
-        return orchestrator.execute(userId, agentId, sessionId, message, modelId, attachments);
+    private Span chatSpan(String spanName, NormalizedChatRequest request) {
+        Span span = EchoMindTrace.startSpan(spanName);
+        span.setAttribute("echomind.user_id", safe(request.userId()));
+        span.setAttribute("echomind.username", safe(request.authUser().username()));
+        span.setAttribute("echomind.account_type", "client");
+        span.setAttribute("echomind.agent_id", safe(request.agentId()));
+        span.setAttribute("echomind.session_id", safe(request.sessionId()));
+        span.setAttribute("echomind.model_id", safe(request.modelId()));
+        span.setAttribute("echomind.attachment_count", request.attachments() == null ? 0 : request.attachments().size());
+        return span;
     }
 
-    private PipelineContext execute(String agentId, String sessionId, String message, String modelId,
-                                    List<MessageAttachment> attachments, String userId) {
-        return execute(userId, agentId, sessionId, message, modelId, attachments);
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 
-    private Set<String> collectManagedAttachmentUris(List<AgentMessage> history) {
-        Set<String> uris = new LinkedHashSet<>();
-        if (history == null || history.isEmpty()) {
-            return uris;
-        }
-        for (AgentMessage message : history) {
-            if (message == null || message.attachments() == null || message.attachments().isEmpty()) {
-                continue;
-            }
-            for (MessageAttachment attachment : message.attachments()) {
-                if (attachment == null || attachment.uri() == null || attachment.uri().isBlank()) {
-                    continue;
-                }
-                if (storageService.supports(attachment.uri())) {
-                    uris.add(attachment.uri());
-                }
-            }
-        }
-        return uris;
+    private NormalizedChatRequest applyRequestGovernance(Span span, NormalizedChatRequest request) {
+        String governedMessage = governanceService.inspectRequest(span, request.authUser(), request.agentId(),
+            request.sessionId(), request.message());
+        return request.withMessage(governedMessage);
     }
-
-    private void deleteAttachmentsQuietly(String sessionId, Set<String> attachmentUris) {
-        for (String uri : attachmentUris) {
-            try {
-                storageService.deleteObject(uri);
-            } catch (IOException | RuntimeException e) {
-                log.warn("Failed to delete chat attachment session={} uri={}: {}", sessionId, uri, e.getMessage());
-            }
-        }
-    }
-
-    private NormalizedChatRequest normalize(ChatMessageRequest request) {
-        String message = request == null ? null : request.message();
-        if (message == null || message.isBlank()) {
-            boolean hasAttachments = request != null
-                && request.attachments() != null
-                && !request.attachments().isEmpty();
-            if (hasAttachments) {
-                message = "请理解这张图片。";
-            } else {
-                throw new IllegalArgumentException("message is required");
-            }
-        }
-
-        String agentId = request == null ? null : request.agentId();
-        if (agentId == null || agentId.isBlank()) {
-            agentId = "default";
-        }
-
-        String sessionId = request == null ? null : request.sessionId();
-        if (sessionId == null || sessionId.isBlank()) {
-            sessionId = UUID.randomUUID().toString();
-        }
-
-        String modelId = request == null ? null : request.modelId();
-        List<MessageAttachment> attachments = request == null || request.attachments() == null
-            ? List.of()
-            : request.attachments();
-
-        return new NormalizedChatRequest(AuthContext.userId(), agentId, sessionId, message, modelId, attachments);
-    }
-
-    private void validateSessionId(String sessionId) {
-        if (sessionId == null || sessionId.isBlank()) {
-            throw new IllegalArgumentException("sessionId不能为空");
-        }
-    }
-
-    private record NormalizedChatRequest(String userId, String agentId, String sessionId, String message,
-                                         String modelId, List<MessageAttachment> attachments) {}
-
-    public record StreamingChat(String userId, String sessionId, Flux<String> tokens) {}
 }

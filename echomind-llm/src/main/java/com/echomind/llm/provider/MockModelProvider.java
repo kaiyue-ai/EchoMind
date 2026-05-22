@@ -1,40 +1,14 @@
 package com.echomind.llm.provider;
 
+import com.echomind.common.model.TokenUsage;
+import com.echomind.llm.provider.dto.ProviderRequest;
+import com.echomind.llm.provider.dto.ProviderResponse;
 import com.echomind.llm.router.ModelSpec;
 import reactor.core.publisher.Flux;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Mock 模型提供商 —— 用于开发和测试环境的模拟 LLM 实现。
- *
- * <p>不进行任何实际的 API 调用，而是根据预配置的关键词匹配规则返回预设响应，
- * 或简单地回显用户输入。适用于以下场景：
- *
- * <ul>
- *   <li><b>单元测试：</b> 无需 API 密钥即可验证 Agent 流水线的完整链路。</li>
- *   <li><b>本地开发：</b> 快速原型验证，避免依赖外部网络和 API 配额。</li>
- *   <li><b>演示环境：</b> 提供可预测的响应，便于 UI 调试和功能演示。</li>
- * </ul>
- *
- * <p><b>工作机制：</b>
- * <ol>
- *   <li>检查用户消息是否包含已注册的关键词</li>
- *   <li>若匹配 → 返回该关键词对应的预设响应</li>
- *   <li>若无匹配 → 回显用户消息（前缀 "[Mock] Echo: "）</li>
- * </ol>
- *
- * <p><b>设计决策：</b>
- * <ul>
- *   <li>使用 {@link ConcurrentHashMap} 存储关键词-响应映射，支持运行时动态修改。</li>
- *   <li>{@link #setResponse(String, String)} 方法允许测试代码实时注入预期响应。</li>
- *   <li>所有方法均为同步返回（无网络 I/O），确保测试执行速度。</li>
- * </ul>
- *
- * @see ModelProvider
- * @see OpenAICompatibleProvider
- */
 public class MockModelProvider implements ModelProvider {
 
     /**
@@ -89,17 +63,19 @@ public class MockModelProvider implements ModelProvider {
      * @return 匹配的预设响应，或 "[Mock] Echo: " + 用户消息
      */
     @Override
-    public String chat(ProviderRequest request) {
+    public ProviderResponse chatWithUsage(ProviderRequest request) {
         String userMessage = request.userMessage();
         if (request.hasTools()) {
-            return "[Mock Tools] Would call tools for: " + userMessage;
+            String response = "[Mock Tools] Would call tools for: " + userMessage;
+            return new ProviderResponse(response, mockUsage(request, response));
         }
         for (var entry : responses.entrySet()) {
             if (userMessage.contains(entry.getKey())) {
-                return entry.getValue();
+                return new ProviderResponse(entry.getValue(), mockUsage(request, entry.getValue()));
             }
         }
-        return "[Mock] Echo: " + userMessage;
+        String response = "[Mock] Echo: " + userMessage;
+        return new ProviderResponse(response, mockUsage(request, response));
     }
 
     /**
@@ -111,10 +87,25 @@ public class MockModelProvider implements ModelProvider {
      * @return 包含 "[Mock Stream] " + 用户消息 的单元素 Flux
      */
     @Override
-    public Flux<String> stream(ProviderRequest request) {
+    public Flux<ProviderStreamChunk> streamWithUsage(ProviderRequest request) {
         if (request.hasTools()) {
-            return Flux.just("[Mock Tools Stream] Would call tools for: " + request.userMessage());
+            String response = "[Mock Tools Stream] Would call tools for: " + request.userMessage();
+            return Flux.just(ProviderStreamChunk.text(response), ProviderStreamChunk.usage(mockUsage(request, response)));
         }
-        return Flux.just("[Mock Stream] " + request.userMessage());
+        String response = "[Mock Stream] " + request.userMessage();
+        return Flux.just(ProviderStreamChunk.text(response), ProviderStreamChunk.usage(mockUsage(request, response)));
+    }
+
+    private TokenUsage mockUsage(ProviderRequest request, String response) {
+        long promptTokens = roughTokens(request.systemPrompt()) + roughTokens(request.userMessage());
+        long completionTokens = roughTokens(response);
+        return new TokenUsage(promptTokens, completionTokens, promptTokens + completionTokens);
+    }
+
+    private long roughTokens(String text) {
+        if (text == null || text.isBlank()) {
+            return 1;
+        }
+        return Math.max(1, (text.length() + 3L) / 4L);
     }
 }

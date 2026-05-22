@@ -7,6 +7,11 @@
 !skills/skill-websearch/target/*-jar-with-dependencies.jar
 !skills/skill-markdown-code/target/*-jar-with-dependencies.jar
 !skills/skill-date-query/target/*-jar-with-dependencies.jar
+!skills/skill-github-intel/target/*-jar-with-dependencies.jar
+!skills/skill-railway-12306/target/*-jar-with-dependencies.jar
+!skills/skill-travel-planning/target/*-jar-with-dependencies.jar
+!skills/skill-flight-tracker/target/*-jar-with-dependencies.jar
+!skills/skill-qq-mail/target/*-jar-with-dependencies.jar
 !skills/filesystem-1.0.0.jar
 **/node_modules/
 **/dist/

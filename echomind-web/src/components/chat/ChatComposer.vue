@@ -21,8 +21,17 @@
       <el-button circle :loading="uploading" :disabled="loading" title="上传图片" @click="imageInput?.click()">
         <el-icon><Picture /></el-icon>
       </el-button>
-      <el-button type="primary" native-type="submit" :loading="loading" :disabled="disabled">
-        发送
+      <el-button
+        type="primary"
+        circle
+        class="composer-send-button"
+        native-type="submit"
+        :loading="loading"
+        :disabled="disabled"
+        title="发送消息"
+        aria-label="发送消息"
+      >
+        <el-icon><Promotion /></el-icon>
       </el-button>
     </div>
   </form>
@@ -30,7 +39,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { Picture } from '@element-plus/icons-vue'
+import { Picture, Promotion } from '@element-plus/icons-vue'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },

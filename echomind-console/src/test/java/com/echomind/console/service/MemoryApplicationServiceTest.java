@@ -1,9 +1,12 @@
 package com.echomind.console.service;
 
 import com.echomind.common.model.AgentMessage;
+import com.echomind.common.model.MessageAttachment;
 import com.echomind.memory.MemoryManager;
+import com.echomind.skill.storage.ObjectStorageService;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -26,7 +29,7 @@ class MemoryApplicationServiceTest {
     @Test
     void getMemoryDelegatesToMemoryManager() {
         MemoryManager memoryManager = mock(MemoryManager.class);
-        MemoryApplicationService service = new MemoryApplicationService(memoryManager);
+        MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
         AgentMessage message = new AgentMessage("user", "你好", Instant.now(), null);
         when(memoryManager.getFullContext("default", "session-1")).thenReturn(List.of(message));
 
@@ -36,9 +39,33 @@ class MemoryApplicationServiceTest {
     }
 
     @Test
+    void getChatHistoryRefreshesManagedAttachmentUrls() {
+        MemoryManager memoryManager = mock(MemoryManager.class);
+        ObjectStorageService storageService = mock(ObjectStorageService.class);
+        MemoryApplicationService service = new MemoryApplicationService(memoryManager, storageService);
+        MessageAttachment attachment = MessageAttachment.image(
+            "oss://bucket/chat/a.png",
+            "https://old.example.com/a.png",
+            "image/png",
+            "a.png",
+            10L
+        );
+        when(memoryManager.getFullContext("default", "session-1")).thenReturn(List.of(
+            new AgentMessage("user", "看图", Instant.now(), null, List.of(attachment))
+        ));
+        when(storageService.supports("oss://bucket/chat/a.png")).thenReturn(true);
+        when(storageService.urlFor("oss://bucket/chat/a.png", Duration.ofDays(7)))
+            .thenReturn("https://signed.example.com/a.png");
+
+        List<AgentMessage> result = service.getChatHistory("session-1");
+
+        assertThat(result.get(0).attachments().get(0).url()).isEqualTo("https://signed.example.com/a.png");
+    }
+
+    @Test
     void clearMemoryValidatesSessionIdBeforeDeleting() {
         MemoryManager memoryManager = mock(MemoryManager.class);
-        MemoryApplicationService service = new MemoryApplicationService(memoryManager);
+        MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
 
         Map<String, String> result = service.clearMemory("session-1");
 
@@ -50,7 +77,7 @@ class MemoryApplicationServiceTest {
     @Test
     void blankSessionIdIsRejected() {
         MemoryManager memoryManager = mock(MemoryManager.class);
-        MemoryApplicationService service = new MemoryApplicationService(memoryManager);
+        MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
 
         assertThatThrownBy(() -> service.getMemory(" "))
             .isInstanceOf(IllegalArgumentException.class)

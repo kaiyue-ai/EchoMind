@@ -5,5 +5,6 @@ package com.echomind.console.dto;
  */
 public record ChatSubmitResponse(
     String requestId,
-    String sessionId
+    String sessionId,
+    String traceId
 ) {}

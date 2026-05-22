@@ -6,5 +6,8 @@ package com.echomind.agent.team.state;
 public enum ReviewerAction {
     CONTINUE,
     RETRY,
-    ASK_CLARIFICATION
+    PARTIAL_REPLAN,
+    REPLAN,
+    ASK_CLARIFICATION,
+    FAILED
 }

@@ -28,6 +28,9 @@ COPY skills/skill-calculator/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-websearch/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-markdown-code/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-date-query/target/*-jar-with-dependencies.jar /app/skills/
+COPY skills/skill-github-intel/target/*-jar-with-dependencies.jar /app/skills/
+COPY skills/skill-railway-12306/target/*-jar-with-dependencies.jar /app/skills/
+COPY skills/skill-travel-planning/target/*-jar-with-dependencies.jar /app/skills/
 
 RUN chown -R echomind:echomind /app
 USER echomind

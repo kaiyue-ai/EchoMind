@@ -82,7 +82,7 @@ public class UserMemoryWorkerConfig {
             properties.getDeepSeekBaseUrl(),
             System.getenv("DEEPSEEK_BASE_URL"),
             System.getenv("ANTHROPIC_BASE_URL"),
-            "https://api.deepseek.com/anthropic"
+            "https://api.deepseek.com"
         );
         if (deepSeekKey != null) {
             registry.registerProvider(

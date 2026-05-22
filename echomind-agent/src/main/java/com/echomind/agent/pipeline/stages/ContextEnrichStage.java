@@ -17,10 +17,12 @@ public class ContextEnrichStage implements PipelineStage {
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
+        // 如果不需要持久化的话,就直接把用户信息塞给llm
         if (!ctx.isMemoryPersistenceEnabled()) {
             ctx.getMessages().add(AgentMessage.user(ctx.getUserMessage(), ctx.getAttachments()));
             return ctx;
         }
+        // 如果需要持久化的话,就从redis数据库中加载历史信息
         var history = memoryManager.getPromptContext(ctx.getMemoryKey());
         ctx.getMessages().addAll(history);
         ctx.getMessages().add(AgentMessage.user(ctx.getUserMessage(), ctx.getAttachments()));

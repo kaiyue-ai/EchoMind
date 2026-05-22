@@ -22,7 +22,7 @@ public class MarkdownCodeSkill implements Skill {
         return new SkillMetadata(
             "markdown-code",
             "1.0.0",
-            "Wrap source code in Markdown fenced code blocks. Use this when the user asks to output, format, or display code.",
+            "把源码包装成标准 Markdown 围栏代码块，并补上语言标识，方便前端高亮、复制和稳定渲染。",
             Map.of(
                 "type", "object",
                 "properties", Map.of(

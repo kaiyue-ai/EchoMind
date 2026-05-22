@@ -3,12 +3,17 @@ package com.echomind.console.service;
 import com.echomind.agent.tool.SkillCapabilityService;
 import com.echomind.common.model.SkillState;
 import com.echomind.console.dto.SkillView;
+import com.echomind.skill.api.Skill;
+import com.echomind.skill.api.SkillMetadata;
+import com.echomind.skill.api.SkillRequest;
+import com.echomind.skill.api.SkillResult;
 import com.echomind.skill.marketplace.MarketplaceService;
 import com.echomind.skill.marketplace.SkillRepository;
 import com.echomind.skill.registry.SkillRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -53,6 +58,42 @@ class SkillApplicationServiceTest {
         assertThat(skills.get(0).skillId()).isEqualTo("invoice-audit@1.2.0");
         assertThat(skills.get(0).state()).isEqualTo(SkillState.ENABLED);
         assertThat(skills.get(0).metadata().tags()).containsExactly("finance", "audit");
+    }
+
+    @Test
+    void listSkillsPrefersRuntimeMetadataOverStaleMarketplaceMetadata() {
+        SkillRegistry registry = new SkillRegistry();
+        MarketplaceService marketplace = mock(MarketplaceService.class);
+        SkillRepository stale = new SkillRepository();
+        stale.setName("report-writer");
+        stale.setVersion("1.0.0");
+        stale.setDescription("旧报告描述");
+        stale.setParameterSchemaJson("{\"properties\":{\"action\":{\"enum\":[\"list\"]}}}");
+        stale.setState(SkillState.ENABLED);
+        when(marketplace.listAll()).thenReturn(List.of(stale));
+        registry.register(new FakeSkill(new SkillMetadata(
+            "report-writer",
+            "1.0.0",
+            "报告生成工具：支持 draft/review/export",
+            Map.of("properties", Map.of(
+                "action", Map.of("enum", List.of("draft", "review", "export")),
+                "topic", Map.of("type", "string")
+            )),
+            List.of(),
+            "EchoMind",
+            List.of("报告")
+        )), getClass().getClassLoader());
+        SkillApplicationService service = new SkillApplicationService(
+            registry,
+            marketplace,
+            mock(SkillCapabilityService.class)
+        );
+
+        List<SkillView> skills = service.listSkills();
+
+        assertThat(skills).hasSize(1);
+        assertThat(skills.get(0).metadata().description()).contains("draft/review/export");
+        assertThat(skills.get(0).metadata().parameterSchema().toString()).contains("draft", "export", "topic");
     }
 
     @Test
@@ -108,5 +149,12 @@ class SkillApplicationServiceTest {
             .hasMessageContaining("Skill JAR不能为空");
 
         verifyNoInteractions(marketplace, capabilityService);
+    }
+
+    private record FakeSkill(SkillMetadata metadata) implements Skill {
+        @Override
+        public CompletableFuture<SkillResult> execute(SkillRequest request) {
+            return CompletableFuture.completedFuture(SkillResult.success("", 0));
+        }
     }
 }

@@ -6,5 +6,7 @@ package com.echomind.agent.team.state;
 public enum TeamRole {
     PLANNER,
     EXECUTOR,
-    REVIEWER
+    REVIEWER,
+    SUB_REVIEWER,
+    MERGER
 }

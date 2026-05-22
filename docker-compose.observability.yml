@@ -1,0 +1,7 @@
+# Backward-compatible overlay.
+#
+# The local OpenTelemetry Collector and Jaeger services now live in
+# docker-compose.yml so the admin Trace page works with ordinary
+# `docker compose up`. This file stays intentionally empty so older commands
+# that still pass `-f docker-compose.observability.yml` continue to work.
+services: {}

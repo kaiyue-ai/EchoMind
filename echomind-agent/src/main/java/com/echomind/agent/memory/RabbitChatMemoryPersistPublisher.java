@@ -2,6 +2,7 @@ package com.echomind.agent.memory;
 
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.ChatMemoryPersistEvent;
+import com.echomind.common.model.MemorySignal;
 import com.echomind.common.messaging.ChatMemoryShardSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -32,6 +33,12 @@ public class RabbitChatMemoryPersistPublisher implements ChatMemoryPersistPublis
 
     @Override
     public void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
+        publish(userId, sessionId, agentId, messages, MemorySignal.NONE);
+    }
+
+    @Override
+    public void publish(String userId, String sessionId, String agentId,
+                        List<AgentMessage> messages, MemorySignal memorySignal) {
         if (!enabled || rabbitTemplate == null || exchangeName == null || exchangeName.isBlank()
             || sessionId == null || sessionId.isBlank() || messages == null || messages.isEmpty()) {
             return;
@@ -40,7 +47,7 @@ public class RabbitChatMemoryPersistPublisher implements ChatMemoryPersistPublis
             int shardIndex = ChatMemoryShardSupport.shardIndex(sessionId, shardCount);
             String routingKey = ChatMemoryShardSupport.routingKey(shardIndex);
             rabbitTemplate.convertAndSend(exchangeName, routingKey,
-                new ChatMemoryPersistEvent(userId, sessionId, agentId, messages));
+                new ChatMemoryPersistEvent(userId, sessionId, agentId, messages, memorySignal));
         } catch (Exception e) {
             log.warn("Failed to publish chat memory persist event sessionId={}: {}", sessionId, e.getMessage());
         }

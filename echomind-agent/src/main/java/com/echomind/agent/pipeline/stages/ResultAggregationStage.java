@@ -2,253 +2,177 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
+import com.echomind.agent.pipeline.MemorySignalParser;
 import com.echomind.agent.pipeline.PromptBudget;
 import com.echomind.agent.tool.Tool;
-import com.echomind.agent.tool.ToolInvoker;
 import com.echomind.agent.tool.ToolRouter;
-import com.echomind.common.model.AgentMessage;
-import com.echomind.llm.provider.LlmTool;
+import com.echomind.common.model.TokenUsage;
+import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.llm.provider.ModelProvider;
-import com.echomind.llm.provider.ProviderRequest;
-import com.echomind.llm.router.DynamicModelRouter;
+import com.echomind.llm.provider.dto.ProviderResponse;
+import com.echomind.llm.provider.dto.ProviderRequest;
+import com.echomind.llm.provider.ProviderStreamChunk;
 import com.echomind.llm.router.ModelProviderRegistry;
 import com.echomind.llm.router.ModelSpec;
-import com.echomind.llm.session.SessionContext;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 生成最终回复。
  *
- * <p>这里把当前 Agent 可用的工具转换成中立的 {@link LlmTool} 列表，
- * 交给底层 provider 以各自协议原生实现函数调用。</p>
+ * <p>该阶段保留同步和流式 provider 调用控制流；Prompt 组合、工具暴露和
+ * ProviderRequest 构造委托给同包 helper。</p>
  */
 @Slf4j
-@RequiredArgsConstructor
 public class ResultAggregationStage implements PipelineStage {
 
-    private final DynamicModelRouter router;
+    // 这个是模型注册表,从这里面获取模型实例
     private final ModelProviderRegistry providerRegistry;
-    private final ToolRouter toolRouter;
-    private final PromptBudget promptBudget;
+    //
+    private final MemorySignalParser memorySignalParser = new MemorySignalParser(null);
+    private final ToolExposurePlanner toolExposurePlanner;
+    private final ProviderRequestFactory providerRequestFactory;
+
+    public ResultAggregationStage(ModelProviderRegistry providerRegistry, ToolRouter toolRouter,
+                                  PromptBudget promptBudget) {
+        this.providerRegistry = providerRegistry;
+        this.toolExposurePlanner = new ToolExposurePlanner(toolRouter);
+        this.providerRequestFactory = new ProviderRequestFactory(
+            new PromptComposer(promptBudget),
+            toolExposurePlanner
+        );
+    }
 
     @Override
     public int order() { return 40; }
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
-        SessionContext sessionCtx = SessionContext.create(ctx.getSessionId());
-        if (ctx.getModelId() != null) {
-            String[] parts = ctx.getModelId().split(":");
-            if (parts.length == 2) {
-                sessionCtx = sessionCtx.withModel(parts[0], parts[1]);
-            }
-        }
-
-        ModelSpec model = router.resolve(sessionCtx);
-        ModelProvider provider = providerRegistry.getProvider(model.providerId()).orElse(null);
-
-        if (provider == null) {
-            ctx.setFinalResponse("[Error] No model provider available");
-            return ctx;
-        }
-
-        String message = buildPrompt(ctx);
         try {
-            List<Tool> tools = toolsFor(ctx);
-            ProviderRequest request = new ProviderRequest(
-                model,
-                ctx.getSystemPrompt(),
-                message,
-                ctx.attachmentsForModel(),
-                llmTools(tools, ctx),
-                requiredToolName(tools, ctx),
-                ctx.getUserMessage()
-            );
-            ctx.setFinalResponse(provider.chat(request));
+            Invocation invocation = prepareInvocation(ctx);
+            if (invocation == null) {
+                return ctx;
+            }
+            Span span = modelSpan("echomind.llm.invoke", invocation.model(), ctx, invocation.tools());
+            try (Scope ignored = span.makeCurrent()) {
+                ProviderResponse response = invocation.provider().chatWithUsage(invocation.request());
+                if (!response.modelInvoked()) {
+                    ctx.getAttributes().put("modelUsageNotApplicable", true);
+                }
+                if (response.failed()) {
+                    ctx.markFailed(response.failureReason());
+                } else {
+                    MemorySignalParser.Parsed parsed = memorySignalParser.parseAndStrip(response.content());
+                    ctx.setFinalResponse(parsed.content());
+                    ctx.setMemorySignal(parsed.signal());
+                }
+                ctx.setTokenUsage(response.usage());
+                tagUsage(span, response.usage());
+            } catch (RuntimeException e) {
+                EchoMindTrace.recordException(span, e);
+                throw e;
+            } finally {
+                span.end();
+            }
         } catch (Exception e) {
             log.error("LLM call failed in aggregation stage", e);
-            ctx.setFinalResponse("[Error] LLM call failed: " + e.getMessage());
+            ctx.markFailed("LLM call failed: " + e.getMessage());
         }
         return ctx;
     }
 
     /** 流式生成文本片段，供 SSE 接口逐段推送。 */
     public Flux<String> streamResponse(PipelineContext ctx) {
-        SessionContext sessionCtx = SessionContext.create(ctx.getSessionId());
-        if (ctx.getModelId() != null) {
-            String[] parts = ctx.getModelId().split(":");
-            if (parts.length == 2) {
-                sessionCtx = sessionCtx.withModel(parts[0], parts[1]);
-            }
+        Invocation invocation = prepareInvocation(ctx);
+        if (invocation == null) {
+            return Flux.just(ctx.getFinalResponse());
         }
+        Span span = modelSpan("echomind.llm.stream", invocation.model(), ctx, invocation.tools());
+        MemorySignalParser.StreamFilter streamFilter = memorySignalParser.streamFilter();
+        return invocation.provider().streamWithUsage(invocation.request())
+            .doOnNext(chunk -> {
+                if (!chunk.modelInvoked()) {
+                    ctx.getAttributes().put("modelUsageNotApplicable", true);
+                }
+                if (chunk.failed()) {
+                    ctx.markFailed(chunk.failureReason());
+                }
+                if (chunk.hasUsage()) {
+                    ctx.setTokenUsage(chunk.usage());
+                    tagUsage(span, chunk.usage());
+                }
+            })
+            .filter(ProviderStreamChunk::hasContent)
+            .map(ProviderStreamChunk::content)
+            .<String>handle((chunk, sink) -> {
+                String visible = streamFilter.accept(chunk);
+                if (visible != null && !visible.isEmpty()) {
+                    sink.next(visible);
+                }
+            })
+            .concatWith(Mono.fromSupplier(() -> {
+                    ctx.setMemorySignal(streamFilter.signal());
+                    return streamFilter.finish();
+                })
+                .filter(chunk -> chunk != null && !chunk.isEmpty()))
+            .doOnError(error -> EchoMindTrace.recordException(span, error))
+            .doFinally(signalType -> {
+                span.end();
+            });
+    }
 
-        ModelSpec model = router.resolve(sessionCtx);
+    private Invocation prepareInvocation(PipelineContext ctx) {
+        ModelSpec model = ctx.getResolvedModel();
+        if (model == null) {
+            ctx.markFailed("No model resolved");
+            return null;
+        }
         ModelProvider provider = providerRegistry.getProvider(model.providerId()).orElse(null);
-
         if (provider == null) {
-            return Flux.just("[Error] No model provider available");
+            ctx.markFailed("No model provider available");
+            return null;
         }
-
-        String message = buildPrompt(ctx);
-        List<Tool> tools = toolsFor(ctx);
-        ProviderRequest request = new ProviderRequest(
+        ToolExposure exposure = toolExposurePlanner.plan(ctx);
+        ProviderRequest request = providerRequestFactory.create(
+            ctx,
             model,
-            ctx.getSystemPrompt(),
-            message,
-            ctx.attachmentsForModel(),
-            llmTools(tools, ctx),
-            requiredToolName(tools, ctx),
-            ctx.getUserMessage()
+            memorySignalParser.appendInstruction(ctx.getSystemPrompt()),
+            exposure
         );
-        return provider.stream(request);
+        return new Invocation(model, provider, request, exposure.tools());
     }
 
-    private String requiredToolName(List<Tool> tools, PipelineContext ctx) {
-        if (tools == null || tools.size() != 1) {
-            return null;
-        }
-        Object mode = ctx.getAttributes().get("toolMatchMode");
-        if (!"keyword".equals(mode)) {
-            return null;
-        }
-        return functionName(tools.get(0));
+    private Span modelSpan(String name, ModelSpec model, PipelineContext ctx, List<Tool> tools) {
+        Span span = EchoMindTrace.startSpan(name);
+        span.setAttribute("echomind.provider_id", model.providerId());
+        span.setAttribute("echomind.model_name", model.modelName());
+        span.setAttribute("echomind.user_id", safe(ctx.getUserId()));
+        span.setAttribute("echomind.agent_id", safe(ctx.getAgentId()));
+        span.setAttribute("echomind.session_id", safe(ctx.getSessionId()));
+        span.setAttribute("echomind.tool_count", tools == null ? 0 : tools.size());
+        span.setAttribute("echomind.attachment_count", ctx.attachmentsForModel().size());
+        return span;
     }
 
-    private List<LlmTool> llmTools(List<Tool> tools, PipelineContext ctx) {
-        return tools.stream()
-            .map(tool -> new LlmTool(
-                functionName(tool),
-                tool.description(),
-                tool.parameterSchema(),
-                argumentsJson -> new ToolInvoker(tool, ctx).call(argumentsJson)
-            ))
-            .toList();
+    private void tagUsage(Span span, TokenUsage usage) {
+        if (usage == null) {
+            return;
+        }
+        span.setAttribute("echomind.prompt_tokens", usage.promptTokens());
+        span.setAttribute("echomind.completion_tokens", usage.completionTokens());
+        span.setAttribute("echomind.total_tokens", usage.totalTokens());
+        span.setAttribute("echomind.usage_source", "PROVIDER");
     }
 
-    private String functionName(Tool tool) {
-        return tool.name().replaceAll("[.\\-]", "_");
-    }
-
-    private List<Tool> toolsFor(PipelineContext ctx) {
-        Object allowedObj = ctx.getAttributes().get("agentSkillIds");
-        List<Tool> allowedTools;
-        List<Tool> keywordMatched;
-        if (allowedObj instanceof List<?> allowed) {
-            allowedTools = toolRouter.filterCompatibleTools(ctx.getUserMessage(), toolRouter.listForAgentSkillIds(allowed));
-            keywordMatched = toolRouter.matchForAgentSkillIds(ctx.getUserMessage(), allowed);
-        } else {
-            allowedTools = toolRouter.filterCompatibleTools(ctx.getUserMessage(), toolRouter.listForAgentSkillIds(List.of()));
-            keywordMatched = toolRouter.matchForAgentSkillIds(ctx.getUserMessage(), List.of());
-        }
-        if (!keywordMatched.isEmpty()) {
-            ctx.getAttributes().put("toolMatchMode", "keyword");
-            ctx.getAttributes().put("keywordMatchedTools", keywordMatched.stream().map(Tool::name).toList());
-            log.debug("Keyword matched {} tool(s): {}", keywordMatched.size(),
-                keywordMatched.stream().map(Tool::name).toList());
-            return keywordMatched;
-        }
-
-        ctx.getAttributes().put("toolMatchMode", "model");
-        log.debug("No keyword matched tools, exposing {} allowed tool(s) for model decision", allowedTools.size());
-        return allowedTools;
-    }
-
-    private String buildPrompt(PipelineContext ctx) {
-        List<AgentMessage> allMessages = ctx.getMessages();
-        int historySize = Math.max(0, allMessages.size() - 1);
-        String historyHeader = "=== Conversation History ===\n";
-        String historyFooter = "=== End History ===\n\n";
-        String currentUserMessage = truncateTail(safeContent(ctx.getUserMessage()), promptBudget.getMaxChars());
-        int historyBudget = promptBudget.getMaxChars() - currentUserMessage.length()
-            - historyHeader.length() - historyFooter.length();
-
-        List<String> historyLines = new ArrayList<>();
-
-        if (historySize > 0 && historyBudget > 0) {
-            int remaining = historyBudget;
-            for (int i = 0; i < historySize && remaining > 0; i++) {
-                AgentMessage msg = allMessages.get(i);
-                if (!"system".equals(msg.role())) {
-                    continue;
-                }
-                String line = formatHistoryLine(msg, remaining);
-                historyLines.add(line);
-                remaining -= line.length();
-            }
-
-            List<String> recentLines = new ArrayList<>();
-            for (int i = historySize - 1; i >= 0 && remaining > 0; i--) {
-                AgentMessage msg = allMessages.get(i);
-                if ("system".equals(msg.role())) {
-                    continue;
-                }
-                String line = formatHistoryLine(msg, remaining);
-                recentLines.add(0, line);
-                remaining -= line.length();
-            }
-            historyLines.addAll(recentLines);
-        }
-
-        StringBuilder sb = new StringBuilder();
-        if (!historyLines.isEmpty()) {
-            sb.append(historyHeader);
-            for (String line : historyLines) {
-                sb.append(line);
-            }
-            sb.append(historyFooter);
-        }
-
-        sb.append(currentUserMessage);
-
-        return sb.toString();
-    }
-
-    private String safeContent(String value) {
+    private String safe(String value) {
         return value == null ? "" : value;
     }
 
-    private String formatHistoryLine(AgentMessage msg, int remaining) {
-        String role = safeContent(msg.role());
-        String label = switch (role) {
-            case "user" -> "User";
-            case "assistant" -> "Assistant";
-            case "system" -> "System";
-            case "tool" -> "Tool";
-            default -> role;
-        };
-        String prefix = label + ": ";
-        int messageLimit = "system".equals(role)
-            ? promptBudget.getMaxSystemMessageChars()
-            : promptBudget.getMaxHistoryMessageChars();
-        int contentLimit = Math.max(0, Math.min(messageLimit, remaining - prefix.length() - 1));
-        String content = truncateHead(safeContent(msg.content()), contentLimit);
-        String line = prefix + content + "\n";
-        return line.length() > remaining ? truncateHead(line, remaining) : line;
-    }
-
-    private String truncateHead(String value, int maxChars) {
-        if (value == null || value.length() <= maxChars) {
-            return value;
-        }
-        if (maxChars <= 3) {
-            return value.substring(value.length() - Math.max(0, maxChars));
-        }
-        return "..." + value.substring(value.length() - maxChars + 3);
-    }
-
-    private String truncateTail(String value, int maxChars) {
-        if (value == null || value.length() <= maxChars) {
-            return value;
-        }
-        if (maxChars <= 3) {
-            return value.substring(0, Math.max(0, maxChars));
-        }
-        return value.substring(0, maxChars - 3) + "...";
-    }
+    private record Invocation(ModelSpec model, ModelProvider provider, ProviderRequest request, List<Tool> tools) {}
 }

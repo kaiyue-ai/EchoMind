@@ -16,7 +16,25 @@ public interface ChatSessionRepository extends JpaRepository<ChatSessionEntity, 
 
     java.util.Optional<ChatSessionEntity> findByUserIdAndSessionId(String userId, String sessionId);
 
+    long countByUserId(String userId);
+
+    @Query("""
+        select s.userId, count(s)
+        from ChatSessionEntity s
+        group by s.userId
+        """)
+    List<Object[]> countByUser();
+
+    @Query("""
+        select s.sessionId
+        from ChatSessionEntity s
+        where s.userId = :userId
+        """)
+    List<String> findSessionIdsByUserId(@Param("userId") String userId);
+
     void deleteByUserIdAndSessionId(String userId, String sessionId);
+
+    long deleteByUserId(String userId);
 
     /** 会话列表按最近活跃时间倒序展示，排除指定前缀的内部会话。 */
     @Query("""

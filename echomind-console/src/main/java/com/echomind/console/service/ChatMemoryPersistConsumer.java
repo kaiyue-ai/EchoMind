@@ -31,7 +31,7 @@ public class ChatMemoryPersistConsumer {
         for (var message : event.messages()) {
             memoryManager.addMessage(userId, event.sessionId(), event.agentId(), message);
         }
-        userMemoryPublisher.publish(userId, event.sessionId(), event.agentId(), event.messages());
+        userMemoryPublisher.publish(userId, event.sessionId(), event.agentId(), event.messages(), event.memorySignal());
         log.debug("Persisted chat memory event userId={} sessionId={} messages={}",
             userId, event.sessionId(), event.messages().size());
     }

@@ -1,6 +1,7 @@
 package com.echomind.agent.usermemory;
 
 import com.echomind.common.model.AgentMessage;
+import com.echomind.common.model.MemorySignal;
 import com.echomind.common.model.UserMemoryEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -28,12 +29,18 @@ public class RabbitUserMemoryPersistPublisher implements UserMemoryPersistPublis
 
     @Override
     public void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
+        publish(userId, sessionId, agentId, messages, MemorySignal.NONE);
+    }
+
+    @Override
+    public void publish(String userId, String sessionId, String agentId,
+                        List<AgentMessage> messages, MemorySignal memorySignal) {
         if (!enabled || rabbitTemplate == null || queueName == null || queueName.isBlank()
             || sessionId == null || sessionId.isBlank() || messages == null || messages.isEmpty()) {
             return;
         }
         try {
-            rabbitTemplate.convertAndSend(queueName, new UserMemoryEvent(userId, sessionId, agentId, messages));
+            rabbitTemplate.convertAndSend(queueName, new UserMemoryEvent(userId, sessionId, agentId, messages, memorySignal));
         } catch (Exception e) {
             log.warn("Failed to publish user memory event sessionId={}: {}", sessionId, e.getMessage());
         }

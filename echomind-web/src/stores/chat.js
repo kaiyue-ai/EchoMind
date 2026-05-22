@@ -7,7 +7,8 @@ export const useChatStore = defineStore('chat', {
     attachments: [],
     loading: false,
     sessionId: null,
-    selectedModel: 'deepseek:deepseek-v4-flash',
+    // 该值表示聊天页跟随当前 Agent 的默认模型；用户手动选择后才覆盖。
+    selectedModel: '__agent_default__',
     selectedAgent: 'default',
     thinkingMsgIndex: -1
   }),

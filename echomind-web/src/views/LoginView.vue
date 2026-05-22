@@ -9,7 +9,7 @@
         </span>
         <div>
           <strong>EchoMind</strong>
-          <span>Agent 控制台</span>
+          <span>Agent Workbench</span>
         </div>
       </div>
 
@@ -41,7 +41,7 @@
           />
         </el-form-item>
         <el-button class="login-submit" type="primary" :loading="loading" @click="submit">
-          {{ mode === 'login' ? '进入控制台' : '创建并进入' }}
+          {{ mode === 'login' ? '进入工作台' : '创建并进入' }}
         </el-button>
       </el-form>
     </section>
@@ -76,7 +76,8 @@ async function submit() {
       await authStore.register(username.value, password.value)
       ElMessage.success('账号已创建')
     }
-    router.replace('/chat')
+    const redirect = router.currentRoute.value.query.redirect
+    router.replace(typeof redirect === 'string' && redirect ? redirect : '/chat')
   } catch (e) {
     ElMessage.error(authStore.error || '操作失败')
   }

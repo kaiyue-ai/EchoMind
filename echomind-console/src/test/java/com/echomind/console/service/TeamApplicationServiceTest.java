@@ -1,6 +1,5 @@
 package com.echomind.console.service;
 
-import com.echomind.agent.team.messaging.TeamMessageBus;
 import com.echomind.agent.team.model.TeamMember;
 import com.echomind.agent.team.runtime.TeamBlackboardService;
 import com.echomind.agent.team.runtime.TeamEventSnapshot;
@@ -36,7 +35,7 @@ class TeamApplicationServiceTest {
     @Test
     void createTeamDelegatesMembersToBlackboardService() {
         TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
-        TeamApplicationService service = new TeamApplicationService(blackboard, mock(TeamMessageBus.class));
+        TeamApplicationService service = new TeamApplicationService(blackboard);
         TeamSnapshot snapshot = teamSnapshot();
         when(blackboard.createTeam(eq("测试团队"), any())).thenReturn(snapshot);
         when(blackboard.listTeams()).thenReturn(List.of(snapshot));
@@ -52,20 +51,20 @@ class TeamApplicationServiceTest {
     @Test
     void createRunReturnsAsyncRunView() {
         TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
-        TeamApplicationService service = new TeamApplicationService(blackboard, mock(TeamMessageBus.class));
-        when(blackboard.createRun("team-1", "策划活动")).thenReturn(runSnapshot(TeamRunStatus.PENDING, null));
+        TeamApplicationService service = new TeamApplicationService(blackboard);
+        when(blackboard.createRun("team-1", "default", "策划活动")).thenReturn(runSnapshot(TeamRunStatus.PENDING, null));
 
         TeamRunView run = service.createRun("team-1", new TeamRunCreateRequest("策划活动"));
 
         assertThat(run.teamId()).isEqualTo("team-1");
         assertThat(run.status()).isEqualTo("PENDING");
-        verify(blackboard).createRun("team-1", "策划活动");
+        verify(blackboard).createRun("team-1", "default", "策划活动");
     }
 
     @Test
     void deleteTeamDelegatesHardDeleteToBlackboardService() {
         TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
-        TeamApplicationService service = new TeamApplicationService(blackboard, mock(TeamMessageBus.class));
+        TeamApplicationService service = new TeamApplicationService(blackboard);
 
         service.deleteTeam("team-1");
 
@@ -75,7 +74,7 @@ class TeamApplicationServiceTest {
     @Test
     void createTeamDelegatesExplicitReviewerMember() {
         TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
-        TeamApplicationService service = new TeamApplicationService(blackboard, mock(TeamMessageBus.class));
+        TeamApplicationService service = new TeamApplicationService(blackboard);
         when(blackboard.createTeam(eq("团队"), any())).thenReturn(teamSnapshot());
 
         service.createTeam(teamCreateRequest("团队"));
@@ -121,8 +120,14 @@ class TeamApplicationServiceTest {
         return new TeamRunSnapshot(
             "run-1",
             "team-1",
+            "default",
             "整理需求",
             status,
+            "COMPLEX",
+            null,
+            null,
+            null,
+            null,
             null,
             null,
             null,
@@ -130,6 +135,10 @@ class TeamApplicationServiceTest {
             null,
             finalOutput,
             "sequenceDiagram",
+            0,
+            0,
+            0,
+            0,
             0,
             List.<TeamStepSnapshot>of(),
             List.<TeamEventSnapshot>of(),

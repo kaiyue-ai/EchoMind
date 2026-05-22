@@ -20,13 +20,6 @@ public class MemoryPersistStage implements PipelineStage {
             : chatMemoryPublisher;
     }
 
-    /** 兼容旧测试和旧装配路径，实际写入由异步发布器承担。 */
-    @Deprecated
-    public MemoryPersistStage(com.echomind.memory.MemoryManager ignoredMemoryManager,
-                              com.echomind.agent.usermemory.UserMemoryPersistPublisher ignoredPublisher) {
-        this(new NoopChatMemoryPersistPublisher());
-    }
-
     @Override
     public int order() { return 50; }
 
@@ -55,7 +48,8 @@ public class MemoryPersistStage implements PipelineStage {
             AgentMessage assistantMessage = AgentMessage.assistant(ctx.getFinalResponse());
             persisted.add(assistantMessage);
         }
-        chatMemoryPublisher.publish(ctx.getUserId(), ctx.getSessionId(), ctx.getAgentId(), List.copyOf(persisted));
+        chatMemoryPublisher.publish(ctx.getUserId(), ctx.getSessionId(), ctx.getAgentId(),
+            List.copyOf(persisted), ctx.getMemorySignal());
         return ctx;
     }
 }

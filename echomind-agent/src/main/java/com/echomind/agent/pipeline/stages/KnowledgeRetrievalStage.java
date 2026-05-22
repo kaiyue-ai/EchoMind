@@ -21,8 +21,11 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class KnowledgeRetrievalStage implements PipelineStage {
 
+    // 知识库服务
     private final AgentKnowledgeService knowledgeService;
+    // 计算向量数据的客户端
     private final EmbeddingClient embeddingClient;
+    // 向量搜索结果数量
     private final int topK;
 
     @Override
@@ -31,6 +34,7 @@ public class KnowledgeRetrievalStage implements PipelineStage {
     }
 
     @Override
+    // 搜素与用户消息相关的向量数据库的三四条消息
     public PipelineContext process(PipelineContext ctx) {
         return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, ctx.getUserMessage())
             .map(vector -> knowledgeService.search(ctx.getAgentId(), ctx.getUserMessage(), vector, topK))

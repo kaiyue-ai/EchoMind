@@ -40,20 +40,21 @@ public class Agent {
      */
     public Flux<String> chatStream(PipelineContext ctx) {
         ctx = pipeline.executeUpTo(ctx, 35);
-        if (ctx.getFinalResponse() != null && ctx.getFinalResponse().startsWith("[Error]")) {
+        if (ctx.hasFailed()) {
             return Flux.just(ctx.getFinalResponse());
         }
         ResultAggregationStage aggStage = pipeline.getStage(ResultAggregationStage.class);
         if (aggStage == null) {
-            return Flux.just("[Error] Result aggregation stage not found");
+            ctx.markFailed("Result aggregation stage not found");
+            return Flux.just(ctx.getFinalResponse());
         }
         StringBuilder finalResponse = new StringBuilder();
         PipelineContext streamCtx = ctx;
         return aggStage.streamResponse(ctx)
             .doOnNext(finalResponse::append)
-            .doOnComplete(() -> {
+            .doFinally(signalType -> {
                 streamCtx.setFinalResponse(finalResponse.toString());
-                if (streamCtx.isMemoryPersistenceEnabled()) {
+                if (signalType == reactor.core.publisher.SignalType.ON_COMPLETE && streamCtx.isMemoryPersistenceEnabled()) {
                     MemoryPersistStage memoryStage = pipeline.getStage(MemoryPersistStage.class);
                     if (memoryStage != null) {
                         try {

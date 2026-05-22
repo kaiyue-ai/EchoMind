@@ -2,12 +2,9 @@ package com.echomind.agent.tool;
 
 import lombok.extern.slf4j.Slf4j;
 
-import java.net.URI;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * 统一工具注册表和匹配器。
@@ -18,14 +15,11 @@ import java.util.regex.Pattern;
 @Slf4j
 public class ToolRouter {
 
-    /** 达到这个分数才认为是明确关键词命中，可以收窄模型候选工具。 */
-    private static final int STRONG_MATCH_SCORE = 4;
-    private static final Pattern HTTP_URL_PATTERN = Pattern.compile(
-        "https?://[^\\s\\p{Z}<>\"'）)】]+",
-        Pattern.CASE_INSENSITIVE
-    );
-
     private final Map<String, Tool> tools = new ConcurrentHashMap<>();
+    private final ToolCompatibilityPolicy compatibilityPolicy = new ToolCompatibilityPolicy();
+    private final ToolDisambiguationPolicy disambiguationPolicy = new ToolDisambiguationPolicy();
+    private final ToolMatchScorer matchScorer = new ToolMatchScorer(compatibilityPolicy);
+    private final ToolParameterExtractor parameterExtractor = new ToolParameterExtractor();
 
     /**
      * 当前可路由工具集合。
@@ -35,33 +29,6 @@ public class ToolRouter {
     protected Collection<Tool> currentTools() {
         return tools.values();
     }
-
-    /** 标签和关键词的中文别名，用于提升自然语言命中率。 */
-    private static final Map<String, List<String>> TAG_ALIASES = Map.of(
-        "write", List.of("写入", "写", "保存", "创建"),
-        "read", List.of("读取", "读", "查看", "阅读"),
-        "search", List.of("搜索", "查询", "查找", "搜一下", "搜", "查一下", "上网查", "联网查"),
-        "file", List.of("文件", "文档"),
-        "weather", List.of("天气", "气温"),
-        "calculate", List.of("计算", "运算", "算"),
-        "lookup", List.of("查询", "查找", "搜索"),
-        "find", List.of("查找", "搜索", "找"),
-        "web", List.of("网络", "网页", "上网", "在线", "链接", "网址", "url", "http", "https", "打开链接")
-    );
-
-    /** 枚举参数的中文别名，用于把“读取/写入/列出”等中文动作映射到 schema 枚举值。 */
-    private static final Map<String, List<String>> ENUM_ALIASES = Map.of(
-        "read", List.of("读取", "读", "查看", "阅读", "read", "看"),
-        "write", List.of("写入", "写", "保存", "创建", "write", "存"),
-        "list", List.of("列出", "列表", "目录", "显示所有", "list", "ls", "看看")
-    );
-
-    /** 描述文本中常见但没有路由价值的英文停用词。 */
-    private static final Set<String> STOP_WORDS = Set.of(
-        "the", "and", "for", "with", "from", "that", "this", "you", "your", "are",
-        "use", "used", "using", "into", "onto", "when", "need", "needs", "tool",
-        "tools", "data", "text", "input", "output", "string", "object", "type"
-    );
 
     public void register(Tool tool) {
         tools.put(tool.name(), tool);
@@ -132,41 +99,26 @@ public class ToolRouter {
      * 未命中时再让模型在完整允许工具集合里智能判断。</p>
      */
     public List<Tool> matchForAgentSkillIds(String userMessage, Collection<?> allowedSkillIds) {
-        List<Tool> allowedTools = filterCompatibleTools(userMessage, listForAgentSkillIds(allowedSkillIds));
-        return matchTools(userMessage, allowedTools);
+        return matchTools(userMessage, listForAgentSkillIds(allowedSkillIds));
     }
 
     /**
      * 按用户消息过滤明显不兼容的工具。
      *
-     * <p>典型场景是 URL：如果消息里是 CSDN/知乎链接，就不能把“只支持牛客”的 MCP
+     * <p>典型场景是 URL：如果消息里是 CSDN/知乎链接，就不能把“只支持特定域名”的 MCP
      * 暴露给模型自由选择。这个过滤只处理确定性的域名边界，剩下仍交给关键词和模型判断。</p>
      */
     public List<Tool> filterCompatibleTools(String userMessage, Collection<Tool> candidateTools) {
-        if (candidateTools == null || candidateTools.isEmpty()) {
-            return List.of();
-        }
-        List<URI> urls = extractHttpUrls(userMessage);
-        if (urls.isEmpty()) {
-            return List.copyOf(candidateTools);
-        }
-        return candidateTools.stream()
-            .filter(tool -> isCompatibleWithUrls(tool, urls))
-            .toList();
+        return compatibilityPolicy.filter(userMessage, candidateTools);
     }
 
     public List<Tool> matchTools(String userMessage, Collection<Tool> candidateTools) {
         if (userMessage == null || userMessage.isBlank()) {
             return List.of();
         }
-        List<Tool> allowedTools = filterCompatibleTools(userMessage, candidateTools);
-        String lowerMsg = userMessage.toLowerCase();
-        return allowedTools.stream()
-            .map(tool -> new ToolMatch(tool, score(lowerMsg, tool)))
-            .filter(match -> match.score() >= STRONG_MATCH_SCORE)
-            .sorted(Comparator.comparingInt(ToolMatch::score).reversed())
-            .map(ToolMatch::tool)
-            .toList();
+        List<Tool> allowedTools = compatibilityPolicy.filter(userMessage, candidateTools);
+        allowedTools = disambiguationPolicy.apply(userMessage, allowedTools);
+        return matchScorer.match(userMessage, allowedTools);
     }
 
     private boolean isAllowedSkill(Tool tool, Collection<?> allowedSkillIds) {
@@ -191,383 +143,11 @@ public class ToolRouter {
         return matchTools(userMessage, currentTools());
     }
 
-    private int score(String lowerMsg, Tool tool) {
-        int score = 0;
-        List<URI> urls = extractHttpUrls(lowerMsg);
-        if (!urls.isEmpty() && !isCompatibleWithUrls(tool, urls)) {
-            return 0;
-        }
-
-        // URL 是强意图：通用网页搜索/读取工具应优先进入候选，域名专用工具只在域名匹配时进入。
-        score += scoreUrlIntent(urls, tool);
-
-        // 1. Skill JAR 显式声明的关键词和别名：最可信，命中后应优先收窄候选。
-        score += scoreTerms(lowerMsg, tool.keywords(), 8);
-        for (var entry : tool.aliases().entrySet()) {
-            score += scoreTerm(lowerMsg, entry.getKey(), 6);
-            score += scoreTerms(lowerMsg, entry.getValue(), 8);
-        }
-
-        // 2. 工具名和标签：来自元数据，适合新 JAR 自描述能力。
-        score += scoreTerm(lowerMsg, tool.name(), 6);
-        score += scoreTerms(lowerMsg, splitIdentifier(tool.name()), 4);
-        for (String tag : tool.tags()) {
-            score += scoreTerm(lowerMsg, tag, 5);
-            score += scoreTerms(lowerMsg, TAG_ALIASES.get(tag.toLowerCase()), 5);
-        }
-
-        // 3. 参数 Schema：字段名、枚举值和字段描述能辅助匹配，但权重低于显式关键词。
-        score += scoreTerms(lowerMsg, schemaTerms(tool.parameterSchema()), 2);
-
-        // 4. 描述文本：只作为弱信号，多处命中才会达到强匹配阈值。
-        score += scoreTerms(lowerMsg, textTerms(tool.description()), 2);
-
-        return score;
-    }
-
-    private int scoreUrlIntent(List<URI> urls, Tool tool) {
-        if (urls == null || urls.isEmpty()) {
-            return 0;
-        }
-        int score = 0;
-        if (isGenericWebTool(tool)) {
-            score += 12;
-        }
-        if (isNowcoderSpecificTool(tool) && urls.stream().anyMatch(this::isNowcoderUrl)) {
-            score += 14;
-        }
-        return score;
-    }
-
-    private boolean isCompatibleWithUrls(Tool tool, List<URI> urls) {
-        if (urls == null || urls.isEmpty()) {
-            return true;
-        }
-        if (isNowcoderSpecificTool(tool)) {
-            return urls.stream().anyMatch(this::isNowcoderUrl);
-        }
-        return true;
-    }
-
-    private boolean isGenericWebTool(Tool tool) {
-        if (tool == null) {
-            return false;
-        }
-        String name = tool.name() == null ? "" : tool.name().toLowerCase();
-        if (name.contains("web-search") || name.contains("web_search") || name.equals("websearch")) {
-            return true;
-        }
-        Set<String> tags = new HashSet<>();
-        for (String tag : tool.tags()) {
-            if (tag != null) {
-                tags.add(tag.toLowerCase());
-            }
-        }
-        return tags.contains("web") && (tags.contains("search") || tags.contains("lookup") || tags.contains("find"));
-    }
-
-    private boolean isNowcoderSpecificTool(Tool tool) {
-        if (tool == null) {
-            return false;
-        }
-        String fingerprint = (
-            safe(tool.name()) + " " +
-            safe(tool.sourceId()) + " " +
-            safe(tool.description()) + " " +
-            schemaText(tool.parameterSchema())
-        ).toLowerCase();
-        return fingerprint.contains("nowcoder") || fingerprint.contains("牛客");
-    }
-
-    private boolean isNowcoderUrl(URI uri) {
-        String host = uri == null ? null : uri.getHost();
-        if (host == null) {
-            return false;
-        }
-        String lowerHost = host.toLowerCase(Locale.ROOT);
-        return lowerHost.equals("nowcoder.com") || lowerHost.endsWith(".nowcoder.com");
-    }
-
-    private List<URI> extractHttpUrls(String message) {
-        if (message == null || message.isBlank()) {
-            return List.of();
-        }
-        List<URI> urls = new ArrayList<>();
-        Matcher matcher = HTTP_URL_PATTERN.matcher(message);
-        while (matcher.find()) {
-            String raw = trimUrlSuffix(matcher.group());
-            try {
-                URI uri = URI.create(raw);
-                String scheme = uri.getScheme();
-                if (scheme != null && ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
-                    && uri.getHost() != null) {
-                    urls.add(uri);
-                }
-            } catch (IllegalArgumentException ignored) {
-                // 非法 URL 只是不参与域名路由，不影响普通关键词匹配。
-            }
-        }
-        return urls;
-    }
-
-    private String trimUrlSuffix(String url) {
-        String trimmed = url == null ? "" : url.trim();
-        while (!trimmed.isEmpty() && "，。！？；;,.!?".indexOf(trimmed.charAt(trimmed.length() - 1)) >= 0) {
-            trimmed = trimmed.substring(0, trimmed.length() - 1);
-        }
-        return trimmed;
-    }
-
-    private String schemaText(Map<String, Object> schema) {
-        if (schema == null || schema.isEmpty()) {
-            return "";
-        }
-        return String.valueOf(schema);
-    }
-
-    private String safe(String value) {
-        return value == null ? "" : value;
-    }
-
-    private int scoreTerms(String lowerMsg, Collection<String> terms, int points) {
-        if (terms == null || terms.isEmpty()) {
-            return 0;
-        }
-        int score = 0;
-        Set<String> seen = new HashSet<>();
-        for (String term : terms) {
-            String normalized = normalizeTerm(term);
-            if (normalized != null && seen.add(normalized) && containsTerm(lowerMsg, normalized)) {
-                score += points;
-            }
-        }
-        return score;
-    }
-
-    private int scoreTerm(String lowerMsg, String term, int points) {
-        String normalized = normalizeTerm(term);
-        return normalized != null && containsTerm(lowerMsg, normalized) ? points : 0;
-    }
-
-    private boolean containsTerm(String lowerMsg, String term) {
-        return lowerMsg.contains(term);
-    }
-
-    private String normalizeTerm(String term) {
-        if (term == null) {
-            return null;
-        }
-        String normalized = term.trim().toLowerCase();
-        if (normalized.isEmpty() || STOP_WORDS.contains(normalized)) {
-            return null;
-        }
-        if (containsCjk(normalized)) {
-            return normalized.length() >= 1 ? normalized : null;
-        }
-        return normalized.length() >= 3 ? normalized : null;
-    }
-
-    private List<String> splitIdentifier(String text) {
-        if (text == null) {
-            return List.of();
-        }
-        List<String> terms = new ArrayList<>();
-        for (String part : text.split("[\\s_\\-./:]+")) {
-            String normalized = normalizeTerm(part);
-            if (normalized != null) {
-                terms.add(normalized);
-            }
-        }
-        return terms;
-    }
-
-    private List<String> textTerms(String text) {
-        if (text == null || text.isBlank()) {
-            return List.of();
-        }
-        List<String> terms = new ArrayList<>();
-        for (String part : text.toLowerCase().split("[\\s，。！？,.!?;；:：()（）\\[\\]{}<>]+")) {
-            String normalized = normalizeTerm(part);
-            if (normalized != null) {
-                terms.add(normalized);
-                if (containsCjk(normalized) && normalized.length() > 2) {
-                    terms.addAll(cjkNgrams(normalized));
-                }
-            }
-        }
-        return terms;
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<String> schemaTerms(Map<String, Object> schema) {
-        if (schema == null || schema.isEmpty()) {
-            return List.of();
-        }
-        List<String> terms = new ArrayList<>();
-        Object propertiesObj = schema.get("properties");
-        if (propertiesObj instanceof Map<?, ?> properties) {
-            for (var entry : properties.entrySet()) {
-                terms.add(String.valueOf(entry.getKey()));
-                Object propObj = entry.getValue();
-                if (propObj instanceof Map<?, ?> propDef) {
-                    Object description = propDef.get("description");
-                    if (description != null) {
-                        terms.addAll(textTerms(String.valueOf(description)));
-                    }
-                    Object enumObj = propDef.get("enum");
-                    if (enumObj instanceof List<?> enumValues) {
-                        for (Object enumValue : enumValues) {
-                            terms.add(String.valueOf(enumValue));
-                            List<String> aliases = ENUM_ALIASES.get(String.valueOf(enumValue).toLowerCase());
-                            if (aliases != null) {
-                                terms.addAll(aliases);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Object schemaDescription = schema.get("description");
-        if (schemaDescription != null) {
-            terms.addAll(textTerms(String.valueOf(schemaDescription)));
-        }
-        return terms;
-    }
-
-    private boolean containsCjk(String text) {
-        for (int i = 0; i < text.length(); i++) {
-            Character.UnicodeScript script = Character.UnicodeScript.of(text.charAt(i));
-            if (script == Character.UnicodeScript.HAN) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private List<String> cjkNgrams(String text) {
-        List<String> terms = new ArrayList<>();
-        for (int size = 2; size <= 3; size++) {
-            for (int i = 0; i + size <= text.length(); i++) {
-                terms.add(text.substring(i, i + size));
-            }
-        }
-        return terms;
-    }
-
-    private record ToolMatch(Tool tool, int score) {}
-
     /**
      * 根据工具参数 schema，从用户消息里抽取可用参数。
      */
-    @SuppressWarnings("unchecked")
     public Map<String, Object> buildParams(Tool tool, String userMessage) {
-        Map<String, Object> params = new HashMap<>();
-        Map<String, Object> schema = tool.parameterSchema();
-        if (schema == null) {
-            params.put("query", userMessage);
-            return params;
-        }
-
-        Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
-        if (properties != null) {
-            for (var entry : properties.entrySet()) {
-                String key = entry.getKey();
-                Map<String, Object> propDef = (Map<String, Object>) entry.getValue();
-
-                // 枚举参数匹配
-                Object enumObj = propDef.get("enum");
-                if (enumObj instanceof List<?> enumValues) {
-                    String matched = matchEnum(userMessage.toLowerCase(), enumValues);
-                    if (matched != null) {
-                        params.put(key, matched);
-                        continue;
-                    }
-                }
-
-                // 文件路径提取
-                if (key.equalsIgnoreCase("path")) {
-                    String extractedPath = extractPath(userMessage);
-                    if (extractedPath != null) {
-                        if (!extractedPath.contains("/") && !extractedPath.contains("\\")
-                            && !extractedPath.contains(":")) {
-                            extractedPath = "./data/" + extractedPath;
-                        }
-                        params.put(key, extractedPath);
-                    } else {
-                        params.put(key, "./data/");
-                    }
-                    continue;
-                }
-
-                // 内容或查询词提取
-                if (key.equalsIgnoreCase("content") || key.equalsIgnoreCase("query")) {
-                    String extracted = extractContent(userMessage);
-                    if (extracted != null) {
-                        params.put(key, extracted);
-                        continue;
-                    }
-                }
-
-                params.put(key, userMessage);
-            }
-        }
-
-        // 确保 required 中的第一个参数一定有值。
-        Object required = schema.get("required");
-        if (required instanceof List && !((List<?>) required).isEmpty()) {
-            String primary = String.valueOf(((List<?>) required).get(0));
-            params.putIfAbsent(primary, userMessage);
-        }
-
-        if (params.isEmpty()) {
-            params.put("query", userMessage);
-        }
-        return params;
-    }
-
-    private String matchEnum(String lowerMsg, List<?> enumValues) {
-        for (Object ev : enumValues) {
-            String val = String.valueOf(ev).toLowerCase();
-            if (lowerMsg.contains(val)) return String.valueOf(ev);
-            List<String> aliases = ENUM_ALIASES.get(val);
-            if (aliases != null) {
-                for (String alias : aliases) {
-                    if (lowerMsg.contains(alias)) return String.valueOf(ev);
-                }
-            }
-        }
-        return null;
-    }
-
-    private String extractPath(String message) {
-        java.util.regex.Pattern pathPattern = java.util.regex.Pattern.compile(
-            "([a-zA-Z]:[\\\\/][.\\w\\\\/-]+|[.~/][.\\w/-]*|[\\w.-]+\\.[a-zA-Z]{1,6})");
-        java.util.regex.Matcher m = pathPattern.matcher(message);
-        return m.find() ? m.group() : null;
-    }
-
-    private String extractContent(String message) {
-        String[] prefixes = {"内容是", "内容为", "content:", "content=", "content：", "内容是：",
-                            "搜索", "搜索：", "query:", "query=", "查询", "查找", "搜索一下",
-                            "内容:", "内容：", "写入:", "写入：", "写入"};
-        for (String prefix : prefixes) {
-            int idx = message.indexOf(prefix);
-            if (idx >= 0) {
-                String after = message.substring(idx + prefix.length()).trim();
-                after = after.replaceFirst("^[：:，,\\s]+", "");
-                if (!after.isEmpty()) return after;
-            }
-        }
-        String[] endMarkers = {"内容", "content", "写入", "搜索"};
-        for (String marker : endMarkers) {
-            int idx = message.lastIndexOf(marker);
-            if (idx >= 0) {
-                String after = message.substring(idx + marker.length()).trim();
-                after = after.replaceFirst("^[是为:：,，\\s]+", "");
-                if (after.length() > 1) return after;
-            }
-        }
-        return null;
+        return parameterExtractor.buildParams(tool, userMessage);
     }
 
     /** 按工具名执行工具。 */

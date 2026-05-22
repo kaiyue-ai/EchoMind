@@ -12,6 +12,10 @@ import java.util.List;
 public interface TeamRunRepository extends JpaRepository<TeamRunEntity, String> {
     List<TeamRunEntity> findByTeamIdOrderByCreatedAtDesc(String teamId);
 
+    List<TeamRunEntity> findByTeamIdAndUserIdOrderByCreatedAtDesc(String teamId, String userId);
+
+    List<TeamRunEntity> findByUserIdOrderByCreatedAtDesc(String userId);
+
     @Modifying
     @Query("delete from TeamRunEntity run where run.teamId = :teamId")
     void deleteByTeamId(@Param("teamId") String teamId);

@@ -1,6 +1,7 @@
 package com.echomind.agent.memory;
 
 import com.echomind.common.model.AgentMessage;
+import com.echomind.common.model.MemorySignal;
 
 import java.util.List;
 
@@ -14,6 +15,12 @@ public class NoopChatMemoryPersistPublisher implements ChatMemoryPersistPublishe
 
     @Override
     public void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
+        // no-op
+    }
+
+    @Override
+    public void publish(String userId, String sessionId, String agentId,
+                        List<AgentMessage> messages, MemorySignal memorySignal) {
         // no-op
     }
 }

@@ -53,7 +53,7 @@ public class CalculatorSkill implements Skill {
         return new SkillMetadata(
             "calculator",
             "1.0.0",
-            "Evaluate mathematical expressions safely",
+            "安全计算数学表达式，支持加减乘除、幂运算、括号和常用函数；适合处理精确算式，不让模型凭感觉心算。",
             Map.of(
                 "properties", Map.of(
                     "expression", Map.of("type", "string", "description", "Math expression to evaluate")

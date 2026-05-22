@@ -1,5 +1,12 @@
 <template>
   <aside class="inspector-panel">
+    <div class="inspector-mobile-head">
+      <strong>运行上下文</strong>
+      <el-button text title="关闭上下文" @click="$emit('close')">
+        <el-icon><Close /></el-icon>
+      </el-button>
+    </div>
+
     <section class="inspector-section">
       <div class="inspector-title">运行上下文</div>
       <div class="metric-grid">
@@ -25,6 +32,10 @@
     <section class="inspector-section">
       <div class="inspector-title">模型</div>
       <el-select :model-value="selectedModel" size="small" class="full-width" @update:model-value="$emit('update:selectedModel', $event)">
+        <el-option label="跟随 Agent 默认模型" value="__agent_default__">
+          <span>跟随 Agent 默认模型</span>
+          <span class="option-tag">{{ agentDefaultModelId || '未配置' }}</span>
+        </el-option>
         <el-option
           v-for="model in models"
           :key="model.providerId + ':' + model.modelName"
@@ -35,6 +46,7 @@
           <span v-if="supportsVision(model)" class="option-tag">VISION</span>
         </el-option>
       </el-select>
+      <p v-if="followsAgentDefaultModel" class="field-hint">当前生效：{{ agentDefaultModelId || '未配置' }}</p>
       <p v-if="hasAttachments && !selectedModelSupportsVision" class="field-warning">
         当前模型不支持图片，请切换到带 VISION 能力的模型。
       </p>
@@ -77,12 +89,14 @@
 
 <script setup>
 import { computed } from 'vue'
+import { Close } from '@element-plus/icons-vue'
 
 const props = defineProps({
   models: { type: Array, default: () => [] },
   agents: { type: Array, default: () => [] },
   skills: { type: Array, default: () => [] },
   servers: { type: Array, default: () => [] },
+  agentDefaultModelId: { type: String, default: '' },
   selectedModel: { type: String, default: '' },
   selectedAgent: { type: String, default: 'default' },
   selectedModelSupportsVision: { type: Boolean, default: false },
@@ -91,12 +105,13 @@ const props = defineProps({
   messageCount: { type: Number, default: 0 }
 })
 
-defineEmits(['update:selectedModel', 'update:selectedAgent', 'newSession'])
+defineEmits(['update:selectedModel', 'update:selectedAgent', 'newSession', 'close'])
 
 const enabledSkills = computed(() => props.skills.filter(skill => skill.state === 'ENABLED'))
 const enabledSkillCount = computed(() => enabledSkills.value.length)
 const runningServers = computed(() => props.servers.filter(server => server.running))
 const runningMcpCount = computed(() => runningServers.value.length)
+const followsAgentDefaultModel = computed(() => !props.selectedModel || props.selectedModel === '__agent_default__')
 
 function supportsVision(model) {
   return Array.isArray(model?.capabilities)

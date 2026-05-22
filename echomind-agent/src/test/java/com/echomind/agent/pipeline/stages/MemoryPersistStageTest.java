@@ -2,8 +2,7 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.memory.ChatMemoryPersistPublisher;
 import com.echomind.agent.pipeline.PipelineContext;
-import com.echomind.common.model.AgentMessage;
-import com.echomind.memory.MemoryManager;
+import com.echomind.common.model.MemorySignal;
 import org.junit.jupiter.api.Test;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -16,7 +15,6 @@ class MemoryPersistStageTest {
 
     @Test
     void skipsPersistenceForInternalPipelineContext() {
-        MemoryManager memoryManager = mock(MemoryManager.class);
         ChatMemoryPersistPublisher publisher = mock(ChatMemoryPersistPublisher.class);
         MemoryPersistStage stage = new MemoryPersistStage(publisher);
         PipelineContext ctx = new PipelineContext();
@@ -28,13 +26,12 @@ class MemoryPersistStageTest {
 
         stage.process(ctx);
 
-        verify(memoryManager, never()).addMessage(any(), any(), any(AgentMessage.class));
         verify(publisher, never()).publish(any(), any(), any(), any());
+        verify(publisher, never()).publish(any(), any(), any(), any(), any());
     }
 
     @Test
     void publishesNormalUserChatWithoutDirectMemoryWrite() {
-        MemoryManager memoryManager = mock(MemoryManager.class);
         ChatMemoryPersistPublisher publisher = mock(ChatMemoryPersistPublisher.class);
         MemoryPersistStage stage = new MemoryPersistStage(publisher);
         PipelineContext ctx = new PipelineContext();
@@ -45,7 +42,6 @@ class MemoryPersistStageTest {
 
         stage.process(ctx);
 
-        verify(memoryManager, never()).addMessage(any(), any(), any(AgentMessage.class));
-        verify(publisher).publish(eq("default"), eq("session-1"), eq("default"), any());
+        verify(publisher).publish(eq("default"), eq("session-1"), eq("default"), any(), eq(MemorySignal.NONE));
     }
 }

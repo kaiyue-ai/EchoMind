@@ -10,4 +10,6 @@ public interface UserAccountRepository extends JpaRepository<UserAccountEntity, 
     Optional<UserAccountEntity> findByUsername(String username);
 
     Optional<UserAccountEntity> findByUserIdAndStatus(String userId, UserAccountStatus status);
+
+    long countByStatus(UserAccountStatus status);
 }

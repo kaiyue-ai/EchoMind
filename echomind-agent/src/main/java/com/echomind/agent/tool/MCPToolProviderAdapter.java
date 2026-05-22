@@ -2,6 +2,8 @@ package com.echomind.agent.tool;
 
 import com.echomind.mcp.tool.ToolProvider;
 import com.echomind.mcp.tool.ToolSpec;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -54,20 +56,23 @@ public class MCPToolProviderAdapter implements Tool {
 
     @Override
     public CompletableFuture<ToolResult> execute(Map<String, Object> parameters) {
+        Context otelContext = Context.current();
         return CompletableFuture.supplyAsync(() -> {
-            long start = System.currentTimeMillis();
-            try {
-            com.echomind.mcp.tool.ToolResult mcpResult = provider.call(spec.name(), parameters);
-                long duration = System.currentTimeMillis() - start;
-                String text = mcpResult.content().stream()
-                    .map(c -> c.text())
-                    .reduce("", (a, b) -> a + b);
-                if (mcpResult.isError()) {
-                    return ToolResult.failure(text, duration);
+            try (Scope ignored = otelContext.makeCurrent()) {
+                long start = System.currentTimeMillis();
+                try {
+                    com.echomind.mcp.tool.ToolResult mcpResult = provider.call(spec.name(), parameters);
+                    long duration = System.currentTimeMillis() - start;
+                    String text = mcpResult.content().stream()
+                        .map(c -> c.text())
+                        .reduce("", (a, b) -> a + b);
+                    if (mcpResult.isError()) {
+                        return ToolResult.failure(text, duration);
+                    }
+                    return ToolResult.success(text, duration);
+                } catch (Exception e) {
+                    return ToolResult.failure(e.getMessage(), System.currentTimeMillis() - start);
                 }
-                return ToolResult.success(text, duration);
-            } catch (Exception e) {
-                return ToolResult.failure(e.getMessage(), System.currentTimeMillis() - start);
             }
         });
     }

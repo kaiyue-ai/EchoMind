@@ -7,10 +7,19 @@ public record ChatMemoryPersistEvent(
     String userId,
     String sessionId,
     String agentId,
-    List<AgentMessage> messages
+    List<AgentMessage> messages,
+    MemorySignal memorySignal
 ) {
+    public ChatMemoryPersistEvent {
+        memorySignal = memorySignal == null ? MemorySignal.NONE : memorySignal;
+    }
+
+    public ChatMemoryPersistEvent(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
+        this(userId, sessionId, agentId, messages, MemorySignal.NONE);
+    }
+
     /** 兼容旧事件，消费端会把 userId 归到 default。 */
     public ChatMemoryPersistEvent(String sessionId, String agentId, List<AgentMessage> messages) {
-        this(null, sessionId, agentId, messages);
+        this(null, sessionId, agentId, messages, MemorySignal.NONE);
     }
 }

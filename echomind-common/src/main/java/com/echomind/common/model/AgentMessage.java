@@ -4,33 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-
-/**
- * <h2>智能体消息</h2>
- * EchoMind 平台中所有智能体（Agent）之间、智能体与用户之间消息传递的统一数据模型。
- *
- * <h3>核心设计</h3>
- * <p>
- * 使用 Java {@code record} 实现不可变消息对象，通过工厂方法创建不同类型的消息。
- * 每条消息包含五个基本元素：角色（区分说话者身份）、内容（消息正文）、
- * 时间戳（精确到纳秒级别的时间标记）、可选的元数据映射，以及可选附件列表。
- * </p>
- *
- * <h3>消息角色语义</h3>
- * <ul>
- *   <li><b>user</b> —— 终端用户发送的消息，代表人类输入的原始意图</li>
- *   <li><b>assistant</b> —— LLM 生成的回复消息，是模型对用户请求的响应</li>
- *   <li><b>system</b> —— 系统级别的提示消息，用于设定对话上下文或行为约束</li>
- *   <li><b>tool</b> —— 工具/技能调用的结果消息，包含工具执行后的返回值</li>
- * </ul>
- *
- * <h3>序列化策略</h3>
- * 通过 {@code @JsonInclude(NON_NULL)} 注解确保 null 字段不会出现在序列化输出中，
- * 减少网络传输负担并保持 JSON 结构的简洁性。
- *
- * @see com.echomind.memory.MemoryManager 用于组织会话消息、摘要和相关历史
- * @see com.echomind.agent.Agent 使用本消息进行上下文构建的智能体实体
- */
+// 这是agent消息的包装类,能够包装用户消息,agent消息,工具调用的消息
 @JsonInclude(JsonInclude.Include.NON_NULL) // 加了这个注解，为null的字段不会出现在序列化输出中
 public record AgentMessage(
     /**

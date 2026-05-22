@@ -50,6 +50,9 @@ COPY --from=build /app/skills/skill-calculator/target/*-jar-with-dependencies.ja
 COPY --from=build /app/skills/skill-websearch/target/*-jar-with-dependencies.jar /app/skills/
 COPY --from=build /app/skills/skill-markdown-code/target/*-jar-with-dependencies.jar /app/skills/
 COPY --from=build /app/skills/skill-date-query/target/*-jar-with-dependencies.jar /app/skills/
+COPY --from=build /app/skills/skill-github-intel/target/*-jar-with-dependencies.jar /app/skills/
+COPY --from=build /app/skills/skill-railway-12306/target/*-jar-with-dependencies.jar /app/skills/
+COPY --from=build /app/skills/skill-travel-planning/target/*-jar-with-dependencies.jar /app/skills/
 RUN chown -R echomind:echomind /app
 
 # 切换到非 root 用户

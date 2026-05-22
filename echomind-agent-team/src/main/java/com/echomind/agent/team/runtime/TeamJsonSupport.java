@@ -2,7 +2,10 @@ package com.echomind.agent.team.runtime;
 
 import com.echomind.agent.team.model.PlannedStep;
 import com.echomind.agent.team.model.ReviewerDecision;
+import com.echomind.agent.team.model.StepReflection;
 import com.echomind.agent.team.state.ReviewerAction;
+import com.echomind.agent.team.state.TeamRiskLevel;
+import com.echomind.agent.team.state.TeamTaskLevel;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -28,6 +31,7 @@ public class TeamJsonSupport {
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
     private static final TypeReference<List<PlannedStep>> PLANNED_STEPS = new TypeReference<>() {};
     private static final TypeReference<List<Map<String, Object>>> MAP_LIST = new TypeReference<>() {};
+    private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() {};
 
     public String toJson(Object value) {
         try {
@@ -69,6 +73,22 @@ public class TeamJsonSupport {
         return parsePlanText(raw);
     }
 
+    public TeamTaskLevel parseTaskLevel(String raw, int stepCount) {
+        String json = extractJson(raw);
+        if (json != null) {
+            try {
+                JsonNode root = MAPPER.readTree(json);
+                String value = root.path("taskLevel").asText("");
+                if (!value.isBlank()) {
+                    return TeamTaskLevel.valueOf(value.trim().toUpperCase());
+                }
+            } catch (Exception e) {
+                log.warn("Failed to parse task level, falling back to step count: {}", e.getMessage());
+            }
+        }
+        return stepCount <= 1 ? TeamTaskLevel.SIMPLE : TeamTaskLevel.COMPLEX;
+    }
+
     public ReviewerDecision parseDecision(String raw) {
         String json = extractJson(raw);
         if (json == null) {
@@ -79,18 +99,57 @@ public class TeamJsonSupport {
             ReviewerAction action = parseAction(root.path("action").asText(null));
             List<String> questions = nodeTextList(root.get("questions"));
             List<String> retryStepIds = nodeTextList(root.get("retryStepIds"));
+            List<String> affectedStepIds = nodeTextList(root.get("affectedStepIds"));
             return new ReviewerDecision(
                 action,
                 text(root, "reason", ""),
                 questions,
                 retryStepIds,
+                affectedStepIds,
                 text(root, "revisionInstructions", ""),
-                text(root, "finalReport", "")
+                text(root, "finalReport", ""),
+                parseStepReflections(root.get("stepReflections"))
             );
         } catch (IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalArgumentException("Reviewer response JSON is invalid: " + e.getMessage(), e);
+        }
+    }
+
+    public TeamConflictReport parseConflictReport(String raw) {
+        String json = extractJson(raw);
+        if (json == null) {
+            throw new IllegalArgumentException("ConflictDetector response must be valid JSON");
+        }
+        try {
+            JsonNode root = MAPPER.readTree(json);
+            return new TeamConflictReport(
+                root.path("hasConflict").asBoolean(false),
+                nodeTextList(root.get("conflictFields")),
+                nodeTextList(root.get("affectedStepIds")),
+                text(root, "reason", ""),
+                text(root, "normalizationAdvice", "")
+            );
+        } catch (Exception e) {
+            throw new IllegalArgumentException("ConflictDetector response JSON is invalid: " + e.getMessage(), e);
+        }
+    }
+
+    public TeamExecutorSelectionDecision parseExecutorSelectionDecision(String raw) {
+        String json = extractJson(raw);
+        if (json == null) {
+            throw new IllegalArgumentException("AgentSelector response must be valid JSON");
+        }
+        try {
+            JsonNode root = MAPPER.readTree(json);
+            return new TeamExecutorSelectionDecision(
+                text(root, "memberKey", ""),
+                text(root, "agentId", ""),
+                text(root, "reason", "")
+            );
+        } catch (Exception e) {
+            throw new IllegalArgumentException("AgentSelector response JSON is invalid: " + e.getMessage(), e);
         }
     }
 
@@ -135,12 +194,23 @@ public class TeamJsonSupport {
             if (title.isBlank()) {
                 title = "子任务 " + index;
             }
+            String clientStepId = stringValue(value.get("clientStepId"));
+            if (clientStepId.isBlank()) {
+                clientStepId = stringValue(value.get("id"));
+            }
+            if (clientStepId.isBlank()) {
+                clientStepId = "step-" + index;
+            }
             List<String> capabilities = objectToStringList(value.get("requiredCapabilities"));
             String acceptance = stringValue(value.get("acceptanceCriteria"));
+            List<String> dependsOn = objectToStringList(value.get("dependsOn"));
+            TeamRiskLevel riskLevel = parseRiskLevel(stringValue(value.get("riskLevel")));
+            String riskReason = stringValue(value.get("riskReason"));
             if (description.isBlank()) {
                 description = title;
             }
-            steps.add(new PlannedStep(title, description, capabilities, acceptance));
+            steps.add(new PlannedStep(clientStepId, title, description, capabilities, acceptance,
+                dependsOn, riskLevel, riskReason));
             index++;
         }
         return steps;
@@ -162,11 +232,13 @@ public class TeamJsonSupport {
                 cleaned = trimmed.replaceFirst("^\\d+[.)]\\s+", "").trim();
             }
             if (cleaned != null && !cleaned.isBlank()) {
-                steps.add(new PlannedStep(cleaned, cleaned, inferCapabilities(cleaned), ""));
+                steps.add(new PlannedStep("step-" + (steps.size() + 1), cleaned, cleaned,
+                    inferCapabilities(cleaned), "", List.of(), TeamRiskLevel.LOW, ""));
             }
         }
         if (steps.isEmpty()) {
-            steps.add(new PlannedStep("执行任务", raw.trim(), inferCapabilities(raw), ""));
+            steps.add(new PlannedStep("step-1", "执行任务", raw.trim(), inferCapabilities(raw), "",
+                List.of(), TeamRiskLevel.LOW, ""));
         }
         return steps;
     }
@@ -205,6 +277,30 @@ public class TeamJsonSupport {
         return List.copyOf(values);
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, StepReflection> parseStepReflections(JsonNode node) {
+        if (node == null || node.isNull() || !node.isObject()) {
+            return Map.of();
+        }
+        Map<String, StepReflection> reflections = new java.util.LinkedHashMap<>();
+        node.fields().forEachRemaining(entry -> {
+            try {
+                Map<String, Object> value = MAPPER.convertValue(entry.getValue(), OBJECT_MAP);
+                StepReflection reflection = new StepReflection(
+                    objectToStringList(value.get("failedCriteria")),
+                    stringValue(value.get("reviewReason")),
+                    stringValue(value.get("revisionInstructions")),
+                    stringValue(value.get("previousOutputSummary")),
+                    objectToStringList(value.get("avoidRepeating"))
+                );
+                reflections.put(entry.getKey(), reflection);
+            } catch (IllegalArgumentException e) {
+                log.warn("Failed to parse step reflection for {}: {}", entry.getKey(), e.getMessage());
+            }
+        });
+        return Map.copyOf(reflections);
+    }
+
     private String text(JsonNode root, String field, String fallback) {
         String value = root.path(field).asText(null);
         return value == null ? (fallback == null ? "" : fallback) : value;
@@ -220,14 +316,14 @@ public class TeamJsonSupport {
             for (Object item : iterable) {
                 String text = stringValue(item);
                 if (!text.isBlank()) {
-                    result.add(text.toLowerCase());
+                    result.add(text);
                 }
             }
         } else {
             String text = stringValue(value);
             for (String part : text.split("[,，、\\s]+")) {
                 if (!part.isBlank()) {
-                    result.add(part.toLowerCase());
+                    result.add(part);
                 }
             }
         }
@@ -250,6 +346,17 @@ public class TeamJsonSupport {
             tags.add("general");
         }
         return List.copyOf(tags);
+    }
+
+    private TeamRiskLevel parseRiskLevel(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return TeamRiskLevel.LOW;
+        }
+        try {
+            return TeamRiskLevel.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return TeamRiskLevel.LOW;
+        }
     }
 
     private String stringValue(Object value) {

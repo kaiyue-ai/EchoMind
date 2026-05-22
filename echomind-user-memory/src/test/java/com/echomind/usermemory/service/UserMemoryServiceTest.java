@@ -1,7 +1,9 @@
 package com.echomind.usermemory.service;
 
 import com.echomind.common.model.AgentMessage;
+import com.echomind.common.model.MemorySignal;
 import com.echomind.common.model.UserMemoryEvent;
+import com.echomind.common.model.UserMemoryFlushEvent;
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryEntry;
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.util.ArrayList;
@@ -43,10 +46,11 @@ class UserMemoryServiceTest {
         UserMemoryService service = fixture.service();
 
         for (int i = 1; i <= 4; i++) {
-            service.process(event("user-a", "session-" + i, "消息-" + i));
+            service.ingest(event("user-a", "session-" + i, "消息-" + i));
         }
 
         verify(fixture.analyzer, never()).analyze(anyString(), anyString(), any(), any());
+        verify(fixture.rabbitTemplate, never()).convertAndSend(anyString(), org.mockito.ArgumentMatchers.<Object>any());
         assertThat(fixture.buffer).hasSize(4);
     }
 
@@ -71,8 +75,9 @@ class UserMemoryServiceTest {
         UserMemoryService service = fixture.service();
 
         for (int i = 1; i <= 5; i++) {
-            service.process(event("user-a", "session-" + i, "消息-" + i));
+            service.ingest(event("user-a", "session-" + i, "消息-" + i));
         }
+        service.flush(new UserMemoryFlushEvent("user-a", "turns"));
 
         verify(fixture.analyzer).analyze(eq("user:user-a"), eq("旧画像"), any(), any());
         verify(fixture.vectorStore).deleteEntry("user:user-a", "old-fact");
@@ -93,12 +98,26 @@ class UserMemoryServiceTest {
         UserMemoryService service = fixture.service();
 
         for (int i = 1; i <= 5; i++) {
-            service.process(event("user-a", "session-" + i, "消息-" + i));
+            service.ingest(event("user-a", "session-" + i, "消息-" + i));
         }
+        service.flush(new UserMemoryFlushEvent("user-a", "turns"));
 
         verify(fixture.vectorStore, never()).save(any(UserMemoryEntry.class));
         verify(fixture.snapshotStore, never()).save(any(UserProfileSnapshot.class));
         assertThat(fixture.buffer).hasSize(5);
+    }
+
+    @Test
+    void importantSignalPublishesFlushBeforeBatchIsFull() {
+        Fixture fixture = fixture();
+        UserMemoryService service = fixture.service();
+
+        service.ingest(new UserMemoryEvent("user-a", "session-1", "agent-1",
+            List.of(AgentMessage.user("以后注释用中文")), new MemorySignal(true, 0.92, "长期偏好")));
+
+        verify(fixture.rabbitTemplate).convertAndSend(eq("echomind.user-memory.flush.requests"),
+            org.mockito.ArgumentMatchers.<UserMemoryFlushEvent>argThat(event ->
+                event.userId().equals("user-a") && event.reason().equals("important-signal")));
     }
 
     private UserMemoryEvent event(String userId, String sessionId, String content) {
@@ -111,6 +130,7 @@ class UserMemoryServiceTest {
     @SuppressWarnings("unchecked")
     private Fixture fixture() {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
         ListOperations<String, String> listOps = mock(ListOperations.class);
         HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
@@ -168,9 +188,10 @@ class UserMemoryServiceTest {
             embeddingClient,
             properties,
             redis,
-            mapper
+            mapper,
+            rabbitTemplate
         );
-        return new Fixture(service, vectorStore, snapshotStore, analyzer, embeddingClient, buffer);
+        return new Fixture(service, vectorStore, snapshotStore, analyzer, embeddingClient, rabbitTemplate, buffer);
     }
 
     private record Fixture(
@@ -179,6 +200,7 @@ class UserMemoryServiceTest {
         UserProfileSnapshotStore snapshotStore,
         UserMemoryBatchAnalyzer analyzer,
         EmbeddingClient embeddingClient,
+        RabbitTemplate rabbitTemplate,
         List<String> buffer
     ) {
     }

@@ -8,7 +8,7 @@
         </div>
         <div class="workspace-header-actions">
           <el-button v-if="sessionId" text type="danger" title="删除当前会话" @click="deleteCurrentSession">
-            删除
+            <el-icon><Delete /></el-icon>
           </el-button>
           <el-button text title="新建会话" @click="newSession">
             <el-icon><Plus /></el-icon>
@@ -40,11 +40,13 @@
       :agents="agents"
       :skills="skills"
       :servers="servers"
+      :agent-default-model-id="currentAgentDefaultModelId"
       :selected-model-supports-vision="selectedModelSupportsVision"
       :has-attachments="attachments.length > 0"
       :session-id="sessionId"
       :message-count="messages.length"
       @new-session="newSession"
+      @close="uiStore.setInspectorOpen(false)"
     />
   </div>
 </template>
@@ -54,7 +56,7 @@ import { computed, inject, nextTick, onActivated, onMounted, ref, watch } from '
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
-import { Plus, Setting } from '@element-plus/icons-vue'
+import { Delete, Plus, Setting } from '@element-plus/icons-vue'
 import api from '../api'
 import ChatComposer from '../components/chat/ChatComposer.vue'
 import InspectorPanel from '../components/chat/InspectorPanel.vue'
@@ -97,16 +99,32 @@ const { skills } = storeToRefs(skillStore)
 const { servers } = storeToRefs(mcpStore)
 const { inspectorOpen } = storeToRefs(uiStore)
 
+const AGENT_DEFAULT_MODEL = '__agent_default__'
 const fallbackModelId = 'deepseek:deepseek-v4-flash'
 
+const currentAgent = computed(() => {
+  return agents.value.find(agent => agent.agentId === selectedAgent.value)
+})
+
+const currentAgentDefaultModelId = computed(() => {
+  return currentAgent.value?.defaultModelId || currentAgent.value?.modelId || fallbackModelId
+})
+
+const followsAgentDefaultModel = computed(() => !selectedModel.value || selectedModel.value === AGENT_DEFAULT_MODEL)
+
+const effectiveModelId = computed(() => {
+  return followsAgentDefaultModel.value ? currentAgentDefaultModelId.value : selectedModel.value
+})
+
 const selectedModelSpec = computed(() => {
-  const [providerId, modelName] = (selectedModel.value || '').split(':')
+  const [providerId, modelName] = (effectiveModelId.value || '').split(':')
   return models.value.find(model => model.providerId === providerId && model.modelName === modelName)
 })
 
 const selectedModelSupportsVision = computed(() => supportsVision(selectedModelSpec.value))
 
 onMounted(async () => {
+  collapseInspectorOnCompactViewport()
   await Promise.allSettled([
     modelStore.loadModels(),
     agentStore.loadAgents(),
@@ -159,33 +177,37 @@ function sendMessage() {
   nextTick(() => messageListRef.value?.scrollToBottom())
 
   let firstToken = true
-  api.chat.stream(
-    selectedAgent.value,
-    msg || '请理解这张图片。',
-    sessionId.value,
-    selectedModel.value,
-    outgoingAttachments,
-    (token) => {
-      if (firstToken) {
-        messages.value.splice(thinkingMsgIndex.value, 1, { role: 'assistant', content: token })
-        firstToken = false
-      } else {
-        const idx = messages.value.length - 1
-        if (idx >= 0 && messages.value[idx].role === 'assistant') {
-          messages.value[idx] = { ...messages.value[idx], content: messages.value[idx].content + token }
+  try {
+    api.chat.stream(
+      selectedAgent.value,
+      msg || '请理解这张图片。',
+      sessionId.value,
+      followsAgentDefaultModel.value ? null : selectedModel.value,
+      outgoingAttachments,
+      (token) => {
+        if (firstToken) {
+          messages.value.splice(thinkingMsgIndex.value, 1, { role: 'assistant', content: token })
+          firstToken = false
+        } else {
+          const idx = messages.value.length - 1
+          if (idx >= 0 && messages.value[idx].role === 'assistant') {
+            messages.value[idx] = { ...messages.value[idx], content: messages.value[idx].content + token }
+          }
+        }
+        nextTick(() => messageListRef.value?.scrollToBottom())
+      },
+      () => finishStream(),
+      (error) => handleStreamError(error),
+      (meta) => {
+        if (meta.sessionId && meta.sessionId !== sessionId.value) {
+          sessionId.value = meta.sessionId
+          router.replace({ path: '/chat', query: { sessionId: meta.sessionId } })
         }
       }
-      nextTick(() => messageListRef.value?.scrollToBottom())
-    },
-    () => finishStream(),
-    async (error) => handleStreamError(error, msg, outgoingAttachments),
-    (meta) => {
-      if (meta.sessionId && meta.sessionId !== sessionId.value) {
-        sessionId.value = meta.sessionId
-        router.replace({ path: '/chat', query: { sessionId: meta.sessionId } })
-      }
-    }
-  )
+    )
+  } catch (error) {
+    handleStreamError(error)
+  }
 }
 
 function finishStream() {
@@ -202,42 +224,15 @@ function finishStream() {
   nextTick(() => messageListRef.value?.scrollToBottom())
 }
 
-async function handleStreamError(error, msg, outgoingAttachments) {
-  console.error('Stream error, falling back to sync:', error)
-  if (outgoingAttachments.length > 0) {
-    messages.value.splice(thinkingMsgIndex.value, 1, {
-      role: 'system',
-      content: '请求失败: ' + (error.message || '当前模型无法处理图片')
-    })
-    finishStream()
-    return
-  }
-
-  try {
-    const res = await api.chat.sendSync(
-      selectedAgent.value,
-      msg || '请理解这张图片。',
-      sessionId.value,
-      selectedModel.value,
-      outgoingAttachments
-    )
-    sessionId.value = res.sessionId
-    if (res.sessionId) {
-      router.replace({ path: '/chat', query: { sessionId: res.sessionId } })
-    }
-    messages.value.splice(thinkingMsgIndex.value, 1, {
-      role: 'assistant',
-      content: res.response || '(empty response)',
-      skillResults: res.skillResults
-    })
-  } catch (e2) {
-    messages.value.splice(thinkingMsgIndex.value, 1, {
-      role: 'system',
-      content: '请求失败: ' + (e2.response?.data?.error || e2.message)
-    })
-  } finally {
-    finishStream()
-  }
+function handleStreamError(error) {
+  console.error('Stream error:', error)
+  const idx = thinkingMsgIndex.value
+  const replaceIndex = idx >= 0 && idx < messages.value.length ? idx : messages.value.length
+  messages.value.splice(replaceIndex, idx >= 0 && idx < messages.value.length ? 1 : 0, {
+    role: 'system',
+    content: '请求失败: ' + (error.message || '请稍后重试')
+  })
+  finishStream()
 }
 
 function supportsVision(model) {
@@ -246,19 +241,21 @@ function supportsVision(model) {
 }
 
 function ensureSelectedModel() {
-  if (!models.value.length) {
-    if (!selectedModel.value) {
-      selectedModel.value = fallbackModelId
-    }
+  if (followsAgentDefaultModel.value || !models.value.length) {
     return
   }
   const available = models.value.map(model => `${model.providerId}:${model.modelName}`)
   if (available.includes(selectedModel.value)) return
 
-  const preferred = models.value.find(model => model.providerId === 'deepseek' && model.modelName === 'deepseek-v4-flash')
-  const defaultModel = models.value.find(model => model.isDefault === true || model.default === true)
-  const nextModel = preferred || defaultModel || models.value[0]
-  selectedModel.value = `${nextModel.providerId}:${nextModel.modelName}`
+  selectedModel.value = AGENT_DEFAULT_MODEL
+}
+
+function collapseInspectorOnCompactViewport() {
+  if (typeof window !== 'undefined'
+    && window.matchMedia('(max-width: 1180px)').matches
+    && inspectorOpen.value) {
+    uiStore.setInspectorOpen(false)
+  }
 }
 
 async function uploadImage(file) {

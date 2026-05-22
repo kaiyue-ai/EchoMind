@@ -2,6 +2,7 @@ package com.echomind.console.auth;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -180,6 +181,47 @@ class AuthApplicationServiceTest {
         assertThat(filter.shouldNotFilter(login)).isTrue();
         assertThat(filter.shouldNotFilter(register)).isTrue();
         assertThat(filter.shouldNotFilter(me)).isFalse();
+    }
+
+    @Test
+    void authFilterStoresJwtUserInThreadLocalAndClearsAfterRequest() throws Exception {
+        UserAccountRepository repository = inMemoryUserAccountRepository();
+        PasswordHasher passwordHasher = new PasswordHasher();
+        AuthTokenService tokenService = new AuthTokenService("test-secret", 3600);
+        AuthApplicationService service = service(repository, passwordHasher, tokenService);
+        AuthApplicationService.AuthResponse login =
+            service.register(new AuthApplicationService.AuthRequest("ThreadUser", "s3cret"));
+        AuthFilter filter = new AuthFilter(tokenService, service);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/auth/me");
+        request.addHeader("Authorization", "Bearer " + login.token());
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        jakarta.servlet.FilterChain chain = (servletRequest, servletResponse) ->
+            assertThat(AuthContext.current())
+                .isEqualTo(new AuthUser(login.user().userId(), "threaduser", true))
+        ;
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(AuthContext.current()).isEqualTo(AuthUser.DEFAULT);
+    }
+
+    @Test
+    void authFilterRejectsInvalidJwtAndDoesNotLeakThreadLocal() throws Exception {
+        AuthFilter filter = new AuthFilter(
+            new AuthTokenService("test-secret", 3600),
+            service(inMemoryUserAccountRepository(), new PasswordHasher(), new AuthTokenService("test-secret", 3600))
+        );
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/auth/me");
+        request.addHeader("Authorization", "Bearer invalid.token.value");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, (servletRequest, servletResponse) -> {
+        });
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getContentAsString()).contains("Invalid or expired token");
+        assertThat(AuthContext.current()).isEqualTo(AuthUser.DEFAULT);
     }
 
     private static AuthApplicationService service(UserAccountRepository repository,

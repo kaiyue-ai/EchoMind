@@ -24,11 +24,11 @@
             <span class="eyebrow">Teams</span>
             <h2>团队</h2>
           </div>
-          <span class="count-pill">{{ teams.length }}</span>
+          <span class="count-pill">{{ teamList.length }}</span>
         </div>
         <div v-loading="loading" class="team-list">
           <button
-            v-for="team in teams"
+            v-for="team in teamList"
             :key="team.teamId"
             :class="['team-select-card', { active: selectedTeam?.teamId === team.teamId }]"
             type="button"
@@ -42,10 +42,10 @@
             </span>
             <span class="team-id">{{ team.teamId?.slice(0, 8) }}</span>
             <span class="tag-row">
-              <el-tag v-for="role in team.roles" :key="role" size="small">{{ role }}</el-tag>
+              <el-tag v-for="role in team.roles" :key="role" size="small">{{ roleLabel(role) }}</el-tag>
             </span>
           </button>
-          <div v-if="!loading && teams.length === 0" class="empty-note">暂未创建团队</div>
+          <div v-if="!loading && teamList.length === 0" class="empty-note">暂未创建团队</div>
         </div>
       </aside>
 
@@ -58,8 +58,8 @@
             </div>
           </div>
           <div class="member-grid">
-            <ResourceCard v-for="member in selectedTeam.members" :key="member.role + member.agentId" :meta="member.agentId">
-              <template #title>{{ member.role }}</template>
+            <ResourceCard v-for="member in selectedMembers" :key="member.role + member.agentId" :meta="member.agentId">
+              <template #title>{{ roleLabel(member.role) }}</template>
               <div class="detail-list">
                 <span>{{ member.agentName || member.agentId }}</span>
               </div>
@@ -74,17 +74,45 @@
               启动 Run
             </el-button>
           </div>
+          <div class="team-run-history" v-loading="loadingRuns">
+            <div class="section-head compact">
+              <div>
+                <span class="eyebrow">Team Runs</span>
+                <h3>团队运行历史</h3>
+              </div>
+              <span class="count-pill">{{ teamRunList.length }}</span>
+            </div>
+            <div v-if="teamRunList.length" class="team-run-list">
+              <button
+                v-for="run in teamRunList"
+                :key="run.runId"
+                :class="['team-run-item', { active: currentRun?.runId === run.runId }]"
+                type="button"
+                @click="openRun(run)"
+              >
+                <span class="run-history-title">{{ run.task }}</span>
+                <span class="run-history-meta">
+                  {{ runStatusLabel(run.status) }} · {{ taskLevelLabel(run.taskLevel) }} · {{ formatTime(run.updatedAt || run.createdAt) }}
+                </span>
+              </button>
+            </div>
+            <div v-else class="empty-note">当前用户在该团队下还没有 Run</div>
+          </div>
         </section>
 
         <section v-if="currentRun" class="run-board">
           <ResourceCard>
             <template #title>Run 状态</template>
             <template #actions>
-              <StatusBadge :tone="statusTone(currentRun.status)">{{ currentRun.status }}</StatusBadge>
+              <StatusBadge :tone="statusTone(currentRun.status)">{{ runStatusLabel(currentRun.status) }}</StatusBadge>
             </template>
             <h2 class="run-title">{{ currentRun.task }}</h2>
             <div class="detail-list">
               <span>ID: {{ currentRun.runId }}</span>
+              <span>任务等级: {{ taskLevelLabel(currentRun.taskLevel) }}</span>
+              <span>当前状态: {{ runStatusLabel(currentRun.status) }}</span>
+              <span>整体重规划: {{ currentRun.fullReplanCount || 0 }} 次</span>
+              <span>局部重规划: {{ currentRun.partialReplanCount || 0 }} 次</span>
             </div>
             <template #footer>
               <el-button v-if="currentRun.finalOutput" size="small" @click="scrollToFinalReport">
@@ -105,6 +133,50 @@
             </div>
           </el-alert>
 
+          <ResourceCard title="管控中心">
+            <div class="control-center-grid">
+              <div class="control-block">
+                <strong>调度与拦截</strong>
+                <span>线程池异步执行，前端每 0.25 秒轮询黑板。</span>
+                <span>{{ stepRetryText }} · 整体重规划: {{ currentRun.fullReplanCount || 0 }} 次 · 局部重规划: {{ currentRun.partialReplanCount || 0 }} 次</span>
+                <span>Planner 仲裁: {{ currentRun.arbitrationCount || 0 }} 次</span>
+              </div>
+              <div class="control-block">
+                <strong>AgentSelector</strong>
+                <template v-if="selectorEvents.length">
+                  <span v-for="event in selectorEvents" :key="event.id">
+                    {{ selectionSourceLabel(eventPayload(event)?.decisionSource) }}
+                    {{ selectionName(eventPayload(event), event.actorAgentId) }}：
+                    {{ eventPayload(event)?.reason || event.message }}
+                  </span>
+                </template>
+                <span v-else>等待 Step 分配后展示模型选择理由。</span>
+              </div>
+              <div class="control-block">
+                <strong>RiskPolicy</strong>
+                <template v-if="riskEvents.length">
+                  <span v-for="event in riskEvents" :key="event.id">
+                    {{ event.message }}
+                  </span>
+                </template>
+                <span v-else>等待 Planner 生成 Step 后展示风险裁决。</span>
+              </div>
+              <div class="control-block">
+                <strong>冲突检测</strong>
+                <span v-if="conflictReport">
+                  {{ conflictReport.hasConflict ? '发现冲突' : '未发现冲突' }}：{{ conflictReport.reason || '暂无说明' }}
+                </span>
+                <span v-if="conflictReport?.normalizationAdvice">统一建议：{{ conflictReport.normalizationAdvice }}</span>
+                <span v-else-if="!conflictReport">等待 MergeAgent 聚合后检测。</span>
+              </div>
+              <div class="control-block">
+                <strong>Planner 仲裁</strong>
+                <span v-if="arbitrationText">{{ arbitrationText }}</span>
+                <span v-else>仅在 ConflictDetector 发现冲突时触发。</span>
+              </div>
+            </div>
+          </ResourceCard>
+
           <ResourceCard v-if="currentRun.finalOutput" ref="finalReportRef" :class="currentRun.status === 'FAILED' ? 'failed-panel' : 'final-panel'">
             <template #title>{{ currentRun.status === 'FAILED' ? 'Reviewer 拦截原因' : '最终报告' }}</template>
             <template #actions>
@@ -121,14 +193,25 @@
                   <template #default="{ row }">
                     <div class="step-title">{{ row.title }}</div>
                     <div class="step-desc">{{ row.description }}</div>
+                    <div v-if="row.dependsOnStepIds?.length" class="step-meta">
+                      依赖: {{ dependencyLabels(row.dependsOnStepIds).join('、') }}
+                    </div>
+                    <div class="step-meta">
+                      风险: {{ riskLabel(row.riskLevel) }} · 质量: {{ qualityLabel(row.qualityStatus) }}
+                    </div>
                   </template>
                 </el-table-column>
                 <el-table-column label="Executor" width="140">
-                  <template #default="{ row }">{{ row.assignedAgentId || '-' }}</template>
+                  <template #default="{ row }">
+                    <div>{{ selectionName(stepSelection(row), row.assignedAgentId || '-') }}</div>
+                    <div v-if="stepSelection(row)?.decisionSource" class="step-meta">
+                      {{ selectionSourceLabel(stepSelection(row)?.decisionSource) }}
+                    </div>
+                  </template>
                 </el-table-column>
                 <el-table-column label="状态" width="130">
                   <template #default="{ row }">
-                    <el-tag :type="stepStatusType(row.status)" size="small">{{ row.status }}</el-tag>
+                    <el-tag :type="stepStatusType(row.status)" size="small">{{ stepStatusLabel(row.status) }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="retryCount" label="重试" width="70" />
@@ -139,12 +222,19 @@
               <div v-if="planReview" class="review-block">
                 <strong>规划审查</strong>
                 <p>{{ planReview.reason }}</p>
-                <el-tag size="small">{{ planReview.action }}</el-tag>
+                <el-tag size="small">{{ actionLabel(planReview.action) }}</el-tag>
               </div>
               <div v-if="resultReview" class="review-block">
-                <strong>结果审查</strong>
+                <strong>全局终审</strong>
                 <p>{{ resultReview.reason }}</p>
-                <el-tag size="small">{{ resultReview.action }}</el-tag>
+                <el-tag size="small">{{ actionLabel(resultReview.action) }}</el-tag>
+              </div>
+              <div v-if="hasReflections" class="review-block">
+                <strong>Reflexion 重试上下文</strong>
+                <div v-for="step in reflectedSteps" :key="step.stepId" class="reflection-item">
+                  <span>{{ step.stepIndex }}. {{ step.title }}</span>
+                  <small>{{ parseJson(step.reflectionJson)?.reviewReason || step.lastReviewReason || step.revisionInstructions }}</small>
+                </div>
               </div>
               <div v-if="!planReview && !resultReview" class="empty-note">等待 Reviewer 审查</div>
             </ResourceCard>
@@ -154,7 +244,7 @@
             <ResourceCard title="事件时间线">
               <el-timeline>
                 <el-timeline-item v-for="event in currentRun.events || []" :key="event.id" :timestamp="formatTime(event.createdAt)">
-                  <div class="event-title">{{ event.type }}</div>
+                  <div class="event-title">{{ eventTypeLabel(event.type) }}</div>
                   <div class="event-msg">{{ event.message }}</div>
                 </el-timeline-item>
               </el-timeline>
@@ -162,7 +252,7 @@
 
             <ResourceCard title="协作流程">
               <div v-if="currentRun.mermaidDiagram" ref="mermaidRef" class="mermaid-container"></div>
-              <div v-else class="empty-note">Run 完成后生成 Mermaid</div>
+              <div v-else class="empty-note">Run 启动后实时生成中文 DAG 流程图</div>
             </ResourceCard>
           </div>
         </section>
@@ -179,16 +269,18 @@
         <el-form-item label="团队名称">
           <el-input v-model="newTeam.name" placeholder="活动策划团队" />
         </el-form-item>
-        <el-alert v-if="availableAgents.length === 0" title="暂无可选 Agent，请先创建 Agent。" type="warning" show-icon :closable="false" />
+        <el-alert v-if="agentList.length === 0" title="暂无可选 Agent，请先创建 Agent。" type="warning" show-icon :closable="false" />
         <div class="team-member-editor">
           <div v-for="(member, index) in newTeam.members" :key="index" class="member-editor-row">
             <el-select v-model="member.role" placeholder="角色">
-              <el-option label="PLANNER" value="PLANNER" />
-              <el-option label="EXECUTOR" value="EXECUTOR" />
-              <el-option label="REVIEWER" value="REVIEWER" />
+              <el-option label="Planner 规划器" value="PLANNER" />
+              <el-option label="Executor 执行者" value="EXECUTOR" />
+              <el-option label="Reviewer 全局审查" value="REVIEWER" />
+              <el-option label="SubReviewer 子评审" value="SUB_REVIEWER" />
+              <el-option label="MergeAgent 聚合" value="MERGER" />
             </el-select>
             <el-select v-model="member.agentId" placeholder="Agent" filterable>
-              <el-option v-for="agent in availableAgents" :key="agent.agentId" :label="agent.name" :value="agent.agentId" />
+              <el-option v-for="agent in agentList" :key="agent.agentId" :label="agent.name" :value="agent.agentId" />
             </el-select>
             <el-select v-model="member.capabilityTags" multiple filterable allow-create default-first-option placeholder="能力标签">
               <el-option v-for="tag in capabilityOptions" :key="tag" :label="tag" :value="tag" />
@@ -229,21 +321,51 @@ const {
   deleting,
   executing,
   resuming,
+  loadingRuns,
+  teamRuns,
   error
 } = storeToRefs(teamStore)
 const { agents: availableAgents } = storeToRefs(agentStore)
 
 const showCreateTeamDrawer = ref(false)
 const mermaidRef = ref(null)
+const lastRenderedMermaid = ref('')
 const finalReportRef = ref(null)
 const clarificationAnswer = ref('')
 const capabilityOptions = ['planning', 'search', 'weather', 'venue', 'budget', 'coordination', 'review', 'report', 'general']
 const newTeam = ref(defaultTeam())
+const teamList = computed(() => teams.value || [])
+const teamRunList = computed(() => teamRuns.value || [])
+const agentList = computed(() => availableAgents.value || [])
+const selectedMembers = computed(() => selectedTeam.value?.members || [])
 const planReview = computed(() => parseJson(currentRun.value?.planReviewJson))
 const resultReview = computed(() => parseJson(currentRun.value?.resultReviewJson))
+const selectorEvents = computed(() => latestEvents('AGENT_SELECTED', 4))
+const selectionByStepId = computed(() => {
+  const map = {}
+  for (const event of currentRun.value?.events || []) {
+    if (event.type === 'AGENT_SELECTED' && event.stepId) {
+      map[event.stepId] = eventPayload(event)
+    }
+  }
+  return map
+})
+const riskEvents = computed(() => latestEvents('RISK_DECIDED', 6))
+const conflictReport = computed(() => parseJson(currentRun.value?.conflictReportJson))
+const arbitrationInfo = computed(() => parseJson(currentRun.value?.arbitrationJson))
+const arbitrationText = computed(() => {
+  const value = arbitrationInfo.value?.arbitration
+  return typeof value === 'string' ? value : ''
+})
+const stepRetryText = computed(() => {
+  const retries = (currentRun.value?.steps || []).map(step => step.retryCount || 0)
+  return retries.length ? `最高已重试 ${Math.max(...retries)} 次` : '尚未发生 Step 重试'
+})
+const reflectedSteps = computed(() => (currentRun.value?.steps || []).filter(step => step.reflectionJson || step.lastReviewReason))
+const hasReflections = computed(() => reflectedSteps.value.length > 0)
 const createTeamDisabled = computed(() => {
   return !newTeam.value.name.trim()
-    || availableAgents.value.length === 0
+    || agentList.value.length === 0
     || !newTeam.value.members.some(member => member.role === 'REVIEWER')
     || newTeam.value.members.some(member => !member.agentId || !member.role)
 })
@@ -276,9 +398,9 @@ function defaultTeam() {
 }
 
 function normalizeTeamAgents() {
-  const firstAgent = availableAgents.value[0]?.agentId || 'default'
+  const firstAgent = agentList.value[0]?.agentId || 'default'
   for (const member of newTeam.value.members) {
-    if (!availableAgents.value.some(agent => agent.agentId === member.agentId)) {
+    if (!agentList.value.some(agent => agent.agentId === member.agentId)) {
       member.agentId = firstAgent
     }
   }
@@ -290,14 +412,22 @@ function openCreateTeamDrawer() {
   showCreateTeamDrawer.value = true
 }
 
-function selectTeam(team) {
+async function selectTeam(team) {
   teamStore.selectTeam(team)
+  try {
+    const runs = await teamStore.loadTeamRuns(team.teamId)
+    if (runs.length > 0) {
+      await teamStore.openRun(runs[0])
+    }
+  } catch (e) {
+    ElMessage.error('加载团队运行历史失败: ' + (e.response?.data?.error || e.message))
+  }
 }
 
 function fillDemoTask() {
-  taskInput.value = '策划一场60人户外团建活动，要求考虑场地、天气风险、预算和人员协调，最终给出可执行方案。'
-  if (!selectedTeam.value && teams.value.length > 0) {
-    teamStore.selectTeam(teams.value[0])
+  taskInput.value = '在重庆策划一场60人户外团建活动，要求考虑场地、天气风险、预算和人员协调，最终给出可执行方案。'
+  if (!selectedTeam.value && teamList.value.length > 0) {
+    teamStore.selectTeam(teamList.value[0])
   }
 }
 
@@ -330,9 +460,18 @@ async function confirmDeleteTeam(team) {
 async function executeTask() {
   try {
     await teamStore.executeTask(taskInput.value)
+    await teamStore.loadTeamRuns(selectedTeam.value.teamId).catch(() => {})
     ElMessage.success('Run 已启动')
   } catch (e) {
     ElMessage.error('执行失败: ' + (e.response?.data?.error || e.message))
+  }
+}
+
+async function openRun(run) {
+  try {
+    await teamStore.openRun(run)
+  } catch (e) {
+    ElMessage.error('打开 Run 失败: ' + (e.response?.data?.error || e.message))
   }
 }
 
@@ -349,7 +488,7 @@ async function resumeRun() {
 function addExecutor() {
   newTeam.value.members.push({
     role: 'EXECUTOR',
-    agentId: availableAgents.value[0]?.agentId || 'default',
+    agentId: agentList.value[0]?.agentId || 'default',
     capabilityTags: ['general'],
     sortOrder: (newTeam.value.members.length + 1) * 10
   })
@@ -374,10 +513,167 @@ function stepStatusType(status) {
   return 'info'
 }
 
+function roleLabel(role) {
+  return {
+    PLANNER: 'Planner 规划器',
+    EXECUTOR: 'Executor 执行者',
+    REVIEWER: 'Reviewer 全局审查',
+    SUB_REVIEWER: 'SubReviewer 子评审',
+    MERGER: 'MergeAgent 聚合'
+  }[role] || role
+}
+
+function runStatusLabel(status) {
+  return {
+    PENDING: '待调度',
+    PLANNING: '规划中',
+    PLAN_REVIEWING: '规划审查中',
+    EXECUTING: '执行中',
+    MERGING: '聚合中',
+    RESULT_REVIEWING: '结果审查中',
+    GLOBAL_REVIEWING: '全局终审中',
+    NEEDS_CLARIFICATION: '等待用户澄清',
+    COMPLETED: '已完成',
+    FAILED: '失败'
+  }[status] || status
+}
+
+function stepStatusLabel(status) {
+  return {
+    PENDING: '待开始',
+    BLOCKED: '等待依赖',
+    READY: '可执行',
+    ASSIGNED: '已分配',
+    RUNNING: '执行中',
+    COMPLETED: '已完成',
+    FAILED: '失败',
+    RETRYING: '重试中',
+    SUPERSEDED: '已替换'
+  }[status] || status
+}
+
+function taskLevelLabel(level) {
+  return {
+    SIMPLE: '简易任务',
+    COMPLEX: '复杂任务'
+  }[level] || level || '-'
+}
+
+function riskLabel(level) {
+  return {
+    LOW: '低风险',
+    HIGH: '高风险'
+  }[level] || '低风险'
+}
+
+function qualityLabel(status) {
+  return {
+    PENDING: '待校验',
+    PASSED: '已通过',
+    RETRY_REQUESTED: '要求重试',
+    FLAWED_ACCEPTED: '瑕疵放行'
+  }[status] || status || '待校验'
+}
+
+function actionLabel(action) {
+  return {
+    CONTINUE: '通过',
+    RETRY: '重试执行',
+    PARTIAL_REPLAN: '局部重规划',
+    REPLAN: '整体重规划',
+    ASK_CLARIFICATION: '请求澄清',
+    FAILED: '判定失败'
+  }[action] || action
+}
+
+function eventTypeLabel(type) {
+  return {
+    RUN_CREATED: 'Run 已创建',
+    RUN_RESUMED: 'Run 已恢复',
+    PLAN_STARTED: '开始规划',
+    PLAN_CREATED: '计划已生成',
+    PLAN_REVIEW_STARTED: '开始规划审查',
+    PLAN_REVIEWED: '规划审查完成',
+    SIMPLE_DRAFT_STARTED: '简易初稿开始',
+    SIMPLE_DRAFT_COMPLETED: '简易初稿完成',
+    TEAM_CONTROL_STARTED: '管控中心启动',
+    AGENT_SELECTED: 'Agent 已选择',
+    RISK_DECIDED: '风险裁决完成',
+    STEP_BLOCKED: 'Step 等待依赖',
+    STEP_READY: 'Step 可执行',
+    STEP_ASSIGNED: 'Step 已分配',
+    STEP_STARTED: 'Step 开始执行',
+    STEP_COMPLETED: 'Step 执行完成',
+    STEP_FAILED: 'Step 执行失败',
+    STEP_RETRY_STARTED: 'Step 开始重试',
+    STEP_RETRY_COMPLETED: 'Step 重试完成',
+    STEP_SUB_REVIEW_STARTED: '子评审开始',
+    STEP_SUB_REVIEWED: '子评审完成',
+    STEP_REFLECTION_RECORDED: '写入 Reflexion',
+    MERGE_STARTED: '开始聚合',
+    MERGE_COMPLETED: '聚合完成',
+    CONFLICT_DETECTED: '冲突检测完成',
+    ARBITRATION_STARTED: 'Planner 仲裁开始',
+    ARBITRATION_COMPLETED: 'Planner 仲裁完成',
+    RESULT_REVIEW_STARTED: '开始结果审查',
+    RESULT_REVIEWED: '结果审查完成',
+    GLOBAL_REVIEW_STARTED: '开始全局终审',
+    GLOBAL_REVIEWED: '全局终审完成',
+    RETRY_REQUESTED: '要求重试',
+    REPLAN_REQUESTED: '要求重规划',
+    CLARIFICATION_REQUESTED: '请求澄清',
+    STEP_TIMEOUT: 'Step 超时熔断',
+    RUN_TIMEOUT: 'Run 超时熔断',
+    RUN_COMPLETED: 'Run 已完成',
+    RUN_FAILED: 'Run 失败'
+  }[type] || type
+}
+
+function latestEvents(type, limit = 5) {
+  return (currentRun.value?.events || [])
+    .filter(event => event.type === type)
+    .slice(-limit)
+    .reverse()
+}
+
+function eventPayload(event) {
+  return parseJson(event?.payloadJson)
+}
+
+function stepSelection(row) {
+  return selectionByStepId.value[row?.stepId]
+}
+
+function selectionSourceLabel(source) {
+  return {
+    MODEL: '模型自主决策',
+    RULE_FALLBACK: '规则兜底',
+    RULE_SCORE: '规则候选'
+  }[source] || '模型决策'
+}
+
+function selectionName(selection, fallback = 'Executor') {
+  if (!selection) return fallback
+  const tags = selection.capabilityTags?.length ? `（${selection.capabilityTags.join('、')}）` : ''
+  return `${selection.agentName || selection.agentId || fallback}${tags}`
+}
+
+function dependencyLabels(ids = []) {
+  const steps = currentRun.value?.steps || []
+  return ids.map(id => {
+    const step = steps.find(item => item.stepId === id || item.clientStepId === id)
+    return step ? `${step.stepIndex}. ${step.title}` : id
+  })
+}
+
 function parseJson(value) {
   if (!value) return null
   try {
-    return JSON.parse(value)
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value
+    if (typeof parsed === 'string' && (parsed.trim().startsWith('{') || parsed.trim().startsWith('['))) {
+      return JSON.parse(parsed)
+    }
+    return parsed
   } catch (e) {
     return null
   }
@@ -409,14 +705,17 @@ function downloadFinalReport() {
 
 async function renderMermaid() {
   if (!mermaidRef.value || !currentRun.value?.mermaidDiagram) return
+  if (lastRenderedMermaid.value === currentRun.value.mermaidDiagram && mermaidRef.value.innerHTML) return
   try {
     const mermaid = await import('mermaid')
     mermaid.default.initialize({ startOnLoad: false, theme: 'dark' })
-    const id = 'team-flow-' + currentRun.value.runId.replaceAll('-', '')
+    const id = 'team-flow-' + currentRun.value.runId.replaceAll('-', '') + '-' + Date.now()
     const { svg } = await mermaid.default.render(id, currentRun.value.mermaidDiagram)
     mermaidRef.value.innerHTML = svg
+    lastRenderedMermaid.value = currentRun.value.mermaidDiagram
   } catch (e) {
     mermaidRef.value.innerHTML = '<pre>' + currentRun.value.mermaidDiagram + '</pre>'
+    lastRenderedMermaid.value = currentRun.value.mermaidDiagram
   }
 }
 </script>

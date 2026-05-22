@@ -2,12 +2,13 @@
 # Run from docs/harness:
 #   make check
 #   make test
+#   make migrate
 #   make deploy
 
 ROOT := ../..
 WEB := $(ROOT)/echomind-web
 
-.PHONY: help setup test lint check backend-build frontend-build package deploy status logs health clean
+.PHONY: help setup test lint check backend-build frontend-build package migrate deploy status logs health clean
 
 help:
 	@echo "Targets:"
@@ -18,7 +19,8 @@ help:
 	@echo "  backend-build   Compile backend without running tests"
 	@echo "  frontend-build  Build Vue frontend"
 	@echo "  package         Package backend runtime artifacts"
-	@echo "  deploy          Build runtime images and restart backend/frontend"
+	@echo "  migrate         Apply MySQL migrations to an existing Docker volume"
+	@echo "  deploy          Build runtime images, apply migrations, and restart app plus Trace stack"
 	@echo "  status          Show Docker Compose service status"
 	@echo "  logs            Tail backend/frontend logs"
 	@echo "  health          Call backend health endpoint"
@@ -45,8 +47,11 @@ check: backend-build frontend-build
 package:
 	cd $(ROOT) && mvn.cmd -q clean package "-Dmaven.test.skip=true"
 
+migrate:
+	cd $(ROOT) && powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\apply-mysql-migrations.ps1 -StartDatabase
+
 deploy:
-	cd $(ROOT) && powershell -NoProfile -Command "$$vars = @('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL','ALIYUN_BAILIAN_API_KEY','ALIYUN_BAILIAN_BASE_URL','AccessKeyID','AccessKeySecret','ALIBABA_CLOUD_ACCESS_KEY_ID','ALIBABA_CLOUD_ACCESS_KEY_SECRET'); foreach ($$name in $$vars) { $$value = [Environment]::GetEnvironmentVariable($$name, 'Machine'); if (-not $$value) { $$value = [Environment]::GetEnvironmentVariable($$name, 'User') }; if ($$value) { Set-Item -Path \"Env:$$name\" -Value $$value } }; if (-not $$env:DEEPSEEK_API_KEY -and $$env:ANTHROPIC_API_KEY) { $$env:DEEPSEEK_API_KEY = $$env:ANTHROPIC_API_KEY }; if (-not $$env:DEEPSEEK_BASE_URL -and $$env:ANTHROPIC_BASE_URL) { $$env:DEEPSEEK_BASE_URL = $$env:ANTHROPIC_BASE_URL }; mvn.cmd -q clean package '-Dmaven.test.skip=true'; docker build -f Dockerfile.runtime -t ai-agent-backend:latest .; docker build -f .\echomind-web\Dockerfile.runtime -t ai-agent-frontend:latest .\echomind-web; docker compose up -d --remove-orphans backend frontend"
+	cd $(ROOT) && powershell -NoProfile -ExecutionPolicy Bypass -Command "$$vars = @('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL','ALIYUN_BAILIAN_API_KEY','ALIYUN_BAILIAN_BASE_URL','AccessKeyID','AccessKeySecret','ALIBABA_CLOUD_ACCESS_KEY_ID','ALIBABA_CLOUD_ACCESS_KEY_SECRET','Webhook'); foreach ($$name in $$vars) { $$value = [Environment]::GetEnvironmentVariable($$name, 'Machine'); if (-not $$value) { $$value = [Environment]::GetEnvironmentVariable($$name, 'User') }; if ($$value) { Set-Item -Path \"Env:$$name\" -Value $$value } }; if (-not $$env:DEEPSEEK_API_KEY -and $$env:ANTHROPIC_API_KEY) { $$env:DEEPSEEK_API_KEY = $$env:ANTHROPIC_API_KEY }; if (-not $$env:DEEPSEEK_BASE_URL -and $$env:ANTHROPIC_BASE_URL) { $$env:DEEPSEEK_BASE_URL = $$env:ANTHROPIC_BASE_URL }; mvn.cmd -q clean package '-Dmaven.test.skip=true'; docker build -f Dockerfile.runtime -t ai-agent-backend:latest .; docker build -f .\echomind-web\Dockerfile.runtime -t ai-agent-frontend:latest .\echomind-web; docker build -f .\echomind-web\Dockerfile.admin-runtime -t ai-agent-admin-frontend:latest .\echomind-web; & .\scripts\apply-mysql-migrations.ps1 -StartDatabase; docker compose up -d --remove-orphans backend frontend admin-frontend otel-collector jaeger"
 
 status:
 	cd $(ROOT) && docker compose ps
