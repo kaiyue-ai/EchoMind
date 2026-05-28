@@ -9,6 +9,7 @@ export const useAdminAuthStore = defineStore('adminAuth', {
     error: null
   }),
   getters: {
+    hasSession: (state) => Boolean(state.token),
     isAuthenticated: (state) => Boolean(state.token && state.user?.authenticated)
   },
   actions: {

@@ -148,9 +148,11 @@ import { LineChart, PieChart } from 'echarts/charts'
 import { CanvasRenderer } from 'echarts/renderers'
 import { Bell, Box, Coin, DataLine, Document, Lock, Refresh, Timer, User, Warning } from '@element-plus/icons-vue'
 import api from '../api/admin'
+import { useUiStore } from '../stores/ui'
 
 echarts.use([GridComponent, LegendComponent, TooltipComponent, LineChart, PieChart, CanvasRenderer])
 
+const uiStore = useUiStore()
 const loading = ref(false)
 const error = ref('')
 const range = ref('7d')
@@ -184,6 +186,7 @@ const rangeLabel = computed(() => {
 
 watch(range, refresh)
 watch([modelDistribution, tokenTrend], renderCharts, { deep: true })
+watch(() => uiStore.theme, renderCharts)
 
 onMounted(async () => {
   await refresh()
@@ -223,6 +226,7 @@ function renderCharts() {
 function renderModelChart() {
   if (!modelPieRef.value) return
   modelChart = modelChart || echarts.init(modelPieRef.value)
+  const theme = chartTheme()
   modelChart.setOption({
     color: ['#3b82f6', '#18c7b3', '#a56bff', '#ffae30', '#36f08a', '#ff647c'],
     tooltip: {
@@ -234,8 +238,8 @@ function renderModelChart() {
       radius: ['48%', '74%'],
       center: ['50%', '52%'],
       avoidLabelOverlap: true,
-      itemStyle: { borderColor: '#122133', borderWidth: 2 },
-      label: { color: '#dce8f7', formatter: '{b}' },
+      itemStyle: { borderColor: theme.panel, borderWidth: 2 },
+      label: { color: theme.text, formatter: '{b}' },
       data: modelDistribution.value.map(model => ({
         name: model.modelId || 'unknown',
         value: Number(model.totalTokens || 0)
@@ -247,6 +251,7 @@ function renderModelChart() {
 function renderTrendChart() {
   if (!trendChartRef.value) return
   trendChart = trendChart || echarts.init(trendChartRef.value)
+  const theme = chartTheme()
   const dates = tokenTrend.value.map(point => point.date)
   trendChart.setOption({
     color: ['#3b82f6', '#18c7b3', '#a56bff'],
@@ -254,20 +259,20 @@ function renderTrendChart() {
     legend: {
       top: 4,
       right: 8,
-      textStyle: { color: '#c5d3e2' },
+      textStyle: { color: theme.muted },
       data: ['Prompt', 'Completion', 'Total']
     },
     grid: { left: 52, right: 22, top: 48, bottom: 36 },
     xAxis: {
       type: 'category',
       data: dates,
-      axisLine: { lineStyle: { color: '#314157' } },
-      axisLabel: { color: '#c5d3e2' }
+      axisLine: { lineStyle: { color: theme.axis } },
+      axisLabel: { color: theme.muted }
     },
     yAxis: {
       type: 'value',
-      axisLabel: { color: '#c5d3e2', formatter: value => formatCompact(value) },
-      splitLine: { lineStyle: { color: '#26364c' } }
+      axisLabel: { color: theme.muted, formatter: value => formatCompact(value) },
+      splitLine: { lineStyle: { color: theme.grid } }
     },
     series: [
       smoothLine('Prompt', tokenTrend.value.map(point => point.promptTokens)),
@@ -275,6 +280,12 @@ function renderTrendChart() {
       smoothLine('Total', tokenTrend.value.map(point => point.totalTokens), true)
     ]
   })
+}
+
+function chartTheme() {
+  return uiStore.isLightTheme
+    ? { text: '#172033', muted: '#6b7890', axis: '#d9e2ef', grid: '#e7edf6', panel: '#ffffff' }
+    : { text: '#dce8f7', muted: '#c5d3e2', axis: '#314157', grid: '#26364c', panel: '#122133' }
 }
 
 function smoothLine(name, data, area = false) {

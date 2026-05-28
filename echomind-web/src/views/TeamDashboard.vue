@@ -50,58 +50,89 @@
       </aside>
 
       <main class="team-main">
-        <section v-if="selectedTeam" class="panel-block">
-          <div class="section-head">
+        <section v-if="selectedTeam" class="panel-block team-overview-panel">
+          <div class="section-head team-overview-head">
             <div>
               <span class="eyebrow">Selected Team</span>
               <h2>{{ selectedTeam.name }}</h2>
+              <span class="section-subtitle">
+                {{ selectedMembers.length }} 名成员 · {{ teamRunList.length }} 个 Run
+              </span>
             </div>
+            <StatusBadge tone="primary">{{ selectedMembers.length }} Members</StatusBadge>
           </div>
-          <div class="member-grid">
-            <ResourceCard v-for="member in selectedMembers" :key="member.role + member.agentId" :meta="member.agentId">
-              <template #title>{{ roleLabel(member.role) }}</template>
-              <div class="detail-list">
-                <span>{{ member.agentName || member.agentId }}</span>
+          <div class="team-overview-layout">
+            <div class="team-members-panel">
+              <div class="section-head compact">
+                <div>
+                  <span class="eyebrow">Members</span>
+                  <h3>成员与能力</h3>
+                </div>
               </div>
-              <div class="tag-row">
-                <el-tag v-for="tag in member.capabilityTags" :key="tag" size="small" effect="plain">{{ tag }}</el-tag>
+              <div class="member-grid">
+                <ResourceCard v-for="member in selectedMembers" :key="member.role + member.agentId" :meta="member.agentId">
+                  <template #title>{{ roleLabel(member.role) }}</template>
+                  <div class="detail-list">
+                    <span>{{ member.agentName || member.agentId }}</span>
+                  </div>
+                  <div class="tag-row">
+                    <el-tag v-for="tag in member.capabilityTags" :key="tag" size="small" effect="plain">{{ tag }}</el-tag>
+                  </div>
+                </ResourceCard>
               </div>
-            </ResourceCard>
-          </div>
-          <div class="task-composer">
-            <el-input v-model="taskInput" type="textarea" :rows="3" placeholder="输入团队任务..." />
-            <el-button type="primary" :loading="executing" :disabled="!taskInput.trim()" @click="executeTask">
-              启动 Run
-            </el-button>
-          </div>
-          <div class="team-run-history" v-loading="loadingRuns">
-            <div class="section-head compact">
-              <div>
-                <span class="eyebrow">Team Runs</span>
-                <h3>团队运行历史</h3>
-              </div>
-              <span class="count-pill">{{ teamRunList.length }}</span>
             </div>
-            <div v-if="teamRunList.length" class="team-run-list">
-              <button
-                v-for="run in teamRunList"
-                :key="run.runId"
-                :class="['team-run-item', { active: currentRun?.runId === run.runId }]"
-                type="button"
-                @click="openRun(run)"
-              >
-                <span class="run-history-title">{{ run.task }}</span>
-                <span class="run-history-meta">
-                  {{ runStatusLabel(run.status) }} · {{ taskLevelLabel(run.taskLevel) }} · {{ formatTime(run.updatedAt || run.createdAt) }}
-                </span>
-              </button>
+
+            <div class="team-task-panel">
+              <div class="section-head compact">
+                <div>
+                  <span class="eyebrow">Task</span>
+                  <h3>启动任务</h3>
+                </div>
+              </div>
+              <div class="task-composer">
+                <el-input v-model="taskInput" type="textarea" :rows="3" placeholder="输入团队任务..." />
+                <el-button type="primary" :loading="executing" :disabled="!taskInput.trim()" @click="executeTask">
+                  启动 Run
+                </el-button>
+              </div>
+              <div class="team-run-history" v-loading="loadingRuns">
+                <div class="section-head compact">
+                  <div>
+                    <span class="eyebrow">Team Runs</span>
+                    <h3>运行历史</h3>
+                  </div>
+                  <span class="count-pill">{{ teamRunList.length }}</span>
+                </div>
+                <div v-if="teamRunList.length" class="team-run-list">
+                  <button
+                    v-for="run in teamRunList"
+                    :key="run.runId"
+                    :class="['team-run-item', { active: currentRun?.runId === run.runId }]"
+                    type="button"
+                    @click="openRun(run)"
+                  >
+                    <span class="run-history-title">{{ run.task }}</span>
+                    <span class="run-history-meta">
+                      {{ runStatusLabel(run.status) }} · {{ taskLevelLabel(run.taskLevel) }} · {{ formatTime(run.updatedAt || run.createdAt) }}
+                    </span>
+                  </button>
+                </div>
+                <div v-else class="empty-note">当前用户在该团队下还没有 Run</div>
+              </div>
             </div>
-            <div v-else class="empty-note">当前用户在该团队下还没有 Run</div>
           </div>
         </section>
 
         <section v-if="currentRun" class="run-board">
-          <ResourceCard>
+          <div class="run-board-head">
+            <div>
+              <span class="eyebrow">Current Run</span>
+              <h2>运行详情</h2>
+            </div>
+            <StatusBadge :tone="statusTone(currentRun.status)">{{ runStatusLabel(currentRun.status) }}</StatusBadge>
+          </div>
+
+          <ResourceCard class="run-status-card">
             <template #title>Run 状态</template>
             <template #actions>
               <StatusBadge :tone="statusTone(currentRun.status)">{{ runStatusLabel(currentRun.status) }}</StatusBadge>
@@ -133,7 +164,7 @@
             </div>
           </el-alert>
 
-          <ResourceCard title="管控中心">
+          <ResourceCard title="管控中心" class="run-control-card">
             <div class="control-center-grid">
               <div class="control-block">
                 <strong>调度与拦截</strong>
@@ -185,7 +216,7 @@
             <MarkdownRenderer :content="currentRun.finalOutput" />
           </ResourceCard>
 
-          <div class="board-grid">
+          <div class="board-grid run-insight-grid">
             <ResourceCard title="Step 进度">
               <el-table :data="currentRun.steps || []" size="small" class="full-width">
                 <el-table-column prop="stepIndex" label="#" width="50" />
@@ -240,19 +271,19 @@
             </ResourceCard>
           </div>
 
-          <div class="board-grid">
-            <ResourceCard title="事件时间线">
+          <div class="board-grid run-artifact-grid">
+            <ResourceCard title="协作流程" class="mermaid-card">
+              <div v-if="currentRun.mermaidDiagram" ref="mermaidRef" class="mermaid-container"></div>
+              <div v-else class="empty-note">Run 启动后实时生成中文 DAG 流程图</div>
+            </ResourceCard>
+
+            <ResourceCard title="事件时间线" class="timeline-card">
               <el-timeline>
                 <el-timeline-item v-for="event in currentRun.events || []" :key="event.id" :timestamp="formatTime(event.createdAt)">
                   <div class="event-title">{{ eventTypeLabel(event.type) }}</div>
                   <div class="event-msg">{{ event.message }}</div>
                 </el-timeline-item>
               </el-timeline>
-            </ResourceCard>
-
-            <ResourceCard title="协作流程">
-              <div v-if="currentRun.mermaidDiagram" ref="mermaidRef" class="mermaid-container"></div>
-              <div v-else class="empty-note">Run 启动后实时生成中文 DAG 流程图</div>
             </ResourceCard>
           </div>
         </section>
@@ -308,9 +339,11 @@ import StatusBadge from '../components/workbench/StatusBadge.vue'
 import MarkdownRenderer from '../components/chat/MarkdownRenderer.vue'
 import { useAgentStore } from '../stores/agents'
 import { useTeamStore } from '../stores/team'
+import { useUiStore } from '../stores/ui'
 
 const teamStore = useTeamStore()
 const agentStore = useAgentStore()
+const uiStore = useUiStore()
 const {
   teams,
   selectedTeam,
@@ -369,6 +402,7 @@ const createTeamDisabled = computed(() => {
     || !newTeam.value.members.some(member => member.role === 'REVIEWER')
     || newTeam.value.members.some(member => !member.agentId || !member.role)
 })
+const mermaidTheme = computed(() => uiStore.isLightTheme ? 'default' : 'dark')
 
 onMounted(async () => {
   await Promise.allSettled([teamStore.loadTeams(), agentStore.loadAgents(true)])
@@ -381,6 +415,12 @@ onBeforeUnmount(() => {
 
 watch(availableAgents, normalizeTeamAgents)
 watch(() => currentRun.value?.mermaidDiagram, async () => {
+  await nextTick()
+  renderMermaid()
+})
+
+watch(mermaidTheme, async () => {
+  lastRenderedMermaid.value = ''
   await nextTick()
   renderMermaid()
 })
@@ -530,7 +570,6 @@ function runStatusLabel(status) {
     PLAN_REVIEWING: '规划审查中',
     EXECUTING: '执行中',
     MERGING: '聚合中',
-    RESULT_REVIEWING: '结果审查中',
     GLOBAL_REVIEWING: '全局终审中',
     NEEDS_CLARIFICATION: '等待用户澄清',
     COMPLETED: '已完成',
@@ -615,8 +654,6 @@ function eventTypeLabel(type) {
     CONFLICT_DETECTED: '冲突检测完成',
     ARBITRATION_STARTED: 'Planner 仲裁开始',
     ARBITRATION_COMPLETED: 'Planner 仲裁完成',
-    RESULT_REVIEW_STARTED: '开始结果审查',
-    RESULT_REVIEWED: '结果审查完成',
     GLOBAL_REVIEW_STARTED: '开始全局终审',
     GLOBAL_REVIEWED: '全局终审完成',
     RETRY_REQUESTED: '要求重试',
@@ -705,17 +742,40 @@ function downloadFinalReport() {
 
 async function renderMermaid() {
   if (!mermaidRef.value || !currentRun.value?.mermaidDiagram) return
-  if (lastRenderedMermaid.value === currentRun.value.mermaidDiagram && mermaidRef.value.innerHTML) return
+  const renderKey = `${mermaidTheme.value}:${currentRun.value.mermaidDiagram}`
+  if (lastRenderedMermaid.value === renderKey && mermaidRef.value.innerHTML) return
   try {
     const mermaid = await import('mermaid')
-    mermaid.default.initialize({ startOnLoad: false, theme: 'dark' })
+    mermaid.default.initialize({
+      startOnLoad: false,
+      theme: mermaidTheme.value,
+      flowchart: {
+        htmlLabels: true,
+        nodeSpacing: 14,
+        rankSpacing: 22,
+        padding: 4,
+        useMaxWidth: true
+      },
+      themeVariables: {
+        fontSize: '11px',
+        primaryTextColor: mermaidTheme.value === 'default' ? '#172033' : '#f8fafc',
+        lineColor: mermaidTheme.value === 'default' ? '#64748b' : '#cbd5e1'
+      }
+    })
     const id = 'team-flow-' + currentRun.value.runId.replaceAll('-', '') + '-' + Date.now()
     const { svg } = await mermaid.default.render(id, currentRun.value.mermaidDiagram)
     mermaidRef.value.innerHTML = svg
-    lastRenderedMermaid.value = currentRun.value.mermaidDiagram
+    const svgEl = mermaidRef.value.querySelector('svg')
+    if (svgEl) {
+      svgEl.removeAttribute('height')
+      svgEl.setAttribute('width', '100%')
+      svgEl.style.maxWidth = '100%'
+      svgEl.style.height = 'auto'
+    }
+    lastRenderedMermaid.value = renderKey
   } catch (e) {
     mermaidRef.value.innerHTML = '<pre>' + currentRun.value.mermaidDiagram + '</pre>'
-    lastRenderedMermaid.value = currentRun.value.mermaidDiagram
+    lastRenderedMermaid.value = renderKey
   }
 }
 </script>

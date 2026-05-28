@@ -1,9 +1,14 @@
 <template>
-  <div
-    :class="['admin-shell', { 'sidebar-collapsed': sidebarCollapsed, 'mobile-sidebar-open': mobileSidebarOpen }]"
-    :style="shellStyle"
+  <ResponsiveShell
+    variant="admin"
+    :sidebar-collapsed="sidebarCollapsed"
+    :mobile-sidebar-open="mobileSidebarOpen"
+    sidebar-width="clamp(252px, 22vw, 292px)"
+    collapsed-width="82px"
   >
-    <div v-if="mobileSidebarOpen" class="admin-mobile-scrim" @click="uiStore.closeMobileSidebar()"></div>
+    <template #scrim>
+      <div v-if="mobileSidebarOpen" class="admin-mobile-scrim" @click="uiStore.closeMobileSidebar()"></div>
+    </template>
 
     <aside class="admin-sidebar">
       <div class="admin-brand-row">
@@ -21,6 +26,8 @@
           :to="item.path"
           :class="['admin-nav-item', { active: isActive(item.path) }]"
           :title="item.label"
+          @focus="preloadRoute(item.path)"
+          @mouseenter="preloadRoute(item.path)"
           @click="uiStore.closeMobileSidebar()"
         >
           <el-icon><component :is="item.icon" /></el-icon>
@@ -31,10 +38,12 @@
       <div class="admin-sidebar-spacer"></div>
 
       <div class="admin-sidebar-tools">
-        <button type="button" class="admin-tool-row" :title="sidebarCollapsed ? '深色模式' : ''">
-          <el-icon><Sunny /></el-icon>
-          <span class="admin-tool-label" :aria-hidden="sidebarCollapsed">深色模式</span>
-        </button>
+        <AppearancePanel>
+          <button type="button" class="admin-tool-row" :title="sidebarCollapsed ? themeToggleLabel : ''">
+            <el-icon><component :is="themeIcon" /></el-icon>
+            <span class="admin-tool-label" :aria-hidden="sidebarCollapsed">{{ themeLabel }}</span>
+          </button>
+        </AppearancePanel>
       </div>
 
       <footer class="admin-sidebar-foot">
@@ -75,6 +84,11 @@
             <el-icon><Coin /></el-icon>
             Token
           </span>
+          <AppearancePanel>
+            <el-button text class="admin-icon-button admin-theme-button" :title="themeToggleLabel">
+              <el-icon><component :is="themeIcon" /></el-icon>
+            </el-button>
+          </AppearancePanel>
           <button type="button" class="admin-user-menu" @click="logout" title="退出登录">
             <span class="admin-user-avatar">{{ userInitial }}</span>
             <span class="admin-user-copy">
@@ -90,7 +104,7 @@
         <router-view />
       </main>
     </section>
-  </div>
+  </ResponsiveShell>
 </template>
 
 <script setup>
@@ -108,22 +122,24 @@ import {
   Lock,
   Menu,
   Monitor,
+  Moon,
   Warning,
   Sunny,
   UserFilled
 } from '@element-plus/icons-vue'
 import { useAdminAuthStore } from '../../stores/adminAuth'
 import { useUiStore } from '../../stores/ui'
+import { useRoutePreload } from '../../composables/useRoutePreload'
+import AppearancePanel from '../layout/AppearancePanel.vue'
+import ResponsiveShell from '../layout/ResponsiveShell.vue'
 
 const route = useRoute()
 const router = useRouter()
 const uiStore = useUiStore()
 const authStore = useAdminAuthStore()
-const { mobileSidebarOpen, sidebarCollapsed } = storeToRefs(uiStore)
-
-const shellStyle = computed(() => ({
-  '--admin-sidebar-width': sidebarCollapsed.value ? '82px' : '292px'
-}))
+const { mobileSidebarOpen, sidebarCollapsed, isLightTheme, themeLabel, themeToggleLabel } = storeToRefs(uiStore)
+const themeIcon = computed(() => isLightTheme.value ? Moon : Sunny)
+const { preloadRoute } = useRoutePreload(router)
 
 const navItems = [
   { path: '/dashboard', label: '仪表盘', icon: DataBoard },

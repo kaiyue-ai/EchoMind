@@ -30,8 +30,12 @@ const sessionStore = useSessionStore()
 const authStore = useAuthStore()
 const { sessions, loading: sessionsLoading, deletingId, activeSessionId } = storeToRefs(sessionStore)
 
-watch(() => route.query.sessionId, (sid) => {
-  sessionStore.setActive(sid)
+watch(() => [route.path, route.query.sessionId, chatStore.sessionId], ([path, sid, currentChatSessionId]) => {
+  if (path === '/chat') {
+    sessionStore.setActive(sid || currentChatSessionId)
+  } else if (currentChatSessionId) {
+    sessionStore.setActive(currentChatSessionId)
+  }
 }, { immediate: true })
 
 async function loadSessions() {

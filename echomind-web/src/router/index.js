@@ -1,7 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { lazyView } from './lazyView'
 
 const CHUNK_RELOAD_KEY = 'echomind_chunk_reload_attempted_at'
+let authCheckPromise = null
 
 const routes = [
   {
@@ -11,37 +13,37 @@ const routes = [
   {
     path: '/login',
     name: 'Login',
-    component: () => import('../views/LoginView.vue'),
+    component: lazyView(() => import('../views/LoginView.vue'), 'LoginView'),
     meta: { title: '登录', public: true }
   },
   {
     path: '/chat',
     name: 'Chat',
-    component: () => import('../views/ChatView.vue'),
+    component: lazyView(() => import('../views/ChatView.vue'), 'ChatView'),
     meta: { title: '智能对话', keepAlive: true }
   },
   {
     path: '/skills',
     name: 'Skills',
-    component: () => import('../views/SkillsView.vue'),
+    component: lazyView(() => import('../views/SkillsView.vue'), 'SkillsView'),
     meta: { title: 'Skill 市场' }
   },
   {
     path: '/agents',
     name: 'Agents',
-    component: () => import('../views/AgentsView.vue'),
+    component: lazyView(() => import('../views/AgentsView.vue'), 'AgentsView'),
     meta: { title: 'Agent 管理' }
   },
   {
     path: '/mcp',
     name: 'MCP',
-    component: () => import('../views/McpView.vue'),
+    component: lazyView(() => import('../views/McpView.vue'), 'McpView'),
     meta: { title: 'MCP 工具' }
   },
   {
     path: '/team',
     name: 'Team',
-    component: () => import('../views/TeamDashboard.vue'),
+    component: lazyView(() => import('../views/TeamDashboard.vue'), 'TeamDashboard'),
     meta: { title: 'Agent Team' }
   }
 ]
@@ -66,16 +68,29 @@ router.onError((error) => {
 
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
-  if (authStore.token && !authStore.user) {
-    await authStore.loadCurrentUser()
-  }
-  if (!to.meta.public && !authStore.isAuthenticated) {
+  if (!to.meta.public && !authStore.hasSession) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
-  if (to.path === '/login' && authStore.isAuthenticated) {
+  if (authStore.hasSession && !authStore.user) {
+    verifySessionInBackground(authStore, to.fullPath)
+  }
+  if (to.path === '/login' && authStore.hasSession) {
     return '/chat'
   }
   return true
 })
+
+function verifySessionInBackground(authStore, redirectPath) {
+  if (authCheckPromise) return
+  authCheckPromise = authStore.loadCurrentUser()
+    .then((user) => {
+      if (!user && router.currentRoute.value.path !== '/login') {
+        router.replace({ path: '/login', query: { redirect: redirectPath } })
+      }
+    })
+    .finally(() => {
+      authCheckPromise = null
+    })
+}
 
 export default router

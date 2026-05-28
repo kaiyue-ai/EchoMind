@@ -1,5 +1,11 @@
 <template>
-  <div :class="['workbench-shell', { 'sidebar-collapsed': sidebarCollapsed, 'mobile-sidebar-open': mobileSidebarOpen }]">
+  <ResponsiveShell
+    variant="client"
+    :sidebar-collapsed="sidebarCollapsed"
+    :mobile-sidebar-open="mobileSidebarOpen"
+    sidebar-width="clamp(248px, 22vw, 284px)"
+    collapsed-width="72px"
+  >
     <header class="mobile-workbench-bar">
       <button type="button" class="mobile-menu-button" title="打开导航" @click="toggleMobileSidebar">
         <el-icon><Menu /></el-icon>
@@ -8,12 +14,19 @@
         <strong>EchoMind</strong>
         <span>Agent Workbench</span>
       </div>
+      <AppearancePanel>
+        <el-button text :title="themeToggleLabel">
+          <el-icon><component :is="themeIcon" /></el-icon>
+        </el-button>
+      </AppearancePanel>
       <el-button text title="退出登录" @click="logout">
         <el-icon><SwitchButton /></el-icon>
       </el-button>
     </header>
 
-    <div v-if="mobileSidebarOpen" class="mobile-sidebar-scrim" @click="uiStore.closeMobileSidebar()"></div>
+    <template #scrim>
+      <div v-if="mobileSidebarOpen" class="mobile-sidebar-scrim" @click="uiStore.closeMobileSidebar()"></div>
+    </template>
 
     <aside class="workbench-sidebar">
       <div class="brand-row">
@@ -31,6 +44,8 @@
           :to="item.path"
           :class="['nav-item', { active: currentRoute === item.path }]"
           :title="item.label"
+          @focus="preloadRoute(item.path)"
+          @mouseenter="preloadRoute(item.path)"
           @click="uiStore.closeMobileSidebar()"
         >
           <el-icon><component :is="item.icon" /></el-icon>
@@ -59,6 +74,11 @@
           <span class="live-dot"></span>
           <span>{{ authStore.user?.username || 'System Online' }}</span>
         </div>
+        <AppearancePanel>
+          <el-button text :title="themeToggleLabel">
+            <el-icon><component :is="themeIcon" /></el-icon>
+          </el-button>
+        </AppearancePanel>
         <el-button text title="退出登录" @click="logout">
           <el-icon><SwitchButton /></el-icon>
         </el-button>
@@ -75,7 +95,7 @@
         </keep-alive>
       </router-view>
     </main>
-  </div>
+  </ResponsiveShell>
 </template>
 
 <script setup>
@@ -91,11 +111,16 @@ import {
   Fold,
   Grid,
   Menu,
+  Moon,
+  Sunny,
   SwitchButton,
   UserFilled
 } from '@element-plus/icons-vue'
 import { useUiStore } from '../../stores/ui'
 import { useAuthStore } from '../../stores/auth'
+import { useRoutePreload } from '../../composables/useRoutePreload'
+import AppearancePanel from '../layout/AppearancePanel.vue'
+import ResponsiveShell from '../layout/ResponsiveShell.vue'
 import SessionList from './SessionList.vue'
 import UserAvatarButton from './UserAvatarButton.vue'
 
@@ -110,9 +135,11 @@ const route = useRoute()
 const router = useRouter()
 const uiStore = useUiStore()
 const authStore = useAuthStore()
-const { mobileSidebarOpen, sidebarCollapsed } = storeToRefs(uiStore)
+const { mobileSidebarOpen, sidebarCollapsed, isLightTheme, themeToggleLabel } = storeToRefs(uiStore)
 const currentRoute = computed(() => route.path)
+const themeIcon = computed(() => isLightTheme.value ? Moon : Sunny)
 const emit = defineEmits(['refreshSessions', 'newSession', 'openSession', 'deleteSession'])
+const { preloadRoute } = useRoutePreload(router)
 
 const navItems = [
   { path: '/chat', label: '对话', icon: ChatDotRound },

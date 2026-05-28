@@ -65,34 +65,52 @@ function streamChatResult(requestId) {
 }
 
 function streamChat(agentId, message, sessionId, modelId, attachments = [], onToken, onDone, onError, onMeta) {
+  let es = null
+  let timer
+  let completed = false
+  let cancelled = false
+  const finish = (callback = () => {}) => {
+    if (completed) return
+    completed = true
+    clearTimeout(timer)
+    if (es) {
+      es.close()
+      es = null
+    }
+    callback()
+  }
   const fail = (error) => {
+    if (cancelled) return
     if (onError) onError(error)
   }
+  const cancel = () => {
+    cancelled = true
+    finish()
+  }
+
+  let streamPromise
   try {
-    return sendChat(agentId, message, sessionId, modelId, attachments)
+    streamPromise = sendChat(agentId, message, sessionId, modelId, attachments)
       .then(({ requestId, sessionId: submittedSessionId, traceId }) => {
+        if (cancelled) return
         if (onMeta) onMeta({ sessionId: submittedSessionId, traceId, requestId })
-        const es = new EventSource(`/api/chat/stream/${requestId}${chatStreamQuery()}`)
-        let completed = false
-        let timer
-        const finish = (callback) => {
-          if (completed) return
-          completed = true
-          clearTimeout(timer)
-          es.close()
-          callback()
-        }
+        es = new EventSource(`/api/chat/stream/${requestId}${chatStreamQuery()}`)
         es.addEventListener('meta', (e) => {
+          if (cancelled) return
           if (onMeta) onMeta(JSON.parse(e.data))
         })
         es.addEventListener('token', (e) => {
+          if (cancelled) return
           const data = JSON.parse(e.data)
           if (data.token && onToken) onToken(data.token)
         })
-        es.addEventListener('result', () => finish(() => {
-          if (onDone) onDone()
+        es.addEventListener('result', (e) => finish(() => {
+          if (cancelled) return
+          const data = JSON.parse(e.data)
+          if (onDone) onDone(data)
         }))
         es.addEventListener('failure', (e) => {
+          if (cancelled) return
           const data = JSON.parse(e.data)
           finish(() => fail(new Error(data.error || 'SSE stream failed')))
         })
@@ -106,8 +124,10 @@ function streamChat(agentId, message, sessionId, modelId, attachments = [], onTo
       .catch(fail)
   } catch (error) {
     fail(error)
-    return Promise.resolve()
+    streamPromise = Promise.resolve()
   }
+  streamPromise.cancel = cancel
+  return streamPromise
 }
 
 // 响应拦截器：统一处理错误
@@ -213,19 +233,22 @@ export default {
     /** 删除Agent私有知识库文档 */
     deleteKnowledge: (agentId, documentId) =>
       api.delete(`/agents/${agentId}/knowledge/${documentId}`).then(r => r.data),
+    /** 下载Agent私有知识库原文件 */
+    downloadKnowledge: (agentId, documentId) =>
+      api.get(`/agents/${agentId}/knowledge/${documentId}/download`, { responseType: 'blob' }),
     /** 删除Agent（运行时 + 持久化） */
     delete: (agentId) => api.delete(`/agents/${agentId}`)
   },
 
-  // ===== MCP接口 =====
+  // ===== MCP 接口 =====
   mcp: {
-    /** 已挂载外部MCP服务 */
+    /** 已挂载外部 MCP 服务 */
     servers: () => api.get('/mcp/servers').then(r => r.data),
-    /** 动态挂载外部MCP服务 */
+    /** 动态挂载外部 MCP 服务 */
     mountServer: (config) => api.post('/mcp/servers', config).then(r => r.data),
-    /** 卸载外部MCP服务 */
+    /** 卸载外部 MCP 服务 */
     unmountServer: (serverId) => api.delete(`/mcp/servers/${serverId}`).then(r => r.data),
-    /** 刷新外部MCP服务工具列表 */
+    /** 刷新外部 MCP 服务工具列表 */
     refreshServer: (serverId) => api.post(`/mcp/servers/${serverId}/refresh`).then(r => r.data),
     /** 列出工具 */
     tools: () => api.get('/mcp/tools').then(r => r.data),

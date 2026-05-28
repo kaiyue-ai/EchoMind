@@ -34,7 +34,8 @@
       </div>
     </section>
 
-    <div v-loading="loading" class="resource-grid">
+    <ResourceGridSkeleton v-if="showInitialSkeleton" />
+    <div v-else class="resource-grid" :class="{ 'is-refreshing': loading }">
       <ResourceCard v-for="skill in skills" :key="skill.skillId" :meta="`v${skill.metadata?.version || '-'}`">
         <template #title>{{ skill.metadata?.name || skill.skillId }}</template>
         <template #actions>
@@ -80,17 +81,19 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResourceCard from '../components/workbench/ResourceCard.vue'
+import ResourceGridSkeleton from '../components/workbench/ResourceGridSkeleton.vue'
 import StatusBadge from '../components/workbench/StatusBadge.vue'
 import { useSkillStore } from '../stores/skills'
 
 const skillStore = useSkillStore()
 const { skills, loading, uploading, mutatingId, error, enabledCount, disabledCount } = storeToRefs(skillStore)
+const showInitialSkeleton = computed(() => loading.value && skills.value.length === 0)
 
-onMounted(() => skillStore.loadSkills())
+onMounted(() => skillStore.loadSkills().catch(() => {}))
 
 async function uploadSkill(file) {
   try {

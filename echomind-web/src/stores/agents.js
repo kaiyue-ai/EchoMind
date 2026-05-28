@@ -28,7 +28,10 @@ export const useAgentStore = defineStore('agents', {
   actions: {
     async loadAgents(force = false) {
       if (this.loading) return this.agents
-      if (!force && this.agents.length > 0) return this.agents
+      if (!force && this.agents.length > 0) {
+        this.refreshAgents().catch(() => {})
+        return this.agents
+      }
       this.loading = true
       this.error = null
       try {
@@ -58,7 +61,8 @@ export const useAgentStore = defineStore('agents', {
       this.error = null
       try {
         const created = await api.agents.create(config)
-        await this.loadAgents(true)
+        upsertAgent(this.agents, created)
+        this.refreshAgents().catch(() => {})
         return created
       } catch (error) {
         this.error = api.parseError(error, '保存Agent失败')
@@ -121,15 +125,88 @@ export const useAgentStore = defineStore('agents', {
         this.knowledgeLoading = false
       }
     },
-    async deleteAgent(agentId) {
+    async downloadKnowledge(agentId, document) {
+      if (!agentId || !document?.id) return
       this.error = null
       try {
-        await api.agents.delete(agentId)
-        await this.loadAgents(true)
+        const response = await api.agents.downloadKnowledge(agentId, document.id)
+        const disposition = response.headers?.['content-disposition'] || ''
+        const filename = filenameFromDisposition(disposition) || document.fileName || 'knowledge-file'
+        const url = URL.createObjectURL(response.data)
+        const link = window.document.createElement('a')
+        link.href = url
+        link.download = filename
+        window.document.body.appendChild(link)
+        link.click()
+        link.remove()
+        URL.revokeObjectURL(url)
       } catch (error) {
+        this.error = api.parseError(error, '下载知识库原文件失败')
+        throw error
+      }
+    },
+    async deleteAgent(agentId) {
+      this.error = null
+      const previousAgents = [...this.agents]
+      const previousKnowledge = { ...this.knowledgeByAgent }
+      this.agents = this.agents.filter(agent => agent.agentId !== agentId)
+      const { [agentId]: _removed, ...nextKnowledge } = this.knowledgeByAgent
+      this.knowledgeByAgent = nextKnowledge
+      try {
+        await api.agents.delete(agentId)
+        await this.refreshAgents().catch(() => {})
+      } catch (error) {
+        this.agents = previousAgents
+        this.knowledgeByAgent = previousKnowledge
         this.error = api.parseError(error, '删除Agent失败')
+        throw error
+      }
+    },
+    async refreshAgents() {
+      this.error = null
+      try {
+        const agents = await api.agents.list()
+        const results = await Promise.allSettled(
+          agents.map(agent => api.agents.knowledge(agent.agentId)
+            .then(docs => [agent.agentId, docs]))
+        )
+        const nextKnowledge = { ...this.knowledgeByAgent }
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            nextKnowledge[result.value[0]] = result.value[1]
+          }
+        }
+        this.agents = agents
+        this.knowledgeByAgent = nextKnowledge
+        this.lastLoadedAt = Date.now()
+        return this.agents
+      } catch (error) {
+        this.error = api.parseError(error, '刷新Agent失败')
         throw error
       }
     }
   }
 })
+
+function upsertAgent(agents, agent) {
+  if (!agent?.agentId) return
+  const index = agents.findIndex(item => item.agentId === agent.agentId)
+  if (index >= 0) {
+    agents.splice(index, 1, agent)
+  } else {
+    agents.unshift(agent)
+  }
+}
+
+function filenameFromDisposition(disposition) {
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1])
+    } catch {
+      return encoded[1]
+    }
+  }
+  const plain = disposition.match(/filename="?([^";]+)"?/i)
+  return plain?.[1]
+}

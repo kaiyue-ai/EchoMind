@@ -13,6 +13,7 @@ export const useAuthStore = defineStore('auth', {
     error: null
   }),
   getters: {
+    hasSession: (state) => Boolean(state.token),
     isAuthenticated: (state) => Boolean(state.token && state.user?.authenticated)
   },
   actions: {

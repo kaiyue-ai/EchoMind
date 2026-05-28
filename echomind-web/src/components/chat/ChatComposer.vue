@@ -8,31 +8,41 @@
     </div>
     <div class="composer-row">
       <el-input
+        class="composer-input"
         :model-value="modelValue"
         type="textarea"
-        :rows="2"
+        :autosize="{ minRows: 1, maxRows: 5 }"
         resize="none"
         :disabled="loading"
-        placeholder="输入任务或问题，Enter 发送，Shift+Enter 换行..."
+        placeholder="输入任务或问题..."
         @update:model-value="$emit('update:modelValue', $event)"
         @keydown.enter.exact.prevent="$emit('send')"
       />
       <input ref="imageInput" type="file" accept="image/*" class="hidden-input" @change="handleImageSelected" />
-      <el-button circle :loading="uploading" :disabled="loading" title="上传图片" @click="imageInput?.click()">
-        <el-icon><Picture /></el-icon>
-      </el-button>
-      <el-button
-        type="primary"
-        circle
-        class="composer-send-button"
-        native-type="submit"
-        :loading="loading"
-        :disabled="disabled"
-        title="发送消息"
-        aria-label="发送消息"
-      >
-        <el-icon><Promotion /></el-icon>
-      </el-button>
+      <div class="composer-actions">
+        <el-button
+          circle
+          class="composer-tool-button"
+          :loading="uploading"
+          :disabled="loading"
+          title="上传图片"
+          @click="imageInput?.click()"
+        >
+          <el-icon><Picture /></el-icon>
+        </el-button>
+        <el-button
+          type="primary"
+          circle
+          class="composer-send-button"
+          native-type="submit"
+          :loading="loading"
+          :disabled="disabled"
+          title="发送消息"
+          aria-label="发送消息"
+        >
+          <el-icon><Promotion /></el-icon>
+        </el-button>
+      </div>
     </div>
   </form>
 </template>

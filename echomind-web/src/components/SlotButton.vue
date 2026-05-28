@@ -34,22 +34,22 @@ const hover = ref(false)
 }
 .slot-btn.outline {
   background: transparent;
-  border: 1px solid #27272a;
-  color: #a1a1aa;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   border-radius: 6px;
 }
 .slot-btn.outline:hover {
-  border-color: #52525b;
-  color: #e4e4e7;
+  border-color: var(--accent, var(--blue));
+  color: var(--text);
 }
 .slot-btn.filled {
-  background: #18181b;
-  color: #a1a1aa;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
   border-radius: 6px;
 }
 .slot-btn.filled:hover {
-  background: #27272a;
-  color: #e4e4e7;
+  background: var(--hover);
+  color: var(--text);
 }
 .slot-label {
   display: block;

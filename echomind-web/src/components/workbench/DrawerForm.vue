@@ -2,7 +2,7 @@
   <el-drawer
     :model-value="modelValue"
     :title="title"
-    :size="size"
+    :size="drawerSize"
     direction="rtl"
     class="workbench-drawer"
     @update:model-value="$emit('update:modelValue', $event)"
@@ -19,11 +19,24 @@
 </template>
 
 <script setup>
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   modelValue: { type: Boolean, default: false },
   title: { type: String, default: '' },
-  size: { type: String, default: '520px' }
+  size: { type: [String, Number], default: '520px' }
 })
 
 defineEmits(['update:modelValue'])
+
+const drawerSize = computed(() => {
+  if (typeof props.size === 'number') {
+    return `min(100vw, ${props.size}px)`
+  }
+  const size = props.size || '520px'
+  if (/^(min|max|clamp)\(/.test(size)) {
+    return size
+  }
+  return `min(100vw, ${size})`
+})
 </script>

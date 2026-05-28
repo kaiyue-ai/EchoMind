@@ -1,6 +1,15 @@
 <template>
   <div ref="containerRef" class="message-list">
-    <div v-if="messages.length === 0" class="empty-chat">
+    <div v-if="loadingHistory" class="message-history-skeleton" aria-hidden="true">
+      <article v-for="item in 3" :key="item" class="message-row">
+        <div class="message-avatar skeleton-avatar"></div>
+        <div class="message-content">
+          <el-skeleton animated :rows="item === 1 ? 2 : 4" />
+        </div>
+      </article>
+    </div>
+
+    <div v-else-if="messages.length === 0" class="empty-chat">
       <div class="empty-chat-mark">EM</div>
       <h1>从一个任务开始</h1>
       <p>选择 Agent 和模型，直接把问题交给 EchoMind。</p>
@@ -42,19 +51,35 @@ import MarkdownRenderer from './MarkdownRenderer.vue'
 import { useAuthStore } from '../../stores/auth'
 
 const props = defineProps({
-  messages: { type: Array, default: () => [] }
+  messages: { type: Array, default: () => [] },
+  loadingHistory: { type: Boolean, default: false }
 })
 
 const containerRef = ref(null)
 const authStore = useAuthStore()
 
 watch(() => props.messages, () => {
-  nextTick(scrollToBottom)
+  if (!props.loadingHistory) {
+    nextTick(() => scrollToBottom('auto'))
+  }
 }, { deep: true })
 
-function scrollToBottom() {
+watch(() => props.loadingHistory, (loading, previousLoading) => {
+  if (previousLoading && !loading) {
+    nextTick(() => scrollToBottom('auto'))
+  }
+})
+
+function scrollToBottom(behavior = 'auto') {
   if (containerRef.value) {
+    const previousScrollBehavior = containerRef.value.style.scrollBehavior
+    containerRef.value.style.scrollBehavior = behavior === 'smooth' ? 'smooth' : 'auto'
     containerRef.value.scrollTop = containerRef.value.scrollHeight
+    requestAnimationFrame(() => {
+      if (containerRef.value) {
+        containerRef.value.style.scrollBehavior = previousScrollBehavior
+      }
+    })
   }
 }
 

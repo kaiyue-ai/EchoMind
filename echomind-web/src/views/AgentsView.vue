@@ -17,7 +17,8 @@
       </template>
     </el-alert>
 
-    <div v-loading="loading" class="resource-grid">
+    <ResourceGridSkeleton v-if="showInitialSkeleton" />
+    <div v-else class="resource-grid" :class="{ 'is-refreshing': loading }">
       <ResourceCard v-for="agent in agents" :key="agent.agentId" :meta="agent.agentId">
         <template #title>
           <div class="agent-title">
@@ -137,8 +138,9 @@
         <el-table-column label="大小" width="100">
           <template #default="{ row }">{{ formatBytes(row.fileSize) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="90">
+        <el-table-column label="操作" width="150">
           <template #default="{ row }">
+            <el-button text size="small" :disabled="!row.hasOriginalFile" @click="downloadKnowledge(row)">下载</el-button>
             <el-button text type="danger" size="small" @click="deleteKnowledge(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -166,6 +168,7 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DrawerForm from '../components/workbench/DrawerForm.vue'
+import ResourceGridSkeleton from '../components/workbench/ResourceGridSkeleton.vue'
 import ResourceCard from '../components/workbench/ResourceCard.vue'
 import StatusBadge from '../components/workbench/StatusBadge.vue'
 import { useAgentStore } from '../stores/agents'
@@ -197,6 +200,7 @@ const newAgent = ref(defaultAgent())
 const selectedKnowledge = computed(() => selectedAgent.value
   ? knowledgeByAgent.value[selectedAgent.value.agentId] || []
   : [])
+const showInitialSkeleton = computed(() => loading.value && agents.value.length === 0)
 const enabledSkillIds = computed(() => skills.value.filter(skill => skill.state === 'ENABLED').map(skill => skill.skillId))
 const createDisabled = computed(() => {
   return !newAgent.value.agentId.trim()
@@ -209,9 +213,9 @@ const createDisabled = computed(() => {
 })
 
 onMounted(() => {
-  agentStore.loadAgents()
-  modelStore.loadModels()
-  skillStore.loadSkills()
+  agentStore.loadAgents().catch(() => {})
+  modelStore.loadModels().catch(() => {})
+  skillStore.loadSkills().catch(() => {})
 })
 
 watch(models, () => {
@@ -231,7 +235,10 @@ function defaultAgent() {
 async function openCreateDrawer() {
   showCreateDrawer.value = true
   newAgent.value = defaultAgent()
-  await Promise.allSettled([modelStore.loadModels(), skillStore.loadSkills()])
+  Promise.allSettled([modelStore.loadModels(), skillStore.loadSkills()])
+    .then(() => {
+      newAgent.value.modelId = defaultModelId()
+    })
   newAgent.value.modelId = defaultModelId()
 }
 
@@ -326,6 +333,15 @@ async function deleteKnowledge(row) {
     ElMessage.success('知识库文档已删除')
   } catch (e) {
     ElMessage.error('删除失败: ' + (e.response?.data?.error || e.message))
+  }
+}
+
+async function downloadKnowledge(row) {
+  if (!selectedAgent.value || !row?.hasOriginalFile) return
+  try {
+    await agentStore.downloadKnowledge(selectedAgent.value.agentId, row)
+  } catch (e) {
+    ElMessage.error('下载失败: ' + (e.response?.data?.error || e.message))
   }
 }
 

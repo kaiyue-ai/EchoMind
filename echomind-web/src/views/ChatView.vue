@@ -1,5 +1,5 @@
 <template>
-  <div class="chat-workspace">
+  <div :class="['chat-workspace', { 'inspector-open': inspectorOpen }]">
     <section class="chat-stage">
       <header class="workspace-header">
         <div>
@@ -10,9 +10,9 @@
           <el-button v-if="sessionId" text type="danger" title="删除当前会话" @click="deleteCurrentSession">
             <el-icon><Delete /></el-icon>
           </el-button>
-          <el-button text title="新建会话" @click="newSession">
+          <el-button text title="新建会话" aria-label="新建会话" @click="newSession">
             <el-icon><Plus /></el-icon>
-            新建
+            <span class="desktop-action-label">新建</span>
           </el-button>
           <el-button text :title="inspectorOpen ? '隐藏上下文' : '显示上下文'" @click="uiStore.toggleInspector()">
             <el-icon><Setting /></el-icon>
@@ -20,7 +20,7 @@
         </div>
       </header>
 
-      <MessageList ref="messageListRef" :messages="messages" />
+      <MessageList ref="messageListRef" :messages="messages" :loading-history="historyLoading" />
       <ChatComposer
         v-model="input"
         :attachments="attachments"
@@ -52,7 +52,7 @@
 </template>
 
 <script setup>
-import { computed, inject, nextTick, onActivated, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
@@ -82,6 +82,10 @@ const refreshSessions = inject('refreshSessions', null)
 const deleteSession = inject('deleteSession', null)
 const messageListRef = ref(null)
 const uploadingImage = ref(false)
+const historyLoading = ref(false)
+const activeStream = ref(null)
+let streamSerial = 0
+let historySerial = 0
 
 const {
   input,
@@ -123,38 +127,57 @@ const selectedModelSpec = computed(() => {
 
 const selectedModelSupportsVision = computed(() => supportsVision(selectedModelSpec.value))
 
-onMounted(async () => {
+onMounted(() => {
   collapseInspectorOnCompactViewport()
-  await Promise.allSettled([
+  Promise.allSettled([
     modelStore.loadModels(),
     agentStore.loadAgents(),
     skillStore.loadSkills(),
     mcpStore.loadMcp()
-  ])
-  ensureSelectedModel()
-  await loadRouteHistory(route.query.sessionId)
+  ]).then(() => ensureSelectedModel())
+  loadRouteHistory(route.query.sessionId)
 })
 
 watch(() => route.query.sessionId, async (newSid) => {
+  if (route.path !== '/chat') return
   if (newSid && newSid !== sessionId.value) {
+    cancelActiveStream()
     sessionId.value = newSid
     messages.value = []
-    await loadRouteHistory(newSid)
+    loadRouteHistory(newSid)
+  } else if (!newSid && sessionId.value) {
+    router.replace({ path: '/chat', query: { sessionId: sessionId.value } })
   }
 })
 
 watch(models, () => ensureSelectedModel(), { immediate: true })
 
 onActivated(() => {
-  nextTick(() => messageListRef.value?.scrollToBottom())
+  if (route.path === '/chat' && !route.query.sessionId && sessionId.value) {
+    router.replace({ path: '/chat', query: { sessionId: sessionId.value } })
+  }
+  nextTick(() => messageListRef.value?.scrollToBottom('auto'))
 })
+
+onBeforeUnmount(() => cancelActiveStream())
 
 async function loadRouteHistory(sid) {
   if (!sid || sid === sessionId.value && messages.value.length > 0) return
+  const currentHistorySerial = ++historySerial
+  historyLoading.value = true
   try {
-    chatStore.setHistory(sid, await api.chat.history(sid))
+    const history = await api.chat.history(sid)
+    if (currentHistorySerial === historySerial && route.query.sessionId === sid) {
+      chatStore.setHistory(sid, history)
+    }
   } catch (e) {
     /* 会话可能已被清理，保持空状态 */
+  } finally {
+    if (currentHistorySerial === historySerial) {
+      historyLoading.value = false
+      await nextTick()
+      messageListRef.value?.scrollToBottom('auto')
+    }
   }
 }
 
@@ -174,31 +197,47 @@ function sendMessage() {
   loading.value = true
   thinkingMsgIndex.value = messages.value.length
   messages.value.push({ role: 'assistant', content: '思考中...' })
-  nextTick(() => messageListRef.value?.scrollToBottom())
+  nextTick(() => messageListRef.value?.scrollToBottom('auto'))
 
+  const streamId = ++streamSerial
   let firstToken = true
+  let pendingLeadingToken = ''
   try {
-    api.chat.stream(
+    activeStream.value = api.chat.stream(
       selectedAgent.value,
       msg || '请理解这张图片。',
       sessionId.value,
       followsAgentDefaultModel.value ? null : selectedModel.value,
       outgoingAttachments,
       (token) => {
+        if (!isActiveStream(streamId)) return
+        if (firstToken && !token.trim()) {
+          pendingLeadingToken += token
+          return
+        }
+        const visibleToken = firstToken ? pendingLeadingToken + token : token
+        pendingLeadingToken = ''
         if (firstToken) {
-          messages.value.splice(thinkingMsgIndex.value, 1, { role: 'assistant', content: token })
+          messages.value.splice(thinkingMsgIndex.value, 1, { role: 'assistant', content: visibleToken })
           firstToken = false
         } else {
           const idx = messages.value.length - 1
           if (idx >= 0 && messages.value[idx].role === 'assistant') {
-            messages.value[idx] = { ...messages.value[idx], content: messages.value[idx].content + token }
+            messages.value[idx] = { ...messages.value[idx], content: messages.value[idx].content + visibleToken }
           }
         }
-        nextTick(() => messageListRef.value?.scrollToBottom())
+        nextTick(() => messageListRef.value?.scrollToBottom('auto'))
       },
-      () => finishStream(),
-      (error) => handleStreamError(error),
+      (result) => {
+        if (!isActiveStream(streamId)) return
+        finishStream(result, streamId)
+      },
+      (error) => {
+        if (!isActiveStream(streamId)) return
+        handleStreamError(error, streamId)
+      },
       (meta) => {
+        if (!isActiveStream(streamId)) return
         if (meta.sessionId && meta.sessionId !== sessionId.value) {
           sessionId.value = meta.sessionId
           router.replace({ path: '/chat', query: { sessionId: meta.sessionId } })
@@ -206,12 +245,20 @@ function sendMessage() {
       }
     )
   } catch (error) {
-    handleStreamError(error)
+    handleStreamError(error, streamId)
   }
 }
 
-function finishStream() {
+function finishStream(result, streamId = streamSerial) {
+  if (!isActiveStream(streamId)) return
   const idx = thinkingMsgIndex.value
+  const finalResponse = result?.response
+  if (idx >= 0 && messages.value[idx]?.role === 'assistant' && finalResponse) {
+    messages.value.splice(idx, 1, {
+      role: 'assistant',
+      content: finalResponse
+    })
+  }
   if (idx >= 0 && messages.value[idx]?.role === 'assistant' && messages.value[idx]?.content === '思考中...') {
     messages.value.splice(idx, 1, {
       role: 'system',
@@ -220,11 +267,15 @@ function finishStream() {
   }
   loading.value = false
   thinkingMsgIndex.value = -1
+  if (activeStream.value && isActiveStream(streamId)) {
+    activeStream.value = null
+  }
   if (refreshSessions) refreshSessions()
-  nextTick(() => messageListRef.value?.scrollToBottom())
+  nextTick(() => messageListRef.value?.scrollToBottom('auto'))
 }
 
-function handleStreamError(error) {
+function handleStreamError(error, streamId = streamSerial) {
+  if (!isActiveStream(streamId)) return
   console.error('Stream error:', error)
   const idx = thinkingMsgIndex.value
   const replaceIndex = idx >= 0 && idx < messages.value.length ? idx : messages.value.length
@@ -232,7 +283,27 @@ function handleStreamError(error) {
     role: 'system',
     content: '请求失败: ' + (error.message || '请稍后重试')
   })
-  finishStream()
+  finishStream(null, streamId)
+}
+
+function cancelActiveStream() {
+  streamSerial += 1
+  if (activeStream.value?.cancel) {
+    activeStream.value.cancel()
+  }
+  const idx = thinkingMsgIndex.value
+  if (idx >= 0 && messages.value[idx]?.role === 'assistant' && messages.value[idx]?.content === '思考中...') {
+    messages.value.splice(idx, 1)
+  }
+  activeStream.value = null
+  if (loading.value) {
+    loading.value = false
+  }
+  thinkingMsgIndex.value = -1
+}
+
+function isActiveStream(streamId) {
+  return streamId === streamSerial
 }
 
 function supportsVision(model) {
@@ -275,6 +346,8 @@ function removeAttachment(att) {
 }
 
 function newSession() {
+  historySerial += 1
+  cancelActiveStream()
   chatStore.resetSession()
   router.replace({ path: '/chat' })
 }

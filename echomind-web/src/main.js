@@ -6,7 +6,11 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
+import { applyBackgroundPreference, applyThemePreference } from './stores/ui'
 import './styles/main.css'
+
+applyThemePreference()
+applyBackgroundPreference()
 
 const app = createApp(App)
 
