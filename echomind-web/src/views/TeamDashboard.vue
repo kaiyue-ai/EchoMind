@@ -751,13 +751,13 @@ async function renderMermaid() {
       theme: mermaidTheme.value,
       flowchart: {
         htmlLabels: true,
-        nodeSpacing: 14,
-        rankSpacing: 22,
-        padding: 4,
+        nodeSpacing: 10,
+        rankSpacing: 16,
+        padding: 2,
         useMaxWidth: true
       },
       themeVariables: {
-        fontSize: '11px',
+        fontSize: '10px',
         primaryTextColor: mermaidTheme.value === 'default' ? '#172033' : '#f8fafc',
         lineColor: mermaidTheme.value === 'default' ? '#64748b' : '#cbd5e1'
       }

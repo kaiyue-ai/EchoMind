@@ -226,7 +226,7 @@ function sendMessage() {
             messages.value[idx] = { ...messages.value[idx], content: messages.value[idx].content + visibleToken }
           }
         }
-        nextTick(() => messageListRef.value?.scrollToBottom('auto'))
+        nextTick(() => messageListRef.value?.followIfNearBottom('auto'))
       },
       (result) => {
         if (!isActiveStream(streamId)) return
@@ -271,7 +271,7 @@ function finishStream(result, streamId = streamSerial) {
     activeStream.value = null
   }
   if (refreshSessions) refreshSessions()
-  nextTick(() => messageListRef.value?.scrollToBottom('auto'))
+  nextTick(() => messageListRef.value?.followIfNearBottom('auto'))
 }
 
 function handleStreamError(error, streamId = streamSerial) {

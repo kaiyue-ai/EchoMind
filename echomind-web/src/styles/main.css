@@ -344,6 +344,14 @@ textarea {
   --strong-shadow: 0 28px 84px rgba(0, 0, 0, 0.42);
 }
 
+:root[data-background-mode='image'][data-background-effect='clear'] .message-content,
+:root[data-background-mode='image'][data-background-effect='clear'] .resource-card,
+:root[data-background-mode='image'][data-background-effect='clear'] .panel-block {
+  box-shadow:
+    0 16px 42px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
 :root[data-theme='light'][data-background-mode='image'][data-background-effect='clear'] {
   --surface: rgba(255, 255, 255, 0.54);
   --surface-soft: rgba(255, 255, 255, 0.46);
@@ -361,6 +369,14 @@ textarea {
   --border-subtle: rgba(82, 101, 132, 0.16);
   --card-shadow: 0 20px 56px rgba(36, 53, 84, 0.16);
   --strong-shadow: 0 28px 84px rgba(36, 53, 84, 0.22);
+}
+
+:root[data-theme='light'][data-background-mode='image'][data-background-effect='clear'] .message-content,
+:root[data-theme='light'][data-background-mode='image'][data-background-effect='clear'] .resource-card,
+:root[data-theme='light'][data-background-mode='image'][data-background-effect='clear'] .panel-block {
+  box-shadow:
+    0 16px 42px rgba(36, 53, 84, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 :root[data-background-mode='image'][data-background-effect='clear'] .app-background::after {
@@ -598,6 +614,9 @@ textarea {
 .appearance-panel {
   display: grid;
   gap: 14px;
+  max-height: min(680px, calc(100vh - 96px));
+  overflow-y: auto;
+  padding-right: 2px;
   color: var(--text);
 }
 
@@ -1290,15 +1309,53 @@ textarea {
   border-bottom: 1px solid var(--border-soft);
 }
 
+.message-list-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
 .message-list {
   display: flex;
-  flex: 1;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   flex-direction: column;
   gap: 20px;
   overflow-y: auto;
-  padding: clamp(24px, 4vw, 56px) clamp(22px, 5vw, 72px);
+  overscroll-behavior: contain;
+  padding: clamp(24px, 4vw, 56px) clamp(22px, 5vw, 72px) calc(clamp(24px, 4vw, 56px) + 12px);
   scroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
+
+.message-jump-button {
+  position: absolute;
+  right: clamp(18px, 5vw, 64px);
+  bottom: 14px;
+  z-index: 4;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-pill);
+  background: var(--panel-strong);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: var(--card-shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur-control)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur-control)) saturate(var(--glass-saturate));
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.message-jump-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--glass-border));
+  box-shadow: var(--strong-shadow);
+  transform: translateY(-1px);
 }
 
 .message-history-skeleton {
@@ -1333,9 +1390,9 @@ textarea {
 
 .empty-chat-mark {
   display: grid;
-  width: 64px;
-  height: 64px;
-  margin-bottom: 16px;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 14px;
   place-items: center;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -1347,7 +1404,7 @@ textarea {
 
 .empty-chat h1 {
   color: var(--text);
-  font-size: 22px;
+  font-size: 21px;
   margin-bottom: 6px;
 }
 
@@ -1412,6 +1469,7 @@ textarea {
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   line-height: 1.65;
+  transition: background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .message-assistant .message-content,
@@ -2049,6 +2107,7 @@ textarea {
   flex-direction: column;
   gap: 8px;
   padding-right: 2px;
+  overscroll-behavior: contain;
 }
 
 .team-select-card {
@@ -2333,6 +2392,9 @@ textarea {
   color: var(--text-muted);
   border: 1px dashed var(--border);
   border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 68%, transparent);
+  -webkit-backdrop-filter: blur(var(--glass-blur-subtle)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur-subtle)) saturate(var(--glass-saturate));
 }
 
 .empty-workspace strong {
@@ -2422,6 +2484,7 @@ textarea {
   min-height: 320px;
   max-height: min(58vh, 560px);
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 12px;
   place-items: center;
   border: 1px solid var(--border-soft);
@@ -2444,7 +2507,7 @@ textarea {
   width: auto;
   min-width: 0;
   max-width: 100%;
-  max-height: 520px;
+  max-height: 460px;
   height: auto;
 }
 
@@ -2458,13 +2521,13 @@ textarea {
 
 .mermaid-container .nodeLabel,
 .mermaid-container .edgeLabel {
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.25;
 }
 
 .mermaid-container .node foreignObject,
 .mermaid-container .node .label {
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.25;
 }
 
@@ -2653,7 +2716,7 @@ textarea {
 @media (max-width: 760px) {
   :root {
     --el-component-size: 38px;
-    --shell-mobile-bar-height: 48px;
+    --shell-mobile-bar-height: 44px;
   }
 
   html,
@@ -2734,8 +2797,8 @@ textarea {
 
   .mobile-menu-button {
     display: grid;
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    height: 32px;
     flex: 0 0 auto;
     place-items: center;
     cursor: pointer;
@@ -2765,9 +2828,9 @@ textarea {
   }
 
   .mobile-workbench-bar .el-button {
-    width: 34px;
-    height: 34px;
-    min-width: 34px;
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
     padding: 0;
     margin-left: 0 !important;
   }
@@ -2793,11 +2856,13 @@ textarea {
     height: calc(100dvh - var(--shell-mobile-bar-height));
     min-height: 0;
     overflow: hidden;
-    padding: 6px 8px 8px;
+    padding: 0;
   }
 
   .chat-stage {
-    border-radius: 18px;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
   }
 
   .workspace-header,
@@ -2834,8 +2899,8 @@ textarea {
     flex-direction: row;
     align-items: center;
     gap: 8px;
-    min-height: 50px;
-    padding: 9px 10px;
+    min-height: 48px;
+    padding: 7px 12px;
   }
 
   .chat-stage .workspace-header h1 {
@@ -2952,12 +3017,24 @@ textarea {
     grid-auto-columns: minmax(220px, 78vw);
     overflow-x: auto;
     max-height: none;
-    padding-bottom: 4px;
+    margin: 0 -4px;
+    padding: 0 4px 4px;
     scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  .team-list::-webkit-scrollbar {
+    display: none;
   }
 
   .team-select-card {
     scroll-snap-align: start;
+  }
+
+  .empty-workspace {
+    min-height: 190px;
+    padding: 20px 16px;
+    text-align: center;
   }
 
   .team-overview-panel {
@@ -3002,39 +3079,70 @@ textarea {
   }
 
   .chat-composer {
-    padding: 10px 10px max(10px, env(safe-area-inset-bottom));
+    padding: 7px 8px max(8px, env(safe-area-inset-bottom));
     background: transparent;
   }
 
   .composer-row {
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
-    min-height: 54px;
-    padding: 7px 7px 7px 13px;
-    border-radius: 18px;
+    gap: 7px;
+    min-height: 48px;
+    padding: 5px 5px 5px 12px;
+    border-radius: 16px;
   }
 
   .composer-row .el-textarea__inner {
-    min-height: 38px !important;
-    max-height: 118px;
-    padding: 8px 0 !important;
+    min-height: 36px !important;
+    max-height: 108px;
+    padding: 7px 0 !important;
     line-height: 1.45;
   }
 
   .composer-actions {
-    gap: 6px;
-    padding-left: 7px;
+    gap: 5px;
+    padding-left: 6px;
   }
 
   .composer-row .el-button {
-    width: 38px;
-    height: 38px;
+    width: 36px;
+    height: 36px;
   }
 
   .message-list {
     gap: 12px;
-    padding: 14px 12px;
+    padding: 12px 12px 44px;
     -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: auto;
+  }
+
+  .message-jump-button {
+    right: 18px;
+    bottom: 10px;
+    min-height: 32px;
+    padding: 0 12px;
+  }
+
+  .empty-chat {
+    padding-bottom: 26px;
+  }
+
+  .empty-chat-mark {
+    width: 52px;
+    height: 52px;
+    margin-bottom: 12px;
+    border-radius: 14px;
+  }
+
+  .empty-chat h1 {
+    font-size: 20px;
+  }
+
+  .appearance-popover {
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  .appearance-panel {
+    max-height: min(70vh, 560px);
   }
 
   .message-row {
@@ -3144,14 +3252,14 @@ textarea {
 
   .mermaid-container {
     min-height: 220px;
-    max-height: 56vh;
+    max-height: 52vh;
     overflow: auto;
-    padding: 10px;
+    padding: 8px;
   }
 
   .mermaid-container svg {
     width: auto;
-    min-width: 440px;
+    min-width: 360px;
     max-width: none;
   }
 

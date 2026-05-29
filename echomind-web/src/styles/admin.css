@@ -433,6 +433,9 @@ textarea {
 .appearance-panel {
   display: grid;
   gap: 14px;
+  max-height: min(680px, calc(100vh - 96px));
+  overflow-y: auto;
+  padding-right: 2px;
   color: var(--text);
 }
 
@@ -2418,6 +2421,14 @@ textarea {
     --shell-mobile-bar-height: 0px;
     height: 100vh;
     height: 100dvh;
+  }
+
+  .appearance-popover {
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  .appearance-panel {
+    max-height: min(70vh, 560px);
   }
 
   .admin-sidebar {
