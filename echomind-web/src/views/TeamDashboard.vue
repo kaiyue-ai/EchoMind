@@ -156,11 +156,38 @@
             v-if="currentRun.status === 'NEEDS_CLARIFICATION'"
             type="warning"
             show-icon
-            :title="currentRun.clarificationQuestion || 'Reviewer 需要用户补充信息'"
+            :title="stepClarificationSteps.length ? 'SubReviewer 需要用户补充 Step 信息' : (currentRun.clarificationQuestion || 'Reviewer 需要用户补充信息')"
           >
-            <div class="clarify-box">
+            <div v-if="stepClarificationSteps.length" class="clarify-box step-clarify-box">
+              <div v-for="step in stepClarificationSteps" :key="step.stepId" class="step-clarify-item">
+                <strong>{{ step.stepIndex }}. {{ step.title }}</strong>
+                <p>{{ stepClarificationQuestion(step) }}</p>
+                <el-input
+                  v-model="stepClarificationAnswers[step.stepId]"
+                  type="textarea"
+                  :rows="2"
+                  :placeholder="`补充 ${step.title} 需要的信息...`"
+                />
+              </div>
+              <el-button
+                type="primary"
+                :loading="resuming"
+                :disabled="stepClarificationSubmitDisabled"
+                @click="resumeRun"
+              >
+                继续 Run
+              </el-button>
+            </div>
+            <div v-else class="clarify-box">
               <el-input v-model="clarificationAnswer" placeholder="补充说明..." />
-              <el-button type="primary" :loading="resuming" @click="resumeRun">继续 Run</el-button>
+              <el-button
+                type="primary"
+                :loading="resuming"
+                :disabled="runClarificationSubmitDisabled"
+                @click="resumeRun"
+              >
+                继续 Run
+              </el-button>
             </div>
           </el-alert>
 
@@ -365,6 +392,7 @@ const mermaidRef = ref(null)
 const lastRenderedMermaid = ref('')
 const finalReportRef = ref(null)
 const clarificationAnswer = ref('')
+const stepClarificationAnswers = ref({})
 const capabilityOptions = ['planning', 'search', 'weather', 'venue', 'budget', 'coordination', 'review', 'report', 'general']
 const newTeam = ref(defaultTeam())
 const teamList = computed(() => teams.value || [])
@@ -396,6 +424,11 @@ const stepRetryText = computed(() => {
 })
 const reflectedSteps = computed(() => (currentRun.value?.steps || []).filter(step => step.reflectionJson || step.lastReviewReason))
 const hasReflections = computed(() => reflectedSteps.value.length > 0)
+const stepClarificationSteps = computed(() => (currentRun.value?.steps || []).filter(isStepClarificationRequested))
+const stepClarificationSubmitDisabled = computed(() => {
+  return stepClarificationSteps.value.some(step => !stepClarificationAnswers.value[step.stepId]?.trim())
+})
+const runClarificationSubmitDisabled = computed(() => !clarificationAnswer.value.trim())
 const createTeamDisabled = computed(() => {
   return !newTeam.value.name.trim()
     || agentList.value.length === 0
@@ -423,6 +456,14 @@ watch(mermaidTheme, async () => {
   lastRenderedMermaid.value = ''
   await nextTick()
   renderMermaid()
+})
+
+watch(stepClarificationSteps, (steps) => {
+  const nextAnswers = {}
+  for (const step of steps) {
+    nextAnswers[step.stepId] = stepClarificationAnswers.value[step.stepId] || ''
+  }
+  stepClarificationAnswers.value = nextAnswers
 })
 
 function defaultTeam() {
@@ -517,8 +558,17 @@ async function openRun(run) {
 
 async function resumeRun() {
   try {
-    await teamStore.resumeRun(clarificationAnswer.value)
-    clarificationAnswer.value = ''
+    if (stepClarificationSteps.value.length) {
+      const stepAnswers = {}
+      for (const step of stepClarificationSteps.value) {
+        stepAnswers[step.stepId] = stepClarificationAnswers.value[step.stepId]?.trim() || ''
+      }
+      await teamStore.resumeRun({ stepClarificationAnswers: stepAnswers })
+      stepClarificationAnswers.value = {}
+    } else {
+      await teamStore.resumeRun({ clarificationAnswer: clarificationAnswer.value.trim() })
+      clarificationAnswer.value = ''
+    }
     ElMessage.success('已继续 Run')
   } catch (e) {
     ElMessage.error('继续失败: ' + (e.response?.data?.error || e.message))
@@ -625,6 +675,19 @@ function actionLabel(action) {
   }[action] || action
 }
 
+function isStepClarificationRequested(step) {
+  if (!step) return false
+  if (step.reviewStatus === 'ASK_CLARIFICATION') return true
+  return parseJson(step.subReviewJson)?.action === 'ASK_CLARIFICATION'
+}
+
+function stepClarificationQuestion(step) {
+  const decision = parseJson(step?.subReviewJson)
+  const questions = Array.isArray(decision?.questions) ? decision.questions.filter(Boolean) : []
+  if (questions.length) return questions.join(' / ')
+  return decision?.reason || step?.lastReviewReason || currentRun.value?.clarificationQuestion || '请补充该 Step 需要的信息'
+}
+
 function eventTypeLabel(type) {
   return {
     RUN_CREATED: 'Run 已创建',
@@ -633,8 +696,6 @@ function eventTypeLabel(type) {
     PLAN_CREATED: '计划已生成',
     PLAN_REVIEW_STARTED: '开始规划审查',
     PLAN_REVIEWED: '规划审查完成',
-    SIMPLE_DRAFT_STARTED: '简易初稿开始',
-    SIMPLE_DRAFT_COMPLETED: '简易初稿完成',
     TEAM_CONTROL_STARTED: '管控中心启动',
     AGENT_SELECTED: 'Agent 已选择',
     RISK_DECIDED: '风险裁决完成',

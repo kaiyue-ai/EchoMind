@@ -19,14 +19,14 @@ import com.echomind.agent.team.state.TeamStepStatus;
 import com.echomind.agent.team.state.TeamTaskLevel;
 import com.echomind.agent.team.store.TeamEntity;
 import com.echomind.agent.team.store.TeamEventEntity;
-import com.echomind.agent.team.store.TeamEventRepository;
+import com.echomind.agent.team.store.TeamEventMapper;
 import com.echomind.agent.team.store.TeamMemberEntity;
-import com.echomind.agent.team.store.TeamMemberRepository;
-import com.echomind.agent.team.store.TeamRepository;
+import com.echomind.agent.team.store.TeamMemberMapper;
+import com.echomind.agent.team.store.TeamMapper;
 import com.echomind.agent.team.store.TeamRunEntity;
-import com.echomind.agent.team.store.TeamRunRepository;
+import com.echomind.agent.team.store.TeamRunMapper;
 import com.echomind.agent.team.store.TeamStepEntity;
-import com.echomind.agent.team.store.TeamStepRepository;
+import com.echomind.agent.team.store.TeamStepMapper;
 import com.echomind.agent.team.visualization.MermaidGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -54,53 +54,71 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * Agent Team 的 MySQL 黑板和异步状态机服务。
+ *
+ * <p>这里保留 Team Run 的事务性编排：创建 Run、推进 DAG、写 Step/Event、生成快照。
+ * Prompt 文本放在 {@link TeamPromptFactory}，Executor 选择放在 {@link TeamAgentSelector}，
+ * 本类尽量只处理状态流转和持久化。</p>
  */
 @Slf4j
 @Service
 public class TeamBlackboardService {
 
-    private final TeamRepository teamRepository;
-    private final TeamMemberRepository memberRepository;
-    private final TeamRunRepository runRepository;
-    private final TeamStepRepository stepRepository;
-    private final TeamEventRepository eventRepository;
+    // 数据库操作
+    private final TeamMapper teamMapper;
+    // 团队成员操作
+    private final TeamMemberMapper memberMapper;
+    // 团队运行操作
+    private final TeamRunMapper runMapper;
+    // 团队步骤操作
+    private final TeamStepMapper stepMapper;
+    // 团队时间操作
+    private final TeamEventMapper eventMapper;
+    // agent创建工厂
     private final AgentFactory agentFactory;
+    // agent 编排器
     private final AgentOrchestrator orchestrator;
+    // 任务执行器
     private final TaskExecutor taskExecutor;
+    // 运行时属性
     private final TeamRuntimeProperties runtimeProperties;
 
+    // JSON 支持类
     private final TeamJsonSupport json = new TeamJsonSupport();
+    // agent选择器(根据tool来进行挑选)
     private final TeamAgentSelector agentSelector = new TeamAgentSelector();
+    // 风险策略
     private final TeamRiskPolicy riskPolicy = new TeamRiskPolicy();
+
+    // 删除 Team/Run 后，后台异步任务可能仍在收尾；用它阻止继续写事件。
     private final Set<String> deletedRunIds = ConcurrentHashMap.newKeySet();
 
-    public TeamBlackboardService(TeamRepository teamRepository,
-                                 TeamMemberRepository memberRepository,
-                                 TeamRunRepository runRepository,
-                                 TeamStepRepository stepRepository,
-                                 TeamEventRepository eventRepository,
+    public TeamBlackboardService(TeamMapper teamMapper,
+                                 TeamMemberMapper memberMapper,
+                                 TeamRunMapper runMapper,
+                                 TeamStepMapper stepMapper,
+                                 TeamEventMapper eventMapper,
                                  AgentFactory agentFactory,
                                  AgentOrchestrator orchestrator,
                                  @Qualifier("teamTaskExecutor") TaskExecutor taskExecutor) {
-        this(teamRepository, memberRepository, runRepository, stepRepository, eventRepository,
+        this(teamMapper, memberMapper, runMapper, stepMapper, eventMapper,
             agentFactory, orchestrator, taskExecutor, new TeamRuntimeProperties());
     }
 
     @Autowired
-    public TeamBlackboardService(TeamRepository teamRepository,
-                                 TeamMemberRepository memberRepository,
-                                 TeamRunRepository runRepository,
-                                 TeamStepRepository stepRepository,
-                                 TeamEventRepository eventRepository,
+    public TeamBlackboardService(TeamMapper teamMapper,
+                                 TeamMemberMapper memberMapper,
+                                 TeamRunMapper runMapper,
+                                 TeamStepMapper stepMapper,
+                                 TeamEventMapper eventMapper,
                                  AgentFactory agentFactory,
                                  AgentOrchestrator orchestrator,
                                  @Qualifier("teamTaskExecutor") TaskExecutor taskExecutor,
                                  TeamRuntimeProperties runtimeProperties) {
-        this.teamRepository = teamRepository;
-        this.memberRepository = memberRepository;
-        this.runRepository = runRepository;
-        this.stepRepository = stepRepository;
-        this.eventRepository = eventRepository;
+        this.teamMapper = teamMapper;
+        this.memberMapper = memberMapper;
+        this.runMapper = runMapper;
+        this.stepMapper = stepMapper;
+        this.eventMapper = eventMapper;
         this.agentFactory = agentFactory;
         this.orchestrator = orchestrator;
         this.taskExecutor = taskExecutor;
@@ -109,31 +127,37 @@ public class TeamBlackboardService {
 
     @Transactional(readOnly = true)
     public List<TeamSnapshot> listTeams() {
-        return teamRepository.findAll().stream()
+        // 返回所有的团队
+        return teamMapper.selectAll().stream()
             .sorted(Comparator.comparing(TeamEntity::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder())))
             .map(this::toTeamSnapshot)
             .toList();
     }
 
     @Transactional(readOnly = true)
+    // 根据团队id获取团队快照
     public TeamSnapshot getTeam(String teamId) {
-        return teamRepository.findById(teamId)
+        return teamMapper.selectOptionalById(teamId)
             .map(this::toTeamSnapshot)
             .orElseThrow(() -> new IllegalArgumentException("Team not found: " + teamId));
     }
 
     @Transactional
+    // 创建团队 参数1团队名称 参数2团队成员规格列表
     public TeamSnapshot createTeam(String requestedName, List<TeamMemberSpec> specs) {
         List<TeamMemberSpec> normalized = normalizeSpecs(specs);
+        // 验证团队成员规格
         validateMembers(normalized);
 
+        //创建团队实体
         TeamEntity team = new TeamEntity();
         team.setTeamId(UUID.randomUUID().toString());
         team.setName(requestedName == null || requestedName.isBlank()
             ? "Team-" + UUID.randomUUID().toString().substring(0, 8)
             : requestedName.trim());
-        teamRepository.save(team);
+        teamMapper.upsertById(team);
 
+        // 创建团队成员实体
         for (TeamMemberSpec spec : normalized) {
             TeamMemberEntity member = new TeamMemberEntity();
             member.setTeamId(team.getTeamId());
@@ -141,87 +165,114 @@ public class TeamBlackboardService {
             member.setRole(spec.role());
             member.setCapabilityTagsJson(json.toJson(spec.capabilityTags() == null ? List.of() : spec.capabilityTags()));
             member.setSortOrder(spec.sortOrder());
-            memberRepository.save(member);
+            memberMapper.upsertById(member);
         }
 
         return getTeam(team.getTeamId());
     }
 
     @Transactional
+    // 删除团队顺便删除团队的所有记录
     public void deleteTeam(String teamId) {
         if (teamId == null || teamId.isBlank()) {
             throw new IllegalArgumentException("teamId is required");
         }
-        TeamEntity team = teamRepository.findById(teamId)
+        TeamEntity team = teamMapper.selectOptionalById(teamId)
             .orElseThrow(() -> new IllegalArgumentException("Team not found: " + teamId));
-        List<String> runIds = runRepository.findByTeamIdOrderByCreatedAtDesc(team.getTeamId()).stream()
+        List<String> runIds = runMapper.selectByTeamIdOrderByCreatedAtDesc(team.getTeamId()).stream()
             .map(TeamRunEntity::getRunId)
             .toList();
         deletedRunIds.addAll(runIds);
         if (!runIds.isEmpty()) {
-            eventRepository.deleteByRunIdIn(runIds);
-            stepRepository.deleteByRunIdIn(runIds);
+            eventMapper.deleteByRunIdIn(runIds);
+            stepMapper.deleteByRunIdIn(runIds);
         }
-        runRepository.deleteByTeamId(team.getTeamId());
-        memberRepository.deleteByTeamId(team.getTeamId());
-        teamRepository.delete(team);
+        runMapper.deleteByTeamId(team.getTeamId());
+        memberMapper.deleteByTeamId(team.getTeamId());
+        teamMapper.deleteEntity(team);
     }
 
     @Transactional
+    // 创建团队协作任务 参数1团队id 参数2任务描述
     public TeamRunSnapshot createRun(String teamId, String task) {
         return createRun(teamId, "default", task);
     }
 
     @Transactional
+    // 创建团队协作任务 参数1团队id 参数2用户id 参数3任务描述
     public TeamRunSnapshot createRun(String teamId, String userId, String task) {
         if (task == null || task.isBlank()) {
             throw new IllegalArgumentException("task is required");
         }
+        // 根据团队id获取团队实体
         getTeam(teamId);
+        // 创建团队协作任务实体
         TeamRunEntity run = new TeamRunEntity();
         run.setRunId(UUID.randomUUID().toString());
         run.setTeamId(teamId);
         run.setUserId(normalizeUserId(userId));
         run.setTask(task.trim());
         run.setStatus(TeamRunStatus.PENDING);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.RUN_CREATED, null, null, "Run created", null);
+        // Run 先落库，再在事务提交后异步执行，避免后台线程读到未提交数据。
         scheduleRun(run.getRunId());
         return getRun(teamId, userId, run.getRunId());
     }
 
     @Transactional(readOnly = true)
+    // 根据团队id获取团队协作任务快照列表
+    // 参数1团队id 参数2用户id
+    // 返回值团队协作任务快照列表
+    // 如果用户id为空或为空字符串，则返回团队id默认值
     public List<TeamRunSnapshot> listRuns(String teamId) {
         return listRuns(teamId, "default");
     }
 
     @Transactional(readOnly = true)
+    // 根据团队id获取团队协作任务快照列表
+    // 参数1团队id 参数2用户id
+    // 返回值团队协作任务快照列表
+    // 如果用户id为空或为空字符串，则返回团队id默认值
     public List<TeamRunSnapshot> listRuns(String teamId, String userId) {
         getTeam(teamId);
-        return runRepository.findByTeamIdAndUserIdOrderByCreatedAtDesc(teamId, normalizeUserId(userId)).stream()
+        return runMapper.selectByTeamIdAndUserIdOrderByCreatedAtDesc(teamId, normalizeUserId(userId)).stream()
             .map(run -> toRunSnapshot(run, true, false))
             .toList();
     }
 
     @Transactional(readOnly = true)
+    // 根据用户id获取团队协作任务快照列表
+    // 参数1用户id
+    // 返回值团队协作任务快照列表
+    // 如果用户id为空或为空字符串，则返回团队id默认值
     public List<TeamRunSnapshot> listRunsForUser(String userId) {
-        return runRepository.findByUserIdOrderByCreatedAtDesc(normalizeUserId(userId)).stream()
+        return runMapper.selectByUserIdOrderByCreatedAtDesc(normalizeUserId(userId)).stream()
             .map(run -> toRunSnapshot(run, true, false))
             .toList();
     }
 
     @Transactional(readOnly = true)
+    // 根据团队id获取团队协作任务快照
+    // 参数1团队id 参数2用户id 参数3任务id
+    // 返回值团队协作任务快照
+    // 如果用户id为空或为空字符串，则返回团队id默认值
     public TeamRunSnapshot getRun(String teamId, String runId) {
         return getRun(teamId, "default", runId);
     }
 
     @Transactional(readOnly = true)
+    // 根据团队id获取团队协作任务快照
+    // 参数1团队id 参数2用户id 参数3任务id
+    // 返回值团队协作任务快照
+    // 如果用户id为空或为空字符串，则返回团队id默认值
     public TeamRunSnapshot getRun(String teamId, String userId, String runId) {
         TeamRunEntity run = loadRun(teamId, normalizeUserId(userId), runId);
         return toRunSnapshot(run, true, true);
     }
 
     @Transactional
+    // 澄清团队协作任务 参数1团队id 参数2用户id 参数3任务id 参数4澄清答案
     public TeamRunSnapshot resumeRun(String teamId, String runId, String clarificationAnswer) {
         return resumeRun(teamId, "default", runId, clarificationAnswer);
     }
@@ -229,28 +280,36 @@ public class TeamBlackboardService {
     @Transactional
     public TeamRunSnapshot resumeRun(String teamId, String userId, String runId, String clarificationAnswer) {
         TeamRunEntity run = loadRun(teamId, normalizeUserId(userId), runId);
+        // 检查团队协作任务状态是否为需要澄清
         if (run.getStatus() != TeamRunStatus.NEEDS_CLARIFICATION) {
             throw new IllegalArgumentException("Run is not waiting for clarification: " + runId);
         }
+        // 检查澄清答案是否为空
         if (clarificationAnswer == null || clarificationAnswer.isBlank()) {
             throw new IllegalArgumentException("clarificationAnswer is required");
         }
+        // 设置澄清答案
         run.setClarificationAnswer(clarificationAnswer.trim());
         if (run.getClarificationStage() == TeamClarificationStage.PLAN_REVIEW) {
-            stepRepository.deleteByRunId(runId);
+            stepMapper.deleteByRunId(runId);
             run.setPlanReviewJson(null);
             run.setResultReviewJson(null);
             run.setFinalOutput(null);
             run.setMermaidDiagram(null);
+            run.setPlanRetryCount(0);
         } else if (run.getClarificationStage() == TeamClarificationStage.RESULT_REVIEW) {
-            prepareStepsForClarificationResume(run);
             run.setResultReviewJson(null);
             run.setFinalOutput(null);
             run.setMermaidDiagram(null);
+            run.setResultReplanCount(0);
+            run.setPartialReplanCount(0);
         }
+        run.setClarificationQuestion(null);
+        run.setClarificationStage(null);
         run.setStatus(TeamRunStatus.PENDING);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(runId, null, TeamEventType.RUN_RESUMED, null, null, "User clarification received", null);
+        // 澄清答案写回同一个 Run，保留原 DAG 和事件历史。
         scheduleRun(runId);
         return getRun(teamId, userId, runId);
     }
@@ -264,48 +323,86 @@ public class TeamBlackboardService {
         }
     }
 
+    /**
+     * Team Run 的主执行入口
+     *
+     * 执行流程：
+     * 1. 尝试原子性获取执行锁（防止并发重复执行）
+     * 2. 检查是否超时
+     * 3. 如果没有步骤，先规划
+     * 4. 执行 DAG 步骤（SIMPLE/COMPLEX 统一走 DAG）
+     * 5. 合并结果并终审
+     *
+     * @param runId 任务ID
+     */
     @Transactional
     protected void executeRun(String runId) {
-        TeamRunEntity run = runRepository.findById(runId)
+        // ============================================
+        // 阶段1：尝试获取执行锁（原子性状态转换防止重复执行）
+        // ============================================
+        // 原子性地将状态从 PENDING -> EXECUTING
+        // 如果失败，说明任务已被其他线程获取，跳过执行
+        if (!runMapper.tryAcquireExecuteLock(runId)) {
+            TeamRunEntity existingRun = runMapper.selectOptionalById(runId).orElse(null);
+            if (existingRun == null) {
+                log.warn("Run {} not found, skipping execution", runId);
+                return;
+            }
+            
+            // 根据当前状态判断是否需要跳过
+            switch (existingRun.getStatus()) {
+                case EXECUTING:
+                    log.info("Run {} is already executing, skipping", runId);
+                    break;
+                case COMPLETED:
+                    log.info("Run {} is already completed, skipping", runId);
+                    break;
+                case FAILED:
+                    log.info("Run {} is already failed, skipping", runId);
+                    break;
+                case NEEDS_CLARIFICATION:
+                    log.info("Run {} needs clarification, skipping", runId);
+                    break;
+                default:
+                    log.warn("Run {} is in unexpected status: {}, skipping", runId, existingRun.getStatus());
+            }
+            return;
+        }
+        
+        // 重新加载任务（因为 tryAcquireExecuteLock 已经更新了状态）
+        TeamRunEntity run = runMapper.selectOptionalById(runId)
             .orElseThrow(() -> new IllegalArgumentException("Run not found: " + runId));
+        
+        // 加载团队快照
         TeamSnapshot team = getTeam(run.getTeamId());
 
+        // Run 主入口：没有 Step 先规划；然后执行 DAG 步骤并合并终审。
+        
+        // 3. 检查是否超时
         if (failIfRunTimedOut(run)) {
             return;
         }
-        List<TeamStepEntity> existingSteps = stepRepository.findByRunIdOrderByStepIndexAsc(runId);
+        
+        // 4. 获取现有步骤
+        List<TeamStepEntity> existingSteps = stepMapper.selectByRunIdOrderByStepIndexAsc(runId);
         if (existingSteps.isEmpty()) {
+            // 没有步骤，需要先规划
             planAndReview(run, team);
+            // 规划后检查状态：可能需要澄清或失败
             if (run.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION || run.getStatus() == TeamRunStatus.FAILED) {
                 return;
             }
         }
 
-        if (run.getTaskLevel() == TeamTaskLevel.SIMPLE) {
-            executeSimpleRun(run, team);
-            return;
-        }
-
+        // 5. 执行 DAG 步骤
         executeDagSteps(run, team);
-        run = runRepository.findById(runId).orElse(run);
+        run = runMapper.selectOptionalById(runId).orElse(run);
         if (run.getStatus() == TeamRunStatus.FAILED || run.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION) {
             return;
         }
 
+        // 6. 合并结果并终审
         mergeAndReviewResults(run, team);
-    }
-
-    private void executeSimpleRun(TeamRunEntity run, TeamSnapshot team) {
-        recordEvent(run.getRunId(), null, TeamEventType.SIMPLE_DRAFT_STARTED, TeamRole.EXECUTOR,
-            null, "简易任务进入快路径：直接生成初稿并交给 GlobalReviewer 简易终审", null);
-        executeDagSteps(run, team);
-        TeamRunEntity latest = runRepository.findById(run.getRunId()).orElse(run);
-        if (latest.getStatus() == TeamRunStatus.FAILED || latest.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION) {
-            return;
-        }
-        recordEvent(run.getRunId(), null, TeamEventType.SIMPLE_DRAFT_COMPLETED, TeamRole.EXECUTOR,
-            null, "简易任务初稿已完成", null);
-        mergeAndReviewResults(latest, team);
     }
 
     private void planAndReview(TeamRunEntity run, TeamSnapshot team) {
@@ -324,47 +421,75 @@ public class TeamBlackboardService {
                                String initialRevisionInstructions,
                                List<TeamStepSnapshot> previousExecutionResults,
                                boolean preserveExistingSteps) {
+        // Planner 和 Reviewer 的闭环：Reviewer 不通过时，把上一轮计划和修改意见带回 Planner。
+        // 标记计划是否通过审核
         boolean approved = false;
+        // 初始化计划：如果传入的 previousPlan 为 null，则使用空列表
         List<PlannedStep> previousPlan = initialPreviousPlan == null ? List.of() : initialPreviousPlan;
+        // 初始化 Planner 的修改指令
         String plannerRevisionInstructions = nullToBlank(initialRevisionInstructions);
+
+        // 循环直到计划通过审核或达到最大重试次数
         while (!approved && run.getPlanRetryCount() <= runtimeProperties.getMaxPlanRetries()) {
+            // 1. 设置状态为 PLANNING，开始规划阶段
             run.setStatus(TeamRunStatus.PLANNING);
-            runRepository.save(run);
+            runMapper.upsertById(run);
+            // 记录规划开始事件
             recordEvent(run.getRunId(), null, TeamEventType.PLAN_STARTED, TeamRole.PLANNER,
                 planner(team).agentId(), "Planner started task decomposition", null);
 
+            // 2. 调用 Planner Agent 生成步骤计划
+            // 参数：当前计划、上次修改意见、上次执行结果
             List<PlannedStep> planned = callPlanner(run, team, previousPlan, plannerRevisionInstructions,
                 previousExecutionResults);
             requireRunWritable(run.getRunId());
+
+            // 3. 用新计划替换现有步骤
             replaceSteps(run, planned, preserveExistingSteps);
+            // 记录计划创建事件
             recordEvent(run.getRunId(), null, TeamEventType.PLAN_CREATED, TeamRole.PLANNER,
                 planner(team).agentId(), "Planner created " + planned.size() + " step(s)", planned);
 
+            // 4. 设置状态为 PLAN_REVIEWING，开始审核阶段
             run.setStatus(TeamRunStatus.PLAN_REVIEWING);
-            runRepository.save(run);
+            runMapper.upsertById(run);
+            // 记录审核开始事件
             recordEvent(run.getRunId(), null, TeamEventType.PLAN_REVIEW_STARTED, TeamRole.REVIEWER,
                 reviewer(team).agentId(), "Reviewer started plan review", null);
 
+            // 5. 调用 Reviewer Agent 审核计划
             ReviewerDecision decision = callReviewerForPlan(run, team, planned);
+            // 确保数据库可写入
             requireRunWritable(run.getRunId());
+            // 保存审核结果到数据库
             run.setPlanReviewJson(json.toJson(decision));
-            runRepository.save(run);
+            runMapper.upsertById(run);
+            // 记录审核完成事件
             recordEvent(run.getRunId(), null, TeamEventType.PLAN_REVIEWED, TeamRole.REVIEWER,
                 reviewer(team).agentId(), decision.reason(), decision);
 
+            // 6. 根据审核结果处理
             if (decision.action() == ReviewerAction.CONTINUE) {
+                // 计划通过审核，退出循环
                 approved = true;
             } else if (decision.action() == ReviewerAction.ASK_CLARIFICATION) {
+                // 需要用户澄清，暂停任务
                 pauseForClarification(run, decision, TeamClarificationStage.PLAN_REVIEW);
                 return;
             } else if (run.getPlanRetryCount() >= runtimeProperties.getMaxPlanRetries()) {
+                // 达到最大重试次数，任务失败
                 failRun(run.getRunId(), "Planner retry limit reached: " + decision.reason());
                 return;
             } else {
+                // 计划需要修改，准备下一轮规划
+                // 保存当前计划作为下一轮的参考
                 previousPlan = planned;
+                // 保存审核意见作为下一轮的修改指令
                 plannerRevisionInstructions = decision.revisionInstructions();
+                // 增加重试计数
                 run.setPlanRetryCount(run.getPlanRetryCount() + 1);
-                runRepository.save(run);
+                runMapper.upsertById(run);
+                // 记录重试请求事件
                 recordEvent(run.getRunId(), null, TeamEventType.RETRY_REQUESTED, TeamRole.REVIEWER,
                     reviewer(team).agentId(), "Reviewer requested planner retry: " + decision.reason(), decision);
             }
@@ -375,115 +500,54 @@ public class TeamBlackboardService {
                                           List<PlannedStep> previousPlan,
                                           String plannerRevisionInstructions,
                                           List<TeamStepSnapshot> previousExecutionResults) {
+        // 获取Planner成员
         TeamMember planner = planner(team);
-        String prompt = buildPlannerPrompt(run, team, previousPlan, plannerRevisionInstructions,
-            previousExecutionResults);
-        PipelineContext result = executeTeamInternal(planner.agentId(), plannerSession(run), prompt);
+        // 生成提示词
+        String prompt = TeamPromptFactory.planner(run, team, previousPlan, plannerRevisionInstructions,
+            previousExecutionResults, json);
+        // 调用Planner Agent 生成步骤计划
+        PipelineContext result = executeTeamControlInternal(planner.agentId(), plannerSession(run), prompt);
         String raw = result.getFinalResponse();
+        // 解析步骤
         List<PlannedStep> steps = json.parsePlan(raw);
         if (steps.isEmpty()) {
             throw new IllegalStateException("Planner did not produce any steps");
         }
         run.setTaskLevel(json.parseTaskLevel(raw, steps.size()));
-        runRepository.save(run);
+        runMapper.upsertById(run);
         return steps;
-    }
-
-    String buildPlannerPrompt(TeamRunEntity run, TeamSnapshot team, List<PlannedStep> previousPlan,
-                              String plannerRevisionInstructions) {
-        return buildPlannerPrompt(run, team, previousPlan, plannerRevisionInstructions, List.of());
-    }
-
-    String buildPlannerPrompt(TeamRunEntity run, TeamSnapshot team, List<PlannedStep> previousPlan,
-                              String plannerRevisionInstructions,
-                              List<TeamStepSnapshot> previousExecutionResults) {
-        return """
-            You are the Planner in an Agent Team. For SIMPLE tasks create exactly 1 executable subtask; for COMPLEX tasks decompose into 2-5 executable subtasks.
-            Write all user-visible text in Simplified Chinese.
-            Plan only information-gathering or analysis subtasks for Executors.
-            Do not create a final integration, final report, final方案整合, 汇总输出, or 可执行方案撰写 step. The Reviewer is responsible for the final report.
-            Decide taskLevel as SIMPLE only when one direct worker result is enough; otherwise use COMPLEX.
-            Build a DAG: clientStepId is stable within this plan, dependsOn references previous clientStepId values, and dependency cycles are forbidden.
-            Set riskLevel to HIGH only when the Step needs reviewer validation before downstream work can trust it; otherwise LOW.
-            Respond only with JSON:
-            {
-              "taskLevel": "SIMPLE | COMPLEX",
-              "steps": [
-                {
-                  "clientStepId": "stable-id",
-                  "title": "short title",
-                  "description": "specific executor task",
-                  "dependsOn": ["clientStepId"],
-                  "riskLevel": "LOW | HIGH",
-                  "riskReason": "why high risk, empty if low",
-                  "requiredCapabilities": ["search", "weather", "coordination"],
-                  "acceptanceCriteria": "what a good result must contain"
-                }
-              ]
-            }
-
-            User task:
-            %s
-
-            User clarification, if any:
-            %s
-
-            Previous plan, if Reviewer requested replanning:
-            %s
-
-            Reviewer revision instructions, if any:
-            %s
-
-            Previous executor results, if replanning after result review:
-            %s
-
-            Available executor capabilities:
-            %s
-            """.formatted(
-            run.getTask(),
-            nullToBlank(run.getClarificationAnswer()),
-            json.toJson(previousPlan == null ? List.of() : previousPlan),
-            nullToBlank(plannerRevisionInstructions),
-            json.toJson(previousExecutionResults == null ? List.of() : previousExecutionResults),
-            executorCapabilities(team)
-        );
     }
 
     private ReviewerDecision callReviewerForPlan(TeamRunEntity run, TeamSnapshot team, List<PlannedStep> planned) {
         TeamMember reviewer = reviewer(team);
-        String prompt = """
-            You are the Reviewer and quality gate for an Agent Team.
-            Review whether the Planner's subtasks cover the original user need, are actionable, and have clear capabilities.
-            Write reason, questions, revisionInstructions, and finalReport in Simplified Chinese.
-            Respond as one single-line valid JSON object only.
-            Text fields must not contain raw line breaks. Encode line breaks as \\n only when needed.
-            Do not use ASCII double quotes inside text values; use Chinese corner quotes 「」 instead.
-            Respond only with JSON:
-            {
-              "action": "CONTINUE | RETRY | ASK_CLARIFICATION",
-              "reason": "why",
-              "questions": ["only if clarification is needed"],
-              "retryStepIds": [],
-              "revisionInstructions": "instructions for Planner if retry is needed",
-              "finalReport": ""
-            }
-
-            Original task:
-            %s
-
-            User clarification, if any:
-            %s
-
-            Planned steps:
-            %s
-            """.formatted(run.getTask(), nullToBlank(run.getClarificationAnswer()), json.toJson(planned));
-
-        return executeReviewerDecision(reviewer, run, prompt, false);
+        return executeReviewerDecision(reviewer, run, TeamPromptFactory.planReviewer(run, planned, json), false);
     }
 
+    /**
+     * DAG 步骤执行循环
+     * 
+     * DAG 调度核心逻辑：
+     * - 只认 Step 状态和 dependsOnStepIds
+     * - READY 才执行
+     * - BLOCKED 等依赖完成后放行
+     * 
+     * 执行流程：
+     * 1. 设置状态为 EXECUTING
+     * 2. 循环执行直到所有步骤完成或出现异常
+     * 3. 每次循环：标记就绪步骤 → 并发执行 → 等待完成
+     * 4. 支持超时检测、并发限制、失败检测
+     * 
+     * @param run 任务实体
+     * @param team 团队快照
+     */
     private void executeDagSteps(TeamRunEntity run, TeamSnapshot team) {
+        // DAG 调度只认 Step 状态和 dependsOnStepIds：READY 才执行，BLOCKED 等依赖完成后放行。
+        
+        // 1. 设置任务状态为执行中
         run.setStatus(TeamRunStatus.EXECUTING);
-        runRepository.save(run);
+        runMapper.upsertById(run);
+        
+        // 2. 记录 DAG 调度开始事件
         recordEvent(run.getRunId(), null, TeamEventType.TEAM_CONTROL_STARTED, null, null,
             "TeamControlCenter 启动 DAG 调度、并发限制、超时熔断和迭代拦截", Map.of(
                 "maxConcurrentSteps", runtimeProperties.getMaxConcurrentSteps(),
@@ -492,45 +556,84 @@ public class TeamBlackboardService {
                 "runTimeoutSeconds", runtimeProperties.getRunTimeoutSeconds()
             ));
 
+        // 3. DAG 执行主循环
         while (true) {
+            // 3.1 检查任务是否超时
             if (failIfRunTimedOut(run)) {
                 return;
             }
-            markReadySteps(run);
-            List<TeamStepEntity> readySteps = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
+            
+            // 3.2 标记可以执行的步骤（READY 状态且依赖已满足）
+            markReadySteps(run); 
+            
+            // 3.3 查询就绪的步骤（最多并发执行的数量）
+            List<TeamStepEntity> readySteps = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
                 .filter(step -> step.getStatus() == TeamStepStatus.READY)
                 .limit(runtimeProperties.getMaxConcurrentSteps())
                 .toList();
+            
+            // 3.4 没有可执行的步骤
             if (readySteps.isEmpty()) {
-                List<TeamStepEntity> all = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId());
+                List<TeamStepEntity> all = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId());
+                // 没有可执行 Step 时：已有失败、有步骤执行中、或全部完成。
+                
+                // 情况1：存在失败的步骤，标记任务失败
                 if (all.stream().anyMatch(step -> step.getStatus() == TeamStepStatus.FAILED)) {
                     failRun(run.getRunId(), "存在失败 Step，DAG 停止执行");
                     return;
                 }
+                
+                // 情况2：有步骤正在执行，等待后重试
+                if (all.stream().anyMatch(step -> step.getStatus() == TeamStepStatus.EXECUTING)) {
+                    log.debug("[DAG] Steps still executing for run {}, waiting {}ms", run.getRunId(),
+                        runtimeProperties.getStepPollIntervalMs());
+                    try {
+                        Thread.sleep(runtimeProperties.getStepPollIntervalMs());
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
+                    continue;
+                }
+                
+                // 情况3：所有步骤都完成，正常退出
                 boolean allDone = all.stream().allMatch(step ->
                     step.getStatus() == TeamStepStatus.COMPLETED || step.getStatus() == TeamStepStatus.SUPERSEDED);
                 if (allDone) {
                     return;
                 }
+                
+                // 情况4：依赖无法继续，标记失败
                 failRun(run.getRunId(), "DAG 依赖无法继续推进，请检查 Planner 输出的 dependsOn");
                 return;
             }
 
+            // 3.5 并发执行就绪的步骤
             List<CompletableFuture<Void>> futures = new ArrayList<>();
             for (TeamStepEntity step : readySteps) {
+                // 使用线程池异步执行步骤
                 CompletableFuture<Void> future = CompletableFuture
                     .runAsync(() -> executeStepSafely(run.getRunId(), step.getStepId()), taskExecutor);
+                
+                // 设置步骤超时
                 if (runtimeProperties.getStepTimeoutSeconds() > 0) {
                     future = future.orTimeout(runtimeProperties.getStepTimeoutSeconds(), TimeUnit.SECONDS);
                 }
+                
+                // 添加异常处理
                 futures.add(future.exceptionally(error -> {
                     handleStepFutureFailure(run.getRunId(), step.getStepId(), error);
                     return null;
                 }));
             }
+            
+            // 3.6 等待所有步骤完成
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-            TeamRunEntity latest = runRepository.findById(run.getRunId()).orElse(run);
+            
+            // 3.7 检查最新状态
+            TeamRunEntity latest = runMapper.selectOptionalById(run.getRunId()).orElse(run);
             run.setStatus(latest.getStatus());
+            
+            // 3.8 检查是否需要暂停或失败
             if (latest.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION || latest.getStatus() == TeamRunStatus.FAILED) {
                 return;
             }
@@ -541,29 +644,59 @@ public class TeamBlackboardService {
         executeDagSteps(run, team);
     }
 
+    /**
+     * 标记可执行的步骤（DAG 依赖解析）
+     * 
+     * 核心逻辑：
+     * 1. 收集所有已完成的步骤 ID
+     * 2. 遍历所有步骤，检查依赖是否满足
+     * 3. 依赖满足的步骤标记为 READY
+     * 4. 依赖未满足的 PENDING 步骤标记为 BLOCKED
+     * 
+     * 状态转换规则：
+     * - PENDING → READY（依赖满足）
+     * - PENDING → BLOCKED（依赖未满足）
+     * - BLOCKED → READY（依赖满足）
+     * - RETRYING → READY（依赖满足）
+     * 
+     * @param run 任务实体
+     */
     private void markReadySteps(TeamRunEntity run) {
-        List<TeamStepEntity> all = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId());
+        // 1. 获取所有步骤
+        List<TeamStepEntity> all = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId());
+        
+        // 2. 收集已完成的步骤 ID（COMPLETED 或 SUPERSEDED 都视为完成）
         Set<String> completed = new HashSet<>();
         for (TeamStepEntity step : all) {
             if (step.getStatus() == TeamStepStatus.COMPLETED || step.getStatus() == TeamStepStatus.SUPERSEDED) {
                 completed.add(step.getStepId());
             }
         }
+        
+        // 3. 遍历步骤，检查依赖是否满足
         for (TeamStepEntity step : all) {
+            // PENDING 首次发现依赖未完成会标记 BLOCKED；依赖满足后统一转 READY。
+            // 只处理需要检查依赖的步骤
             if (step.getStatus() != TeamStepStatus.PENDING
                 && step.getStatus() != TeamStepStatus.BLOCKED
                 && step.getStatus() != TeamStepStatus.RETRYING) {
                 continue;
             }
+            
+            // 获取当前步骤的依赖列表
             List<String> dependencies = json.stringList(step.getDependsOnStepIdsJson());
+            
+            // 4. 检查依赖是否都已完成
             if (completed.containsAll(dependencies)) {
+                // 依赖满足，标记为 READY
                 step.setStatus(TeamStepStatus.READY);
-                stepRepository.save(step);
+                stepMapper.upsertById(step);
                 recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_READY, null, null,
                     "Step 依赖已完成，进入可执行队列", Map.of("dependsOnStepIds", dependencies));
             } else if (step.getStatus() == TeamStepStatus.PENDING) {
+                // 依赖未满足，标记为 BLOCKED（仅 PENDING 状态需要标记，BLOCKED 保持不变）
                 step.setStatus(TeamStepStatus.BLOCKED);
-                stepRepository.save(step);
+                stepMapper.upsertById(step);
                 recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_BLOCKED, null, null,
                     "Step 等待前置依赖完成", Map.of("dependsOnStepIds", dependencies));
             }
@@ -572,6 +705,7 @@ public class TeamBlackboardService {
 
     private void executeStepSafely(String runId, String stepId) {
         try {
+            // 执行step
             executeStep(runId, stepId);
         } catch (Exception e) {
             log.error("Team step failed: {}", stepId, e);
@@ -597,51 +731,149 @@ public class TeamBlackboardService {
         return current == null ? new IllegalStateException("unknown async failure") : current;
     }
 
+    /**
+     * 执行单个 Step 的完整生命周期。
+     * <p>这是 Team 任务执行的核心方法，负责协调单个步骤的完整执行流程：
+     * <ol>
+     *   <li><strong>加载实体</strong>：从数据库获取 Run、Team、Step 实体</li>
+     *   <li><strong>选择 Executor</strong>：基于能力匹配 + 模型智能选择合适的执行 Agent</li>
+     *   <li><strong>状态管理</strong>：更新步骤状态为 ASSIGNED → RUNNING</li>
+     *   <li><strong>构建提示词</strong>：生成包含依赖步骤输出的执行提示词</li>
+     *   <li><strong>执行 Agent</strong>：调用选定的 Executor Agent 执行步骤</li>
+     *   <li><strong>结果处理</strong>：保存执行结果，处理高风险步骤的 SubReview</li>
+     * </ol>
+     *
+     * <p><strong>状态流转：</strong>
+     * <br/>PENDING/BLOCKED/RETRYING → ASSIGNED → RUNNING → COMPLETED/FAILED
+     *
+     * <p><strong>异常处理：</strong>
+     * <br/>执行过程中发生异常时，会将步骤状态设置为 FAILED，确保 DAG 调度能正确识别并处理失败。
+     *
+     * @param runId  任务运行 ID，用于关联到具体的 Team 任务
+     * @param stepId 步骤 ID，标识要执行的具体步骤
+     */
     @Transactional
     protected void executeStep(String runId, String stepId) {
-        TeamRunEntity run = runRepository.findById(runId)
+        // ============================================
+        // 阶段1：加载实体
+        // ============================================
+        // 从数据库获取任务运行实体，如果不存在则抛出异常
+        TeamRunEntity run = runMapper.selectOptionalById(runId)
             .orElseThrow(() -> new IllegalArgumentException("Run not found: " + runId));
+        
+        // 获取团队快照，包含团队成员和配置信息
         TeamSnapshot team = getTeam(run.getTeamId());
-        TeamStepEntity step = stepRepository.findById(stepId)
+        
+        // 获取步骤实体，如果不存在则抛出异常
+        TeamStepEntity step = stepMapper.selectOptionalById(stepId)
             .orElseThrow(() -> new IllegalArgumentException("Step not found: " + stepId));
 
+        // ============================================
+        // 阶段2：选择 Executor Agent
+        // ============================================
+        // 解析步骤所需的能力列表
         List<String> requiredCapabilities = json.stringList(step.getRequiredCapabilitiesJson());
-        List<TeamStepEntity> runSteps = stepRepository.findByRunIdOrderByStepIndexAsc(runId);
-        TeamAgentSelection selection = selectExecutorWithModel(run, team, step, requiredCapabilities, runSteps);
+        
+        // 调用选择器选择 Executor（模型智能选择 + 规则兜底）
+        // selectExecutorWithModel 会先通过规则引擎筛选候选，再让 Planner 模型做最终选择
+        TeamAgentSelection selection = selectExecutorWithModel(run, team, step, requiredCapabilities);
+        
+        // 根据选择结果获取对应的 Agent 成员
         TeamMember executor = selection == null ? null : executorBySelection(team, selection);
+        
+        // 如果没有找到合适的 Executor，抛出异常终止执行
         if (executor == null) {
             throw new IllegalStateException("No executor configured");
         }
+        
+        // 记录 Agent 选择事件（selection 可能为 null，需做空值保护）
         recordEvent(runId, stepId, TeamEventType.AGENT_SELECTED, TeamRole.PLANNER, planner(team).agentId(),
-            "模型选择 Executor " + executor.agentName() + "：" + selection.reason(), selection);
+            "模型选择 Executor " + executor.agentName() + "：" + (selection != null ? selection.reason() : "规则兜底"), selection);
 
+        // ============================================
+        // 阶段3：设置步骤状态（区分重试和首次执行）
+        // ============================================
+        // 判断是否为重试：重试次数 > 0 或当前状态为 RETRYING
         boolean retrying = step.getRetryCount() > 0 || step.getStatus() == TeamStepStatus.RETRYING;
+        
+        // 设置分配的 Agent ID
         step.setAssignedAgentId(executor.agentId());
+        
+        // 设置状态：重试时保持 RETRYING，首次执行时设为 ASSIGNED
         step.setStatus(retrying ? TeamStepStatus.RETRYING : TeamStepStatus.ASSIGNED);
+        
+        // 记录步骤开始时间
         step.setStartedAt(Instant.now());
-        stepRepository.save(step);
+        
+        // 持久化状态变更
+        stepMapper.upsertById(step);
+        
+        // 记录步骤分配事件
         recordEvent(runId, stepId, TeamEventType.STEP_ASSIGNED, TeamRole.EXECUTOR, executor.agentId(),
             "Step assigned to " + executor.agentName(), Map.of(
                 "requiredCapabilities", requiredCapabilities,
                 "selection", selection
             ));
 
+        // ============================================
+        // 阶段4：标记步骤开始执行
+        // ============================================
+        // 更新状态为 RUNNING（重试时仍为 RETRYING，便于区分）
         step.setStatus(retrying ? TeamStepStatus.RETRYING : TeamStepStatus.RUNNING);
-        stepRepository.save(step);
+        stepMapper.upsertById(step);
+        
+        // 记录步骤开始事件（区分首次执行和重试）
         recordEvent(runId, stepId, retrying ? TeamEventType.STEP_RETRY_STARTED : TeamEventType.STEP_STARTED,
             TeamRole.EXECUTOR, executor.agentId(), "Executor started step", null);
 
-        String prompt = executorPrompt(run, step);
+        // ============================================
+        // 阶段5：构建执行提示词
+        // ============================================
+        // 使用 TeamPromptFactory 生成 Executor 的执行提示词
+        // 提示词包含：用户任务、步骤描述、依赖步骤的输出
+        String prompt = TeamPromptFactory.executor(run, step, dependencyOutputs(step));
+        
+        // 保存输入信息到步骤实体（便于追踪和调试）
         step.setInputJson(json.toJson(Map.of("prompt", prompt, "selection", selection)));
-        stepRepository.save(step);
+        stepMapper.upsertById(step);
 
-        PipelineContext result = executeTeamInternal(executor.agentId(), stepSession(run, step), prompt);
-        String output = result.getFinalResponse();
-        if (output != null && output.startsWith("[Error]")) {
-            throw new IllegalStateException(output);
+        // ============================================
+        // 阶段6：调用 Agent 执行
+        // ============================================
+        String output;
+        try {
+            // 调用 Agent 执行步骤
+            // executeTeamInternal 会执行完整的 Agent Pipeline（记忆加载、工具调用等）
+            PipelineContext result = executeTeamInternal(executor.agentId(), stepSession(run, step), prompt);
+            
+            // 处理可能的 null 返回值（防止 NPE）
+            output = result != null ? result.getFinalResponse() : null;
+            
+            // 如果 Agent 返回错误标记，抛出异常
+            if (output != null && output.startsWith("[Error]")) {
+                throw new IllegalStateException(output);
+            }
+        } catch (Exception e) {
+            // 执行失败时设置失败状态，避免步骤停留在 RUNNING 导致 DAG 卡住
+            step.setStatus(TeamStepStatus.FAILED);
+            step.setRawOutput("Step failed: " + e.getMessage());
+            stepMapper.upsertById(step);
+            throw e;  // 继续向上抛出异常，让上层处理
         }
+
+        // ============================================
+        // 阶段7：保存执行结果
+        // ============================================
+        // 检查任务是否可写（用于并发控制）
         requireRunWritable(runId);
+        
+        // 保存 Agent 的输出结果
         step.setRawOutput(output);
+
+        // ============================================
+        // 阶段8：处理结果（高风险步骤 vs 普通步骤）
+        // ============================================
+        // 如果是高风险步骤，需要经过 SubReview 审核
         if (step.getRiskLevel() == TeamRiskLevel.HIGH) {
             reviewHighRiskStep(run, team, step, retrying);
             return;
@@ -649,69 +881,64 @@ public class TeamBlackboardService {
         completeStep(runId, step, executor.agentId(), retrying, TeamStepQualityStatus.PASSED);
     }
 
+    /**
+     * 选择执行步骤的 Executor Agent。
+     * <p>采用"模型主选 + 规则兜底"策略：
+     * <ol>
+     *   <li>首先通过规则引擎获取候选 Executor 列表（按能力匹配度排序）</li>
+     *   <li>调用 Planner 模型进行智能选择（考虑步骤语义、依赖输出等）</li>
+     *   <li>模型选择有效时返回模型选择结果</li>
+     *   <li>模型选择无效或异常时，使用规则兜底（选择候选列表首位）</li>
+     * </ol>
+     *
+     * @param run                  任务运行实体
+     * @param team                 团队快照
+     * @param step                 步骤实体
+     * @param requiredCapabilities 步骤需要的能力列表
+     * @return 选中的 Executor Agent，若无候选则返回 null
+     */
     private TeamAgentSelection selectExecutorWithModel(TeamRunEntity run, TeamSnapshot team, TeamStepEntity step,
-                                                       List<String> requiredCapabilities,
-                                                       List<TeamStepEntity> runSteps) {
-        List<TeamAgentSelection> candidates = agentSelector.rankExecutors(team.members(), requiredCapabilities, runSteps);
+                                                       List<String> requiredCapabilities) {
+        // 1. 获取候选 Executor 列表（按能力匹配度排序）
+        List<TeamAgentSelection> candidates = agentSelector.rankExecutors(team.members(), requiredCapabilities);
         if (candidates.isEmpty()) {
-            return null;
+            return null;  // 无候选 Executor
         }
+
+        // 2. 创建规则兜底选择（候选列表首位）
         TeamAgentSelection fallback = candidates.get(0).withDecision("RULE_FALLBACK",
             "模型选择不可用时的规则兜底：" + candidates.get(0).reason());
+
+        // 3. 调用 Planner 模型进行智能选择
+        // 主选择权交给模型；模型输出无效或异常时，退回能力匹配分 + sortOrder 的稳定兜底
         TeamMember planner = planner(team);
-        String prompt = """
-            你是 Agent Team 的 AgentSelector，由 Planner 负责为当前 Step 自主选择一个 Executor 成员。
-            候选列表里的 memberKey 是唯一标识；如果多个候选使用同一个 agentId，必须用 memberKey 区分。
-            规则评分只是参考，不要机械照抄；请结合用户任务、Step 描述、能力标签、依赖输出摘要、当前负载和验收标准决策。
-            只能从 candidates 中选择一个 memberKey，不要编造候选。
-            请只返回单行 JSON：
-            {
-              "memberKey": "候选 memberKey",
-              "agentId": "候选 agentId",
-              "reason": "中文说明为什么这个 Executor 最合适"
-            }
+        String prompt = TeamPromptFactory.agentSelector(run, step, requiredCapabilities, dependencyOutputs(step),
+            candidates, json);
 
-            原始用户任务：
-            %s
-
-            当前 Step：
-            %s
-
-            Step 依赖输出摘要：
-            %s
-
-            Executor 候选：
-            %s
-            """.formatted(
-            run.getTask(),
-            json.toJson(Map.of(
-                "stepId", step.getStepId(),
-                "title", nullToBlank(step.getTitle()),
-                "description", nullToBlank(step.getDescription()),
-                "requiredCapabilities", requiredCapabilities,
-                "acceptanceCriteria", nullToBlank(step.getAcceptanceCriteria()),
-                "riskLevel", step.getRiskLevel() == null ? "" : step.getRiskLevel().name()
-            )),
-            abbreviate(dependencyOutputs(step), 1200),
-            json.toJson(candidates)
-        );
         try {
-            PipelineContext result = executeTeamInternal(planner.agentId(),
+            // 4. 执行模型选择
+            PipelineContext result = executeTeamControlInternal(planner.agentId(),
                 "team-run-" + run.getRunId() + "-agent-selector-" + step.getStepId() + "-" + UUID.randomUUID(),
                 prompt);
+
+            // 5. 解析模型决策并匹配候选列表
             TeamExecutorSelectionDecision decision = json.parseExecutorSelectionDecision(
                 result == null ? "" : result.getFinalResponse());
             TeamAgentSelection selected = agentSelector.matchModelDecision(candidates, decision.memberKey(),
                 decision.agentId());
+
+            // 6. 返回模型选择或兜底选择
             if (selected != null) {
                 return selected.withDecision("MODEL",
                     "模型自主选择：" + blankToDefault(decision.reason(), "匹配当前 Step 的语义和能力要求")
                         + "；" + selected.reason());
             }
+            // 模型返回的 Executor 不在候选列表中，使用规则兜底
             return fallback.withDecision("RULE_FALLBACK",
                 "模型返回的 Executor 不在候选列表中，使用规则兜底；模型原始选择 memberKey="
                     + decision.memberKey() + "，agentId=" + decision.agentId() + "；" + fallback.reason());
         } catch (Exception e) {
+            // 模型选择失败，使用规则兜底
             log.warn("AgentSelector model decision failed for run {} step {}: {}", run.getRunId(), step.getStepId(),
                 e.getMessage());
             return fallback.withDecision("RULE_FALLBACK",
@@ -720,6 +947,7 @@ public class TeamBlackboardService {
     }
 
     private void reviewHighRiskStep(TeamRunEntity run, TeamSnapshot team, TeamStepEntity step, boolean retrying) {
+        // 高风险 Step 不能直接进入下游，必须先过 SubReviewer；失败时写 Reflexion 再重试。
         TeamMember reviewer = subReviewer(team);
         recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_SUB_REVIEW_STARTED, TeamRole.SUB_REVIEWER,
             reviewer.agentId(), "SubReviewer 开始校验高风险 Step", null);
@@ -748,56 +976,7 @@ public class TeamBlackboardService {
     }
 
     private ReviewerDecision callSubReviewer(TeamRunEntity run, TeamMember reviewer, TeamStepEntity step) {
-        String prompt = """
-            你是 Agent Team 的 SubReviewer，负责审查单个高风险 Step 的原始输出。
-            请对照原始任务、Step 描述和验收标准，判断该 Step 是否可被下游依赖使用。
-            如果需要重试，必须给出可执行的 Reflexion 修改意见。
-            请只返回 JSON：
-            {
-              "action": "CONTINUE | RETRY | ASK_CLARIFICATION",
-              "reason": "中文审查原因",
-              "questions": ["需要用户补充时填写"],
-              "retryStepIds": [],
-              "revisionInstructions": "重试修改意见",
-              "stepReflections": {
-                "%s": {
-                  "failedCriteria": ["未满足的验收标准"],
-                  "reviewReason": "失败原因",
-                  "revisionInstructions": "具体修正建议",
-                  "previousOutputSummary": "上一轮输出摘要",
-                  "avoidRepeating": ["避免重复的问题"]
-                }
-              },
-              "finalReport": ""
-            }
-
-            原始用户任务：
-            %s
-
-            Step 标题：
-            %s
-
-            Step 描述：
-            %s
-
-            验收标准：
-            %s
-
-            风险原因：
-            %s
-
-            Executor 原始输出：
-            %s
-            """.formatted(
-            step.getStepId(),
-            run.getTask(),
-            step.getTitle(),
-            nullToBlank(step.getDescription()),
-            nullToBlank(step.getAcceptanceCriteria()),
-            nullToBlank(step.getRiskReason()),
-            nullToBlank(step.getRawOutput())
-        );
-        return executeReviewerDecision(reviewer, run, prompt, false);
+        return executeReviewerDecision(reviewer, run, TeamPromptFactory.subReviewer(run, step), false);
     }
 
     private void completeStep(String runId, TeamStepEntity step, String actorAgentId, boolean retrying,
@@ -806,71 +985,26 @@ public class TeamBlackboardService {
         step.setReviewStatus(qualityStatus.name());
         step.setStatus(TeamStepStatus.COMPLETED);
         step.setCompletedAt(Instant.now());
-        stepRepository.save(step);
+        stepMapper.upsertById(step);
         recordEvent(runId, step.getStepId(), retrying ? TeamEventType.STEP_RETRY_COMPLETED : TeamEventType.STEP_COMPLETED,
             TeamRole.EXECUTOR, actorAgentId, "Executor 完成 Step", Map.of("qualityStatus", qualityStatus.name()));
     }
 
-    private String executorPrompt(TeamRunEntity run, TeamStepEntity step) {
-        return """
-            You are an Executor in an Agent Team. Complete only the assigned step.
-            Use available tools when useful. Return raw findings clearly, not the final report.
-            Your answer must be the actual deliverable for this step. Do not return raw tool call markup, DSML tags, JSON tool calls, or a list of search queries.
-            Write the deliverable in Simplified Chinese.
-
-            Original user task:
-            %s
-
-            User clarification, if any:
-            %s
-
-            Step title:
-            %s
-
-            Step description:
-            %s
-
-            Acceptance criteria:
-            %s
-
-            Dependency outputs, if any:
-            %s
-
-            Previous output, if retrying:
-            %s
-
-            Reviewer revision instructions, if any:
-            %s
-
-            Reflexion context, if retrying:
-            %s
-            """.formatted(
-            run.getTask(),
-            nullToBlank(run.getClarificationAnswer()),
-            step.getTitle(),
-            nullToBlank(step.getDescription()),
-            nullToBlank(step.getAcceptanceCriteria()),
-            dependencyOutputs(step),
-            nullToBlank(step.getPreviousOutputsJson()),
-            nullToBlank(step.getRevisionInstructions()),
-            nullToBlank(step.getReflectionJson())
-        );
-    }
-
     private void mergeAndReviewResults(TeamRunEntity run, TeamSnapshot team) {
+        // 固定结果链路：MergeAgent 聚合 -> ConflictDetector 查冲突 -> 必要时 Planner 仲裁 -> GlobalReviewer 终审。
         run.setStatus(TeamRunStatus.MERGING);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         TeamMember merger = merger(team);
         recordEvent(run.getRunId(), null, TeamEventType.MERGE_STARTED, TeamRole.MERGER,
             merger.agentId(), "MergeAgent 开始聚合 Step 输出", null);
         String mergeOutput = callMerger(run, merger);
         run.setMergeOutput(mergeOutput);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.MERGE_COMPLETED, TeamRole.MERGER,
             merger.agentId(), "MergeAgent 完成聚合", Map.of("mergeOutput", mergeOutput));
         TeamConflictReport conflictReport = detectConflicts(run, team, mergeOutput);
         run.setConflictReportJson(json.toJson(conflictReport));
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.CONFLICT_DETECTED, null, null,
             conflictReport.hasConflict() ? "ConflictDetector 发现冲突" : "ConflictDetector 未发现冲突", conflictReport);
         if (conflictReport.hasConflict()
@@ -882,7 +1016,7 @@ public class TeamBlackboardService {
                 "conflictReport", conflictReport,
                 "arbitrationCount", run.getArbitrationCount()
             )));
-            runRepository.save(run);
+            runMapper.upsertById(run);
             recordEvent(run.getRunId(), null, TeamEventType.ARBITRATION_COMPLETED, TeamRole.PLANNER,
                 planner(team).agentId(), "Planner 完成冲突仲裁", run.getArbitrationJson());
             recordEvent(run.getRunId(), null, TeamEventType.MERGE_STARTED, TeamRole.MERGER,
@@ -891,7 +1025,7 @@ public class TeamBlackboardService {
             run.setMergeOutput(mergeOutput);
             TeamConflictReport secondReport = detectConflicts(run, team, mergeOutput);
             run.setConflictReportJson(json.toJson(secondReport));
-            runRepository.save(run);
+            runMapper.upsertById(run);
             recordEvent(run.getRunId(), null, TeamEventType.MERGE_COMPLETED, TeamRole.MERGER,
                 merger.agentId(), "MergeAgent 完成仲裁后二次聚合", Map.of("mergeOutput", mergeOutput));
             recordEvent(run.getRunId(), null, TeamEventType.CONFLICT_DETECTED, null, null,
@@ -901,67 +1035,23 @@ public class TeamBlackboardService {
     }
 
     private String callMerger(TeamRunEntity run, TeamMember merger) {
-        List<TeamStepSnapshot> steps = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
+        List<TeamStepSnapshot> steps = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
             .map(this::toStepSnapshot)
             .toList();
-        String prompt = """
-            你是 Agent Team 的 MergeAgent，负责把多个 Step 的原始结果聚合成一致、可读、可审查的中文草稿。
-            请统一口径、指出冲突或瑕疵，不要隐藏 FLAWED_ACCEPTED 的问题。
-            忽略状态为 SUPERSEDED 的旧 Step，它们只作为重规划历史。
-            如果存在 Planner 仲裁结果，请按仲裁口径统一数字、日期、地点和执行方案。
-            只输出聚合后的 Markdown 草稿，不要输出 JSON。
-
-            原始用户任务：
-            %s
-
-            Step 结果：
-            %s
-
-            ConflictDetector 报告：
-            %s
-
-            Planner 仲裁结果：
-            %s
-            """.formatted(
-            run.getTask(),
-            json.toJson(steps),
-            nullToBlank(run.getConflictReportJson()),
-            nullToBlank(run.getArbitrationJson())
-        );
-        PipelineContext result = executeTeamInternal(merger.agentId(), "team-run-" + run.getRunId() + "-merger", prompt);
+        String prompt = TeamPromptFactory.merger(run, steps, json);
+        PipelineContext result = executeTeamControlInternal(merger.agentId(), "team-run-" + run.getRunId() + "-merger", prompt);
         String output = result == null ? "" : result.getFinalResponse();
         return output == null || output.isBlank() ? synthesizeFallbackReport(run) : output;
     }
 
     private TeamConflictReport detectConflicts(TeamRunEntity run, TeamSnapshot team, String mergeOutput) {
         TeamMember reviewer = reviewer(team);
-        List<TeamStepSnapshot> steps = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
+        List<TeamStepSnapshot> steps = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
             .map(this::toStepSnapshot)
             .toList();
-        String prompt = """
-            你是 Agent Team 的 ConflictDetector，负责在 MergeAgent 聚合后检测事实冲突和口径不一致。
-            只判断已经完成且未被 SUPERSEDED 的 Step 与 Merge 草稿之间是否存在冲突。
-            重点检查：预算金额、日期时间、地点、人数、天气风险、责任人、前后步骤依赖口径。
-            请只返回单行 JSON：
-            {
-              "hasConflict": true,
-              "conflictFields": ["冲突字段"],
-              "affectedStepIds": ["涉及 Step ID"],
-              "reason": "中文冲突说明",
-              "normalizationAdvice": "建议统一口径"
-            }
-
-            原始用户任务：
-            %s
-
-            Step 结果：
-            %s
-
-            MergeAgent 草稿：
-            %s
-            """.formatted(run.getTask(), json.toJson(steps), nullToBlank(mergeOutput));
+        String prompt = TeamPromptFactory.conflictDetector(run, steps, mergeOutput, json);
         try {
-            PipelineContext result = executeTeamInternal(reviewer.agentId(),
+            PipelineContext result = executeTeamControlInternal(reviewer.agentId(),
                 "team-run-" + run.getRunId() + "-conflict-detector-" + UUID.randomUUID(), prompt);
             TeamConflictReport report = json.parseConflictReport(result == null ? "" : result.getFinalResponse());
             if (!report.hasConflict()) {
@@ -978,40 +1068,20 @@ public class TeamBlackboardService {
         TeamMember planner = planner(team);
         recordEvent(run.getRunId(), null, TeamEventType.ARBITRATION_STARTED, TeamRole.PLANNER,
             planner.agentId(), "Planner 开始冲突仲裁", conflictReport);
-        List<TeamStepSnapshot> steps = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
+        List<TeamStepSnapshot> steps = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
             .map(this::toStepSnapshot)
             .toList();
-        String prompt = """
-            你是 PlannerArbitration，负责根据冲突报告给出唯一执行口径。
-            请不要重写最终报告，只输出仲裁意见和统一规范。
-            输出中文 Markdown，包含：冲突结论、统一口径、MergeAgent 二次聚合注意事项。
-
-            原始用户任务：
-            %s
-
-            ConflictDetector 报告：
-            %s
-
-            Step 结果：
-            %s
-
-            当前 Merge 草稿：
-            %s
-            """.formatted(
-            run.getTask(),
-            json.toJson(conflictReport),
-            json.toJson(steps),
-            nullToBlank(run.getMergeOutput())
-        );
-        PipelineContext result = executeTeamInternal(planner.agentId(),
+        String prompt = TeamPromptFactory.arbitration(run, conflictReport, steps, json);
+        PipelineContext result = executeTeamControlInternal(planner.agentId(),
             "team-run-" + run.getRunId() + "-planner-arbitration-" + UUID.randomUUID(), prompt);
         String output = result == null ? "" : result.getFinalResponse();
         return output == null || output.isBlank() ? "未生成仲裁意见，GlobalReviewer 继续兜底终审。" : output;
     }
 
     private void reviewResults(TeamRunEntity run, TeamSnapshot team) {
+        // GlobalReviewer 是最终质量闸门：可以通过、重试 Step、局部重规划、整体重规划、澄清或失败。
         run.setStatus(TeamRunStatus.GLOBAL_REVIEWING);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.GLOBAL_REVIEW_STARTED, TeamRole.REVIEWER,
             reviewer(team).agentId(), "GlobalReviewer 开始终审", null);
 
@@ -1019,7 +1089,7 @@ public class TeamBlackboardService {
         requireRunWritable(run.getRunId());
         run.setResultReviewJson(json.toJson(decision));
         run.setGlobalReviewJson(json.toJson(decision));
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.GLOBAL_REVIEWED, TeamRole.REVIEWER,
             reviewer(team).agentId(), decision.reason(), decision);
 
@@ -1033,7 +1103,7 @@ public class TeamBlackboardService {
                 toRunSnapshot(run, true, true).steps(),
                 toRunSnapshot(run, true, true).events()
             ));
-            runRepository.save(run);
+            runMapper.upsertById(run);
             recordEvent(run.getRunId(), null, TeamEventType.RUN_COMPLETED, TeamRole.REVIEWER,
                 reviewer(team).agentId(), "Reviewer completed final report", null);
             return;
@@ -1075,12 +1145,13 @@ public class TeamBlackboardService {
     }
 
     private void replanFromResultReview(TeamRunEntity run, TeamSnapshot team, ReviewerDecision decision) {
+        // 整体重规划会保留旧 Step 作为历史，将新计划作为下一轮完整 DAG。
         if (run.getResultReplanCount() >= runtimeProperties.getMaxResultReplans()) {
             failRun(run.getRunId(), "Reviewer requested replan but result replan limit reached: " + decision.reason());
             return;
         }
 
-        List<TeamStepSnapshot> previousResults = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
+        List<TeamStepSnapshot> previousResults = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
             .map(this::toStepSnapshot)
             .toList();
         List<PlannedStep> previousPlan = previousResults.stream()
@@ -1107,7 +1178,7 @@ public class TeamBlackboardService {
         run.setArbitrationCount(0);
         run.setFinalOutput(null);
         run.setMermaidDiagram(null);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.REPLAN_REQUESTED, TeamRole.REVIEWER,
             reviewer(team).agentId(), "Reviewer requested result replan: " + decision.reason(), decision);
 
@@ -1124,11 +1195,12 @@ public class TeamBlackboardService {
     }
 
     private void partialReplanFromResultReview(TeamRunEntity run, TeamSnapshot team, ReviewerDecision decision) {
+        // 局部重规划只替换受影响分支及其下游，未受影响的已完成 Step 继续作为依赖可复用。
         if (run.getPartialReplanCount() >= runtimeProperties.getMaxResultReplans()) {
             failRun(run.getRunId(), "Reviewer requested partial replan but partial replan limit reached: " + decision.reason());
             return;
         }
-        List<TeamStepEntity> all = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId());
+        List<TeamStepEntity> all = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId());
         Set<String> roots = resolveStepIds(all, decision.affectedStepIds().isEmpty()
             ? decision.retryStepIds()
             : decision.affectedStepIds());
@@ -1163,7 +1235,7 @@ public class TeamBlackboardService {
         run.setArbitrationJson(null);
         run.setFinalOutput(null);
         run.setMermaidDiagram(null);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.REPLAN_REQUESTED, TeamRole.REVIEWER,
             reviewer(team).agentId(), "GlobalReviewer requested partial DAG replan: " + decision.reason(), decision);
 
@@ -1173,14 +1245,14 @@ public class TeamBlackboardService {
                 step.setRevisionInstructions(decision.revisionInstructions());
                 step.setLastReviewReason(decision.reason());
                 step.setReflectionJson(json.toJson(reflectionForStep(step, decision)));
-                stepRepository.save(step);
+                stepMapper.upsertById(step);
                 recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_REFLECTION_RECORDED,
                     TeamRole.REVIEWER, reviewer(team).agentId(), "局部重规划写入 Reflexion 上下文", step.getReflectionJson());
             }
         }
 
         run.setStatus(TeamRunStatus.PLANNING);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.PLAN_STARTED, TeamRole.PLANNER,
             planner(team).agentId(), "Planner started partial DAG replan", Map.of("affectedStepIds", affected));
         List<PlannedStep> planned = callPlanner(run, team, affectedPlan, decision.revisionInstructions(), previousResults);
@@ -1189,10 +1261,10 @@ public class TeamBlackboardService {
             planner(team).agentId(), "Planner created " + planned.size() + " replacement step(s)", planned);
 
         run.setStatus(TeamRunStatus.PLAN_REVIEWING);
-        runRepository.save(run);
+        runMapper.upsertById(run);
         ReviewerDecision planDecision = callReviewerForPlan(run, team, planned);
         run.setPlanReviewJson(json.toJson(planDecision));
-        runRepository.save(run);
+        runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.PLAN_REVIEWED, TeamRole.REVIEWER,
             reviewer(team).agentId(), planDecision.reason(), planDecision);
         if (planDecision.action() == ReviewerAction.ASK_CLARIFICATION) {
@@ -1213,84 +1285,41 @@ public class TeamBlackboardService {
 
     private ReviewerDecision callReviewerForResults(TeamRunEntity run, TeamSnapshot team) {
         TeamMember reviewer = reviewer(team);
-        List<TeamStepSnapshot> steps = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
+        List<TeamStepSnapshot> steps = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
             .map(this::toStepSnapshot)
             .toList();
-        String prompt = """
-            You are the Reviewer, quality gate, and final report writer for an Agent Team.
-            You are acting as GlobalReviewer. Compare the original user request, MergeAgent draft, and every Executor result.
-            Write reason, questions, revisionInstructions, and finalReport in Simplified Chinese.
-            If the planned Step structure is still correct but some results are insufficient, return RETRY with the exact retryStepIds and revision instructions.
-            If only a local DAG branch needs replanning, return PARTIAL_REPLAN with affectedStepIds and revisionInstructions.
-            If the Step structure itself is wrong or missing required work globally, return REPLAN with revisionInstructions for the Planner.
-            If user input is ambiguous, return ASK_CLARIFICATION with questions.
-            If the result is unrecoverable within the current limits, return FAILED.
-            If acceptable, return CONTINUE and write finalReport as a complete user-facing report.
-            Any RETRY or PARTIAL_REPLAN must include Reflexion in stepReflections for affected Step IDs.
-            Respond as one single-line valid JSON object only.
-            Text fields must not contain raw line breaks. Encode line breaks as \\n only when needed.
-            Do not use ASCII double quotes inside text values; use Chinese corner quotes 「」 instead.
-            Respond only with JSON:
-            {
-              "action": "CONTINUE | RETRY | PARTIAL_REPLAN | REPLAN | ASK_CLARIFICATION | FAILED",
-              "reason": "why",
-              "questions": ["only if clarification is needed"],
-              "retryStepIds": ["step-id only when action is RETRY"],
-              "affectedStepIds": ["step-id only when action is PARTIAL_REPLAN"],
-              "revisionInstructions": "instructions for Executor retry or Planner replan",
-              "stepReflections": {
-                "step-id": {
-                  "failedCriteria": ["unmet criteria"],
-                  "reviewReason": "why this step failed",
-                  "revisionInstructions": "how to fix it",
-                  "previousOutputSummary": "summary of bad output",
-                  "avoidRepeating": ["mistakes to avoid"]
-                }
-              },
-              "finalReport": "complete final report when action is CONTINUE"
-            }
-
-            Original task:
-            %s
-
-            User clarification, if any:
-            %s
-
-            MergeAgent draft:
-            %s
-
-            ConflictDetector report:
-            %s
-
-            Planner arbitration, if any:
-            %s
-
-            Steps and raw executor outputs:
-            %s
-            """.formatted(
-            run.getTask(),
-            nullToBlank(run.getClarificationAnswer()),
-            nullToBlank(run.getMergeOutput()),
-            nullToBlank(run.getConflictReportJson()),
-            nullToBlank(run.getArbitrationJson()),
-            json.toJson(steps)
-        );
-
-        return executeReviewerDecision(reviewer, run, prompt, true);
+        return executeReviewerDecision(reviewer, run, TeamPromptFactory.resultReviewer(run, steps, json), true);
     }
 
+    /**
+     * 执行 Reviewer 的审核决策
+     * 
+     * @param reviewer Reviewer 成员
+     * @param run 任务实体
+     * @param prompt 审核提示词
+     * @param requireFinalReport 是否需要最终报告
+     * @return ReviewerDecision 审核决策
+     */
     ReviewerDecision executeReviewerDecision(TeamMember reviewer, TeamRunEntity run,
                                              String prompt, boolean requireFinalReport) {
-        String raw = executeTeamInternal(reviewer.agentId(), reviewerSession(run), prompt).getFinalResponse();
+        // 1. 调用 Reviewer Agent 获取原始响应
+        String raw = executeTeamControlInternal(reviewer.agentId(), reviewerSession(run), prompt).getFinalResponse();
+        
+        // 2. Reviewer 必须返回结构化 JSON；格式坏了就用同一 Reviewer 做有限次数修复。
         for (int attempt = 0; attempt <= runtimeProperties.getMaxReviewerFormatRepairs(); attempt++) {
             try {
+                // 3. 尝试解析结构化决策
                 ReviewerDecision decision = json.parseDecision(raw);
+                // 4. 验证决策的有效性
                 validateReviewerDecision(decision, requireFinalReport);
                 return decision;
             } catch (IllegalArgumentException e) {
+                // 5. 解析失败，判断是否还有修复机会
                 if (attempt >= runtimeProperties.getMaxReviewerFormatRepairs()) {
+                    // 修复次数用完，抛出异常
                     throw e;
                 }
+                // 6. 还有修复机会，让 Reviewer 修复 JSON 格式
                 raw = repairReviewerDecisionJson(reviewer, run, prompt, raw, e.getMessage());
             }
         }
@@ -1299,42 +1328,17 @@ public class TeamBlackboardService {
 
     private String repairReviewerDecisionJson(TeamMember reviewer, TeamRunEntity run,
                                               String originalPrompt, String invalidResponse, String parseError) {
-        String repairPrompt = """
-            Your previous Reviewer response was rejected because it was not valid JSON.
-            Re-evaluate the original Reviewer instruction and return a corrected decision as JSON only.
-            Do not copy the invalid response text.
-            Return one single-line valid JSON object only.
-            Do not add markdown, comments, or prose.
-            Text fields must not contain raw line breaks. Encode line breaks as \\n only when needed.
-            Do not use ASCII double quotes inside text values; use Chinese corner quotes 「」 instead.
-            Required schema:
-            {
-              "action": "CONTINUE | RETRY | PARTIAL_REPLAN | REPLAN | ASK_CLARIFICATION | FAILED",
-              "reason": "why",
-              "questions": [],
-              "retryStepIds": [],
-              "affectedStepIds": [],
-              "revisionInstructions": "",
-              "stepReflections": {},
-              "finalReport": ""
-            }
-
-            Parse error:
-            %s
-
-            Original Reviewer instruction:
-            %s
-
-            Invalid response excerpt, do not copy:
-            %s
-            """.formatted(nullToBlank(parseError), originalPrompt, abbreviate(nullToBlank(invalidResponse), 1200));
-
-        return executeTeamInternal(reviewer.agentId(), reviewerSession(run) + "-repair-" + UUID.randomUUID(), repairPrompt)
+        String repairPrompt = TeamPromptFactory.reviewerRepair(originalPrompt, invalidResponse, parseError);
+        return executeTeamControlInternal(reviewer.agentId(), reviewerSession(run) + "-repair-" + UUID.randomUUID(), repairPrompt)
             .getFinalResponse();
     }
 
     private PipelineContext executeTeamInternal(String agentId, String sessionId, String prompt) {
         return orchestrator.executeInternal(agentId, sessionId, prompt);
+    }
+
+    private PipelineContext executeTeamControlInternal(String agentId, String sessionId, String prompt) {
+        return orchestrator.executeInternal(agentId, sessionId, prompt, false);
     }
 
     private void requireRunWritable(String runId) {
@@ -1344,11 +1348,11 @@ public class TeamBlackboardService {
     }
 
     private boolean isRunDeleted(String runId) {
-        return deletedRunIds.contains(runId) || !runRepository.existsById(runId);
+        return deletedRunIds.contains(runId) || !runMapper.existsById(runId);
     }
 
     private List<TeamStepEntity> retryableSteps(String runId, List<String> retryStepIds) {
-        List<TeamStepEntity> all = stepRepository.findByRunIdOrderByStepIndexAsc(runId);
+        List<TeamStepEntity> all = stepMapper.selectByRunIdOrderByStepIndexAsc(runId);
         if (retryStepIds == null || retryStepIds.isEmpty()) {
             return List.of();
         }
@@ -1395,6 +1399,7 @@ public class TeamBlackboardService {
 
     private void prepareStepRetry(TeamRunEntity run, TeamStepEntity step, ReviewerDecision decision,
                                   TeamMember reviewer) {
+        // 重试前把上一轮输出、审查原因和修正建议沉淀到 Step，下一轮 Executor prompt 会带上。
         List<String> previous = new ArrayList<>(json.stringList(step.getPreviousOutputsJson()));
         if (step.getRawOutput() != null && !step.getRawOutput().isBlank()) {
             previous.add(step.getRawOutput());
@@ -1412,7 +1417,7 @@ public class TeamBlackboardService {
         step.setReviewStatus("RETRY_REQUESTED");
         step.setStartedAt(null);
         step.setCompletedAt(null);
-        stepRepository.save(step);
+        stepMapper.upsertById(step);
         recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_REFLECTION_RECORDED, reviewer.role(),
             reviewer.agentId(), "Reviewer 写入 Reflexion 重试上下文", reflection);
         recordEvent(run.getRunId(), step.getStepId(), TeamEventType.RETRY_REQUESTED, reviewer.role(),
@@ -1444,7 +1449,7 @@ public class TeamBlackboardService {
             return "";
         }
         List<Map<String, String>> outputs = new ArrayList<>();
-        for (TeamStepEntity dependency : stepRepository.findByRunIdOrderByStepIndexAsc(step.getRunId())) {
+        for (TeamStepEntity dependency : stepMapper.selectByRunIdOrderByStepIndexAsc(step.getRunId())) {
             if (dependencyIds.contains(dependency.getStepId())) {
                 outputs.add(Map.of(
                     "stepId", dependency.getStepId(),
@@ -1461,18 +1466,34 @@ public class TeamBlackboardService {
         return text.length() <= 500 ? text : text.substring(0, 500) + "...";
     }
 
+    /**
+     * 暂停任务等待用户澄清
+     * 
+     * @param run 任务实体
+     * @param decision Reviewer 的审核决策
+     * @param stage 澄清阶段（计划审核/结果审核）
+     */
     private void pauseForClarification(TeamRunEntity run, ReviewerDecision decision, TeamClarificationStage stage) {
+        // 1. 构建澄清问题：从决策的 questions 列表或 reason 中获取
         String question = decision.questions().isEmpty() ? decision.reason() : String.join("\n", decision.questions());
+        
+        // 2. 保存澄清问题和当前阶段
         run.setClarificationQuestion(question);
         run.setClarificationStage(stage);
+        
+        // 3. 设置任务状态为需要澄清
         run.setStatus(TeamRunStatus.NEEDS_CLARIFICATION);
-        runRepository.save(run);
+        
+        // 4. 保存到数据库
+        runMapper.upsertById(run);
+        
+        // 5. 记录澄清请求事件
         recordEvent(run.getRunId(), null, TeamEventType.CLARIFICATION_REQUESTED, TeamRole.REVIEWER,
             null, question, decision);
     }
 
     private void prepareStepsForClarificationResume(TeamRunEntity run) {
-        for (TeamStepEntity step : stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId())) {
+        for (TeamStepEntity step : stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId())) {
             if (step.getStatus() == TeamStepStatus.FAILED) {
                 continue;
             }
@@ -1486,7 +1507,7 @@ public class TeamBlackboardService {
             step.setQualityStatus(TeamStepQualityStatus.RETRY_REQUESTED);
             step.setStartedAt(null);
             step.setCompletedAt(null);
-            stepRepository.save(step);
+            stepMapper.upsertById(step);
         }
     }
 
@@ -1524,12 +1545,12 @@ public class TeamBlackboardService {
 
     @Transactional
     protected void markStepFailed(String runId, String stepId, String message) {
-        TeamStepEntity step = stepRepository.findById(stepId).orElse(null);
+        TeamStepEntity step = stepMapper.selectOptionalById(stepId).orElse(null);
         if (step != null) {
             step.setStatus(TeamStepStatus.FAILED);
             step.setRawOutput("[Error] " + nullToBlank(message));
             step.setCompletedAt(Instant.now());
-            stepRepository.save(step);
+            stepMapper.upsertById(step);
         }
         recordEvent(runId, stepId, TeamEventType.STEP_FAILED, TeamRole.EXECUTOR, null,
             "Step failed: " + nullToBlank(message), null);
@@ -1538,17 +1559,18 @@ public class TeamBlackboardService {
     @Transactional
     protected void markStepTimedOut(String runId, String stepId) {
         String message = "Step execution timed out after " + runtimeProperties.getStepTimeoutSeconds() + " seconds";
-        TeamStepEntity step = stepRepository.findById(stepId).orElse(null);
+        TeamStepEntity step = stepMapper.selectOptionalById(stepId).orElse(null);
         if (step != null && step.getStatus() != TeamStepStatus.COMPLETED) {
             step.setStatus(TeamStepStatus.FAILED);
             step.setRawOutput("[Error] " + message);
             step.setCompletedAt(Instant.now());
-            stepRepository.save(step);
+            stepMapper.upsertById(step);
         }
         recordEvent(runId, stepId, TeamEventType.STEP_TIMEOUT, TeamRole.EXECUTOR, null,
             "Step 超时熔断: " + message, Map.of("stepTimeoutSeconds", runtimeProperties.getStepTimeoutSeconds()));
     }
 
+    // 检查一下是否超时
     private boolean failIfRunTimedOut(TeamRunEntity run) {
         if (runtimeProperties.getRunTimeoutSeconds() <= 0 || run.getCreatedAt() == null) {
             return false;
@@ -1565,11 +1587,11 @@ public class TeamBlackboardService {
 
     @Transactional
     protected void failRun(String runId, String message) {
-        TeamRunEntity run = runRepository.findById(runId).orElse(null);
+        TeamRunEntity run = runMapper.selectOptionalById(runId).orElse(null);
         if (run != null) {
             run.setStatus(TeamRunStatus.FAILED);
             run.setFinalOutput("[Error] " + nullToBlank(message));
-            runRepository.save(run);
+            runMapper.upsertById(run);
         }
         recordEvent(runId, null, TeamEventType.RUN_FAILED, null, null,
             "Run failed: " + nullToBlank(message), null);
@@ -1579,60 +1601,94 @@ public class TeamBlackboardService {
         replaceSteps(run, planned, false);
     }
 
+    /**
+     * 将 Planner 生成的计划步骤转换为数据库中的 Step 记录
+     * 
+     * @param run 任务实体
+     * @param planned Planner 生成的计划步骤列表
+     * @param preserveExisting 是否保留现有步骤（标记为 SUPERSEDED）
+     */
     private void replaceSteps(TeamRunEntity run, List<PlannedStep> planned, boolean preserveExisting) {
+        // 将 Planner 的 clientStepId DAG 落成数据库 Step；dependsOn 统一转换为真实 stepId。
         int baseIndex = 0;
+        
+        // 1. 处理现有步骤
         if (preserveExisting) {
-            for (TeamStepEntity existing : stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId())) {
+            // 保留模式：将现有步骤标记为 SUPERSEDED
+            for (TeamStepEntity existing : stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId())) {
                 if (existing.getStatus() != TeamStepStatus.SUPERSEDED) {
                     existing.setStatus(TeamStepStatus.SUPERSEDED);
-                    stepRepository.save(existing);
+                    stepMapper.upsertById(existing);
                 }
+                // 记录最大的步骤索引，新步骤从这个索引之后开始
                 baseIndex = Math.max(baseIndex, existing.getStepIndex());
             }
         } else {
-            stepRepository.deleteByRunId(run.getRunId());
+            // 不保留模式：直接删除所有现有步骤
+            stepMapper.deleteByRunId(run.getRunId());
         }
+        
+        // 2. 过滤出可执行的步骤（排除最终集成步骤）
         List<PlannedStep> executable = planned.stream()
             .filter(item -> !isFinalIntegrationStep(item))
             .toList();
+        
+        // 3. 验证计划的 DAG 结构
         validatePlannedDag(executable);
+        
+        // 4. 判断是否为简单草稿模式（简单任务且只有一个步骤）
         boolean simpleDraft = run.getTaskLevel() == TeamTaskLevel.SIMPLE && executable.size() == 1;
 
+        // 5. 构建 clientStepId 到真实 stepId 的映射
         Map<String, String> clientToStepId = new LinkedHashMap<>();
         int index = 1;
         for (PlannedStep item : executable) {
             String clientStepId = simpleDraft ? "simple-draft" : clientStepId(item, index);
+            // 生成唯一的 stepId：step-{index}-{uuid前8位}
             clientToStepId.put(clientStepId, "step-" + index + "-" + UUID.randomUUID().toString().substring(0, 8));
             index++;
         }
 
+        // 6. 创建数据库 Step 记录
         index = 1;
         for (PlannedStep item : executable) {
             String clientStepId = simpleDraft ? "simple-draft" : clientStepId(item, index);
+            
+            // 将依赖的 clientStepId 转换为真实的 stepId
             List<String> dependencyStepIds = item.dependsOn().stream()
                 .map(clientToStepId::get)
                 .filter(id -> id != null && !id.isBlank())
                 .toList();
+            
+            // 创建 Step 实体
             TeamStepEntity step = new TeamStepEntity();
             step.setStepId(clientToStepId.get(clientStepId));
             step.setRunId(run.getRunId());
-            step.setStepIndex(baseIndex + index);
+            step.setStepIndex(baseIndex + index);  // 从 baseIndex 之后开始编号
             step.setClientStepId(clientStepId);
             step.setTitle(item.title());
             step.setDescription(item.description());
             step.setRequiredCapabilitiesJson(json.toJson(item.requiredCapabilities()));
             step.setDependsOnStepIdsJson(json.toJson(dependencyStepIds));
+            
+            // 风险评估
             TeamRiskDecision riskDecision = riskPolicy.decide(item);
             step.setRiskLevel(riskDecision.level());
             step.setRiskReason(riskDecision.reason());
+            
             step.setAcceptanceCriteria(item.acceptanceCriteria());
-            step.setStatus(TeamStepStatus.PENDING);
-            step.setQualityStatus(TeamStepQualityStatus.PENDING);
+            step.setStatus(TeamStepStatus.PENDING);           // 初始状态为待执行
+            step.setQualityStatus(TeamStepQualityStatus.PENDING);  // 质量状态待审核
             step.setPlanIteration(run.getFullReplanCount() + run.getPartialReplanCount() + run.getResultReplanCount());
-            stepRepository.save(step);
+            
+            // 保存到数据库
+            stepMapper.upsertById(step);
+            
+            // 记录风险判定事件
             recordEvent(run.getRunId(), step.getStepId(), TeamEventType.RISK_DECIDED, null, null,
                 "RiskPolicy 判定为" + (riskDecision.level() == TeamRiskLevel.HIGH ? "高风险" : "低风险")
                     + "：" + riskDecision.reason(), riskDecision);
+            
             index++;
         }
     }
@@ -1644,7 +1700,8 @@ public class TeamBlackboardService {
     }
 
     private void appendPartialReplannedSteps(TeamRunEntity run, List<PlannedStep> planned) {
-        List<TeamStepEntity> existingSteps = stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId());
+        // 局部重规划新增替代 Step，依赖可以指向新子图，也可以指向未被替换的旧 Step。
+        List<TeamStepEntity> existingSteps = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId());
         List<PlannedStep> executable = planned.stream()
             .filter(item -> !isFinalIntegrationStep(item))
             .toList();
@@ -1688,7 +1745,7 @@ public class TeamBlackboardService {
             step.setStatus(TeamStepStatus.PENDING);
             step.setQualityStatus(TeamStepQualityStatus.PENDING);
             step.setPlanIteration(run.getFullReplanCount() + run.getPartialReplanCount() + run.getResultReplanCount());
-            stepRepository.save(step);
+            stepMapper.upsertById(step);
             recordEvent(run.getRunId(), step.getStepId(), TeamEventType.RISK_DECIDED, null, null,
                 "RiskPolicy 判定为" + (riskDecision.level() == TeamRiskLevel.HIGH ? "高风险" : "低风险")
                     + "：" + riskDecision.reason(), riskDecision);
@@ -1714,6 +1771,7 @@ public class TeamBlackboardService {
     }
 
     private void validatePlannedDag(List<PlannedStep> planned) {
+        // Planner 输出进入数据库前必须先过结构校验，避免运行期才发现断边或环。
         if (planned == null || planned.isEmpty()) {
             throw new IllegalStateException("Planner did not produce executable steps");
         }
@@ -1786,6 +1844,7 @@ public class TeamBlackboardService {
         if (item == null) {
             return false;
         }
+        // 最终报告由 Reviewer 生成；Planner 如果误产出“汇总/整合”Step，这里过滤掉。
         String text = (nullToBlank(item.title()) + " " + nullToBlank(item.description()) + " "
             + nullToBlank(item.acceptanceCriteria())).toLowerCase();
         return containsAny(text,
@@ -1820,6 +1879,7 @@ public class TeamBlackboardService {
     @Transactional
     protected void recordEvent(String runId, String stepId, TeamEventType type, TeamRole actorRole,
                                String actorAgentId, String message, Object payload) {
+        // Event 是 Team 看板和 Mermaid 的审计来源，只追加，不参与状态判断。
         if (isRunDeleted(runId)) {
             log.debug("Skip team event for deleted run: {}", runId);
             return;
@@ -1832,7 +1892,7 @@ public class TeamBlackboardService {
         event.setActorAgentId(actorAgentId);
         event.setMessage(message);
         event.setPayloadJson(payload == null ? null : json.toJson(payload));
-        eventRepository.save(event);
+        eventMapper.upsertById(event);
     }
 
     private List<TeamMemberSpec> normalizeSpecs(List<TeamMemberSpec> specs) {
@@ -1874,7 +1934,8 @@ public class TeamBlackboardService {
     }
 
     private TeamRunEntity loadRun(String teamId, String userId, String runId) {
-        TeamRunEntity run = runRepository.findById(runId)
+        // 加载团队协作任务实体
+        TeamRunEntity run = runMapper.selectOptionalById(runId)
             .orElseThrow(() -> new IllegalArgumentException("Run not found: " + runId));
         if (!run.getTeamId().equals(teamId)) {
             throw new IllegalArgumentException("Run does not belong to team: " + runId);
@@ -1886,7 +1947,7 @@ public class TeamBlackboardService {
     }
 
     private TeamSnapshot toTeamSnapshot(TeamEntity team) {
-        List<TeamMember> members = memberRepository.findByTeamIdOrderBySortOrderAscIdAsc(team.getTeamId()).stream()
+        List<TeamMember> members = memberMapper.selectByTeamIdOrderBySortOrderAscIdAsc(team.getTeamId()).stream()
             .map(this::toMember)
             .toList();
         return new TeamSnapshot(team.getTeamId(), team.getName(), members, team.getCreatedAt(), team.getUpdatedAt());
@@ -1905,11 +1966,12 @@ public class TeamBlackboardService {
     }
 
     private TeamRunSnapshot toRunSnapshot(TeamRunEntity run, boolean includeSteps, boolean includeEvents) {
+        // 前端 Team 看板只读 Snapshot；这里集中完成 Entity -> DTO 和动态图生成。
         List<TeamStepSnapshot> steps = includeSteps
-            ? stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId()).stream().map(this::toStepSnapshot).toList()
+            ? stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream().map(this::toStepSnapshot).toList()
             : List.of();
         List<TeamEventSnapshot> events = includeEvents
-            ? eventRepository.findByRunIdOrderByCreatedAtAscIdAsc(run.getRunId()).stream().map(this::toEventSnapshot).toList()
+            ? eventMapper.selectByRunIdOrderByCreatedAtAscIdAsc(run.getRunId()).stream().map(this::toEventSnapshot).toList()
             : List.of();
         return new TeamRunSnapshot(
             run.getRunId(),
@@ -2052,26 +2114,10 @@ public class TeamBlackboardService {
             .orElseGet(() -> reviewer(team));
     }
 
-    private String executorCapabilities(TeamSnapshot team) {
-        List<Map<String, Object>> capabilities = new ArrayList<>();
-        for (TeamMember member : team.members()) {
-            if (member.role() == TeamRole.EXECUTOR) {
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("memberKey", member.agentId() + "#" + member.sortOrder());
-                item.put("agentId", member.agentId());
-                item.put("agentName", member.agentName());
-                item.put("capabilityTags", member.capabilityTags());
-                item.put("sortOrder", member.sortOrder());
-                capabilities.add(item);
-            }
-        }
-        return json.toJson(capabilities);
-    }
-
     private String synthesizeFallbackReport(TeamRunEntity run) {
         StringBuilder output = new StringBuilder();
         output.append("任务完成。\n\n");
-        for (TeamStepEntity step : stepRepository.findByRunIdOrderByStepIndexAsc(run.getRunId())) {
+        for (TeamStepEntity step : stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId())) {
             output.append("## ").append(step.getTitle()).append("\n")
                 .append(nullToBlank(step.getRawOutput())).append("\n\n");
         }
@@ -2085,6 +2131,7 @@ public class TeamBlackboardService {
     }
 
     private void scheduleRun(String runId) {
+        // create/resume 都可能在事务中调用；注册 afterCommit 能避免后台线程提前执行。
         Runnable task = () -> executeRunSafely(runId);
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -2116,13 +2163,6 @@ public class TeamBlackboardService {
 
     private String blankToDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.trim();
-    }
-
-    private String abbreviate(String value, int maxLength) {
-        if (value == null || value.length() <= maxLength) {
-            return value == null ? "" : value;
-        }
-        return value.substring(0, maxLength) + "...";
     }
 
     private String normalizeUserId(String userId) {
