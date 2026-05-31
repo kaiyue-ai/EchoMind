@@ -4,27 +4,35 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Agent Team runtime guardrails.
+ * Team 模块的运行时保护开关，防止无限重试、过度并发和长时间悬挂。
  */
 @Component
 @ConfigurationProperties(prefix = "echomind.team.runtime")
 public class TeamRuntimeProperties {
 
-    private int maxPlanRetries = 1;
-    private int maxResultReplans = 1;
-    private int maxStepRetries = 2;
-    private int maxReviewerFormatRepairs = 1;
-    private int maxArbitrations = 1;
-    private int maxConcurrentSteps = 4;
-    private int stepTimeoutSeconds = 120;
-    private int runTimeoutSeconds = 900;
+    private static final int MAX_RETRY_LIMIT = 3;
+    private static final int MAX_REPLAN_LIMIT = 2;
+    private static final int MAX_ARBITRATION_LIMIT = 2;
+    private static final int MAX_CONCURRENT_STEP_LIMIT = 8;
+    private static final int MAX_STEP_TIMEOUT_SECONDS = 600;
+    private static final int MAX_RUN_TIMEOUT_SECONDS = 7200;
+
+    private int maxPlanRetries = 2;
+    private int maxResultReplans = 2;
+    private int maxStepRetries = 3;
+    private int maxReviewerFormatRepairs = 3;
+    private int maxArbitrations = 2;
+    private int maxConcurrentSteps = 3;
+    private int stepTimeoutSeconds = 300;
+    private int runTimeoutSeconds = 1800;
+    private int stepPollIntervalMs = 2000;
 
     public int getMaxPlanRetries() {
         return maxPlanRetries;
     }
 
     public void setMaxPlanRetries(int maxPlanRetries) {
-        this.maxPlanRetries = Math.max(0, maxPlanRetries);
+        this.maxPlanRetries = clamp(maxPlanRetries, 0, MAX_RETRY_LIMIT);
     }
 
     public int getMaxResultReplans() {
@@ -32,7 +40,7 @@ public class TeamRuntimeProperties {
     }
 
     public void setMaxResultReplans(int maxResultReplans) {
-        this.maxResultReplans = Math.max(0, maxResultReplans);
+        this.maxResultReplans = clamp(maxResultReplans, 0, MAX_REPLAN_LIMIT);
     }
 
     public int getMaxStepRetries() {
@@ -40,7 +48,7 @@ public class TeamRuntimeProperties {
     }
 
     public void setMaxStepRetries(int maxStepRetries) {
-        this.maxStepRetries = Math.max(0, maxStepRetries);
+        this.maxStepRetries = clamp(maxStepRetries, 0, MAX_RETRY_LIMIT);
     }
 
     public int getMaxReviewerFormatRepairs() {
@@ -48,7 +56,7 @@ public class TeamRuntimeProperties {
     }
 
     public void setMaxReviewerFormatRepairs(int maxReviewerFormatRepairs) {
-        this.maxReviewerFormatRepairs = Math.max(0, maxReviewerFormatRepairs);
+        this.maxReviewerFormatRepairs = clamp(maxReviewerFormatRepairs, 0, MAX_RETRY_LIMIT);
     }
 
     public int getMaxArbitrations() {
@@ -56,7 +64,7 @@ public class TeamRuntimeProperties {
     }
 
     public void setMaxArbitrations(int maxArbitrations) {
-        this.maxArbitrations = Math.max(0, maxArbitrations);
+        this.maxArbitrations = clamp(maxArbitrations, 0, MAX_ARBITRATION_LIMIT);
     }
 
     public int getMaxConcurrentSteps() {
@@ -64,7 +72,7 @@ public class TeamRuntimeProperties {
     }
 
     public void setMaxConcurrentSteps(int maxConcurrentSteps) {
-        this.maxConcurrentSteps = Math.max(1, maxConcurrentSteps);
+        this.maxConcurrentSteps = clamp(maxConcurrentSteps, 1, MAX_CONCURRENT_STEP_LIMIT);
     }
 
     public int getStepTimeoutSeconds() {
@@ -72,7 +80,7 @@ public class TeamRuntimeProperties {
     }
 
     public void setStepTimeoutSeconds(int stepTimeoutSeconds) {
-        this.stepTimeoutSeconds = Math.max(0, stepTimeoutSeconds);
+        this.stepTimeoutSeconds = clamp(stepTimeoutSeconds, 0, MAX_STEP_TIMEOUT_SECONDS);
     }
 
     public int getRunTimeoutSeconds() {
@@ -80,6 +88,18 @@ public class TeamRuntimeProperties {
     }
 
     public void setRunTimeoutSeconds(int runTimeoutSeconds) {
-        this.runTimeoutSeconds = Math.max(0, runTimeoutSeconds);
+        this.runTimeoutSeconds = clamp(runTimeoutSeconds, 0, MAX_RUN_TIMEOUT_SECONDS);
+    }
+
+    public int getStepPollIntervalMs() {
+        return stepPollIntervalMs;
+    }
+
+    public void setStepPollIntervalMs(int stepPollIntervalMs) {
+        this.stepPollIntervalMs = clamp(stepPollIntervalMs, 100, 30000);
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.min(max, Math.max(min, value));
     }
 }

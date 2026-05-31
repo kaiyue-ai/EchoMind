@@ -34,10 +34,6 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
-  jpa:
-    hibernate:
-      ddl-auto: update
-    database-platform: org.hibernate.dialect.H2Dialect
   h2:
     console:
       enabled: true
@@ -106,6 +102,18 @@ echomind:
   alerts:
     feishu:
       webhook-url: ${Webhook:}
+  team:
+    runtime:
+      # Team 协作会触发多次模型调用；默认保持保守，避免 Reviewer/Planner 循环把一次任务拖得过长。
+      max-plan-retries: ${ECHOMIND_TEAM_MAX_PLAN_RETRIES:2}
+      max-result-replans: ${ECHOMIND_TEAM_MAX_RESULT_REPLANS:2}
+      max-step-retries: ${ECHOMIND_TEAM_MAX_STEP_RETRIES:3}
+      max-reviewer-format-repairs: ${ECHOMIND_TEAM_MAX_REVIEWER_FORMAT_REPAIRS:3}
+      max-arbitrations: ${ECHOMIND_TEAM_MAX_ARBITRATIONS:2}
+      max-concurrent-steps: ${ECHOMIND_TEAM_MAX_CONCURRENT_STEPS:3}
+      step-timeout-seconds: ${ECHOMIND_TEAM_STEP_TIMEOUT_SECONDS:300}
+      run-timeout-seconds: ${ECHOMIND_TEAM_RUN_TIMEOUT_SECONDS:1800}
+      step-poll-interval-ms: ${ECHOMIND_TEAM_STEP_POLL_INTERVAL_MS:2000}
   models:
     default-provider: deepseek
     providers:
@@ -164,8 +172,10 @@ echomind:
     embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com}
     embedding-api-key: ${ALIYUN_BAILIAN_API_KEY:}
     embedding-model: tongyi-embedding-vision-plus
-    legacy-vector-index-name: ${ECHOMIND_MEMORY_LEGACY_VECTOR_INDEX_NAME:idx:echomind:memory:vectors}
-    legacy-vector-key-prefix: ${ECHOMIND_MEMORY_LEGACY_VECTOR_KEY_PREFIX:echomind:memory:vector:}
+    milvus-host: ${ECHOMIND_MILVUS_HOST:localhost}
+    milvus-port: ${ECHOMIND_MILVUS_PORT:19530}
+    milvus-user-memory-collection: ${ECHOMIND_MILVUS_USER_MEMORY_COLLECTION:echomind_user_memory_v2}
+    milvus-knowledge-collection: ${ECHOMIND_MILVUS_KNOWLEDGE_COLLECTION:echomind_agent_knowledge}
     persist-queue-name: ${ECHOMIND_MEMORY_PERSIST_QUEUE_NAME:echomind.chat-memory.persist.requests}
     persist-exchange-name: ${ECHOMIND_MEMORY_PERSIST_EXCHANGE_NAME:echomind.chat-memory.persist.exchange}
     # 普通聊天记忆按 sessionId hash 到多个队列；每个分片单消费者，避免同一会话乱序。
@@ -180,8 +190,6 @@ echomind:
     knowledge-vector-weight: ${ECHOMIND_MEMORY_KNOWLEDGE_VECTOR_WEIGHT:0.75}
     knowledge-keyword-weight: ${ECHOMIND_MEMORY_KNOWLEDGE_KEYWORD_WEIGHT:0.25}
     knowledge-keyword-candidate-limit: ${ECHOMIND_MEMORY_KNOWLEDGE_KEYWORD_CANDIDATE_LIMIT:40}
-    knowledge-vector-index-name: ${ECHOMIND_MEMORY_KNOWLEDGE_VECTOR_INDEX_NAME:idx:echomind:agent:knowledge:vectors}
-    knowledge-vector-key-prefix: ${ECHOMIND_MEMORY_KNOWLEDGE_VECTOR_KEY_PREFIX:echomind:agent:knowledge:vector:}
     knowledge-ocr-enabled: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_ENABLED:true}
     knowledge-ocr-language: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_LANGUAGE:chi_sim+eng}
     knowledge-ocr-dpi: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_DPI:200}
@@ -197,17 +205,12 @@ echomind:
     queue-name: ${USER_MEMORY_QUEUE_NAME:echomind.user-memory.requests}
     top-k: ${USER_MEMORY_TOP_K:5}
     min-confidence: ${USER_MEMORY_MIN_CONFIDENCE:0.3}
-    vector-index-name: ${USER_MEMORY_VECTOR_INDEX_NAME:idx:user:memory:vectors}
-    vector-key-prefix: ${USER_MEMORY_VECTOR_KEY_PREFIX:user:memory:vector:}
     profile-key-prefix: ${USER_MEMORY_PROFILE_KEY_PREFIX:echomind:user-profile:snapshot:}
     existing-profile-limit: ${USER_MEMORY_EXISTING_PROFILE_LIMIT:30}
     max-extracted-entries: ${USER_MEMORY_MAX_EXTRACTED_ENTRIES:10}
-    batch-size: ${USER_MEMORY_BATCH_SIZE:5}
     related-fact-top-k: ${USER_MEMORY_RELATED_FACT_TOP_K:12}
     profile-max-chars: ${USER_MEMORY_PROFILE_MAX_CHARS:2000}
-    buffer-lock-ttl-seconds: ${USER_MEMORY_BUFFER_LOCK_TTL_SECONDS:60}
-    buffer-ttl-days: ${USER_MEMORY_BUFFER_TTL_DAYS:7}
-    extractor-model-id: ${USER_MEMORY_EXTRACTOR_MODEL_ID:}
+    extractor-model-id: ${USER_MEMORY_EXTRACTOR_MODEL_ID:deepseek:deepseek-v4-flash}
   skill:
     auto-load-path: ./skills/
     hot-reload: true
@@ -230,6 +233,53 @@ echomind:
           - -jar
           - ${NOWCODER_MCP_JAR:D:\claudeWorkSpace\nowcoder-java-interview-mcp-server\target\nowcoder-java-interview-mcp-server-1.0.0.jar}
         working-directory: ${NOWCODER_MCP_WORKDIR:D:\claudeWorkSpace\nowcoder-java-interview-mcp-server}
+        tool-metadata:
+          fetch_nowcoder_java_interview_article:
+            tags: [interview, nowcoder]
+            keywords: [牛客, 面经, Java面经, java面经]
+            aliases:
+              nowcoder: [牛客, 牛客网]
+              interview: [面经, 面试经验, 面试题]
+      - id: open-websearch
+        enabled: true
+        transport: streamable-http
+        url: ${OPEN_WEBSEARCH_MCP_URL:http://localhost:3000}
+        endpoint: ${OPEN_WEBSEARCH_MCP_ENDPOINT:/mcp}
+        tool-metadata:
+          open_web_search:
+            tags: [search, web, internet, current]
+            keywords: [搜索, 搜一下, 查询, 查一下, 联网搜索, 网络搜索, 最新, 实时信息, 新闻, 资料]
+            aliases:
+              search: [搜索, 搜一下, 查找, 查一下, 查询]
+              web: [联网, 网络, 互联网, 网页]
+              current: [最新, 实时, 现在, 新闻]
+          open_web_fetch_content:
+            tags: [web, fetch, url, article]
+            keywords: [读取网页, 打开链接, 链接内容, 网页正文, 网址, URL, http, https]
+            aliases:
+              fetch: [读取, 抓取, 打开, 查看]
+              url: [链接, 网址, 网页, URL]
+          open_web_fetch_github_readme:
+            tags: [github, readme, repository]
+            keywords: [GitHub README, 仓库说明, 开源项目, repo readme, README]
+            aliases:
+              github: [GitHub, 仓库, 开源仓库]
+              readme: [README, 项目说明, 仓库说明]
+          open_web_fetch_csdn:
+            tags: [csdn, article, blog]
+            keywords: [CSDN, CSDN文章, CSDN博客, 博客正文]
+            aliases:
+              csdn: [CSDN, CSDN博客, CSDN文章]
+          open_web_fetch_juejin:
+            tags: [juejin, article]
+            keywords: [掘金, 掘金文章, juejin]
+            aliases:
+              juejin: [掘金, 掘金文章, juejin]
+          open_web_fetch_linuxdo:
+            tags: [linuxdo, forum, article]
+            keywords: [Linux.do, linuxdo, LinuxDo, 论坛帖子]
+            aliases:
+              linuxdo: [Linux.do, linuxdo, LinuxDo]
   runtime:
     agent-bootstrap:
       default-skill-merge-ids: [markdown-code, date-query, github-intel, 12306, travel-planning]
@@ -241,8 +291,14 @@ echomind:
         - from: deepseek:deepseek-chat
           to-model-id: deepseek:deepseek-v4-flash
     retired-skills:
-      skill-ids: [qq-mail]
+      skill-ids: [qq-mail, web-search]
       prompt-replacements:
+        - from: "web-search"
+          to: "open-websearch MCP"
+        - from: "skill-websearch"
+          to: "open-websearch MCP"
+        - from: "SearXNG"
+          to: "open-websearch MCP"
         - from: "、旅行规划和 QQ 邮箱工具"
           to: "和旅行规划"
         - from: "、旅行规划、QQ 邮箱工具"
@@ -271,16 +327,22 @@ echomind:
           to: ""
         - from: "，邮件"
           to: ""
-  web-search:
-    searxng-url: ${SEARXNG_URL:http://localhost:8082}
   agents:
     - agent-id: default
       name: EchoMind Assistant
-      system-prompt: "You are a helpful AI assistant. You have access to tools for web search, weather, calculations, date/time queries, Markdown code formatting, GitHub repository intelligence, 12306 train queries, and travel planning. When the user asks about dates/times, train tickets, or itinerary planning, use the matching tool instead of guessing. For 12306 train tickets, return available seats and fares; when the user asks for transfers or there is no direct train, include transfer options. When outputting code, use fenced Markdown code blocks with the correct language label."
+      system-prompt: "You are a helpful AI assistant. You have access to MCP tools for live web search and web content fetching, plus tools for weather, calculations, date/time queries, Markdown code formatting, GitHub repository intelligence, 12306 train queries, and travel planning. When the user asks about current web information, public links, dates/times, train tickets, or itinerary planning, use the matching tool instead of guessing. For 12306 train tickets, return available seats and fares; when the user asks for transfers or there is no direct train, include transfer options. When outputting code, use fenced Markdown code blocks with the correct language label."
       model-id: deepseek:deepseek-v4-flash
-      skill-ids: [weather-query, calculator, web-search, markdown-code, date-query, github-intel, 12306, travel-planning]
+      skill-ids: [weather-query, calculator, markdown-code, date-query, github-intel, 12306, travel-planning]
 
 knife4j:
   enable: true
   setting:
     language: zh_cn
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      update-strategy: always

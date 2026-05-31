@@ -9,6 +9,7 @@ services:
       MYSQL_DATABASE: echomind
       MYSQL_USER: echomind
       MYSQL_PASSWORD: echomind_secret
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --init-connect="SET NAMES utf8mb4"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -22,13 +23,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # ===== Redis Stack（近期上下文热缓存 + 向量检索） =====
+  # ===== Redis（近期上下文热缓存 + 画像快照） =====
   redis:
-    image: redis/redis-stack-server:latest
+    image: redis:7-alpine
     container_name: echomind-cache
     restart: unless-stopped
-    environment:
-      REDIS_ARGS: "--appendonly yes"
+    command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
     ports:
@@ -41,25 +41,91 @@ services:
       timeout: 3s
       retries: 5
 
-  # ===== SearXNG 元搜索引擎 =====
-  searxng:
-    image: searxng/searxng:latest
-    container_name: echomind-searxng
+  # ===== Milvus Standalone（向量检索） =====
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    container_name: echomind-milvus-etcd
     restart: unless-stopped
-    ports:
-      - "8082:8080"
-    volumes:
-      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
-      - SEARXNG_BASE_URL=http://localhost:8082/
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - milvus_etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     networks:
       - echomind-network
+
+  milvus-minio:
+    image: minio/minio:latest
+    container_name: echomind-milvus-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - milvus_minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - echomind-network
+
+  milvus:
+    image: milvusdb/milvus:v2.6.16
+    container_name: echomind-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - milvus-etcd
+      - milvus-minio
+    networks:
+      - echomind-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ===== Open-WebSearch MCP 联网搜索 =====
+  open-websearch:
+    image: ghcr.io/aas-ee/open-web-search:latest
+    container_name: echomind-open-websearch
+    restart: unless-stopped
+    environment:
+      MODE: http
+      PORT: 3000
+      DEFAULT_SEARCH_ENGINE: ${OPEN_WEBSEARCH_DEFAULT_ENGINE:-duckduckgo}
+      SEARCH_MODE: ${OPEN_WEBSEARCH_SEARCH_MODE:-auto}
+      USE_PROXY: ${OPEN_WEBSEARCH_USE_PROXY:-false}
+      PROXY_URL: ${OPEN_WEBSEARCH_PROXY_URL:-http://host.docker.internal:7890}
+      FAKE_IP_CIDRS: ${OPEN_WEBSEARCH_FAKE_IP_CIDRS:-}
+      FETCH_WEB_INSECURE_TLS: ${OPEN_WEBSEARCH_FETCH_WEB_INSECURE_TLS:-false}
+      MCP_TOOL_SEARCH_NAME: open_web_search
+      MCP_TOOL_FETCH_WEB_NAME: open_web_fetch_content
+      MCP_TOOL_FETCH_GITHUB_NAME: open_web_fetch_github_readme
+      MCP_TOOL_FETCH_CSDN_NAME: open_web_fetch_csdn
+      MCP_TOOL_FETCH_JUEJIN_NAME: open_web_fetch_juejin
+      MCP_TOOL_FETCH_LINUXDO_NAME: open_web_fetch_linuxdo
+    networks:
+      - echomind-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/mcp',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   # ===== RabbitMQ 消息队列 =====
   rabbitmq:
@@ -93,7 +159,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      milvus:
+        condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      open-websearch:
         condition: service_healthy
       otel-collector:
         condition: service_started
@@ -115,11 +185,10 @@ services:
       AccessKeySecret: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:-${AccessKeySecret:-}}
       # 数据库配置
       SPRING_PROFILES_ACTIVE: prod
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/echomind?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/echomind?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci
       SPRING_DATASOURCE_USERNAME: echomind
       SPRING_DATASOURCE_PASSWORD: echomind_secret
       SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
-      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.MySQLDialect
       # Redis 配置
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
@@ -145,19 +214,14 @@ services:
       ECHOMIND_MEMORY_EMBEDDING_MODEL: tongyi-embedding-vision-plus
       USER_MEMORY_ENABLED: ${USER_MEMORY_ENABLED:-true}
       USER_MEMORY_QUEUE_NAME: echomind.user-memory.requests
-      USER_MEMORY_FLUSH_QUEUE_NAME: echomind.user-memory.flush.requests
-      USER_MEMORY_VECTOR_INDEX_NAME: "idx:user:memory:vectors"
-      USER_MEMORY_VECTOR_KEY_PREFIX: "user:memory:vector:"
       USER_MEMORY_PROFILE_KEY_PREFIX: "echomind:user-profile:snapshot:"
-      USER_MEMORY_BATCH_SIZE: ${USER_MEMORY_BATCH_SIZE:-5}
-      USER_MEMORY_BUFFER_MAX_CHARS: ${USER_MEMORY_BUFFER_MAX_CHARS:-8000}
-      USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS: ${USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS:-1800}
-      USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS: ${USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS:-60}
-      USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD: ${USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD:-0.7}
+      ECHOMIND_MILVUS_HOST: milvus
+      ECHOMIND_MILVUS_PORT: 19530
+      ECHOMIND_MILVUS_USER_MEMORY_COLLECTION: echomind_user_memory_v2
+      ECHOMIND_MILVUS_KNOWLEDGE_COLLECTION: echomind_agent_knowledge
       USER_MEMORY_RELATED_FACT_TOP_K: ${USER_MEMORY_RELATED_FACT_TOP_K:-12}
       USER_MEMORY_PROFILE_MAX_CHARS: ${USER_MEMORY_PROFILE_MAX_CHARS:-2000}
-      USER_MEMORY_BUFFER_LOCK_TTL_SECONDS: ${USER_MEMORY_BUFFER_LOCK_TTL_SECONDS:-60}
-      USER_MEMORY_BUFFER_TTL_DAYS: ${USER_MEMORY_BUFFER_TTL_DAYS:-7}
+      USER_MEMORY_EXTRACTOR_MODEL_ID: ${USER_MEMORY_EXTRACTOR_MODEL_ID:-deepseek:deepseek-v4-flash}
       # OpenTelemetry：本地管理端默认启用 Trace 导出，后端只等待 Collector 启动，不依赖观测健康状态。
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-echomind}
       OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
@@ -172,16 +236,12 @@ services:
       ECHOMIND_OBSERVABILITY_JAEGER_SERVICE_NAME: ${ECHOMIND_OBSERVABILITY_JAEGER_SERVICE_NAME:-echomind}
       # 飞书自定义机器人告警 Webhook
       Webhook: ${Webhook:-}
-      SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
+      OPEN_WEBSEARCH_MCP_URL: http://open-websearch:3000
+      OPEN_WEBSEARCH_MCP_ENDPOINT: /mcp
       ECHOMIND_SKILL_AUTO_LOAD_PATH: /app/skills/
       ECHOMIND_SKILL_MARKETPLACE_DIR: /app/data/marketplace/
-      ECHOMIND_MCP_EXTERNAL_SERVERS_0_ID: nowcoder-java-interview
-      ECHOMIND_MCP_EXTERNAL_SERVERS_0_ENABLED: "true"
-      ECHOMIND_MCP_EXTERNAL_SERVERS_0_TRANSPORT: stdio
-      ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_0: java
-      ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_1: -jar
-      ECHOMIND_MCP_EXTERNAL_SERVERS_0_COMMAND_2: /app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
-      ECHOMIND_MCP_EXTERNAL_SERVERS_0_WORKING_DIRECTORY: /app/mcp
+      NOWCODER_MCP_JAR: /app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
+      NOWCODER_MCP_WORKDIR: /app/mcp
       # JVM 配置
       JAVA_OPTS: "-Xms512m -Xmx1024m"
     ports:
@@ -220,20 +280,14 @@ services:
       RABBITMQ_PASSWORD: echomind_secret
       USER_MEMORY_ENABLED: ${USER_MEMORY_ENABLED:-true}
       USER_MEMORY_QUEUE_NAME: echomind.user-memory.requests
-      USER_MEMORY_FLUSH_QUEUE_NAME: echomind.user-memory.flush.requests
-      USER_MEMORY_VECTOR_INDEX_NAME: "idx:user:memory:vectors"
-      USER_MEMORY_VECTOR_KEY_PREFIX: "user:memory:vector:"
       USER_MEMORY_PROFILE_KEY_PREFIX: "echomind:user-profile:snapshot:"
-      USER_MEMORY_BATCH_SIZE: ${USER_MEMORY_BATCH_SIZE:-5}
-      USER_MEMORY_BUFFER_MAX_CHARS: ${USER_MEMORY_BUFFER_MAX_CHARS:-8000}
-      USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS: ${USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS:-1800}
-      USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS: ${USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS:-60}
-      USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD: ${USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD:-0.7}
+      ECHOMIND_MILVUS_HOST: milvus
+      ECHOMIND_MILVUS_PORT: 19530
+      ECHOMIND_MILVUS_USER_MEMORY_COLLECTION: echomind_user_memory_v2
+      ECHOMIND_MILVUS_KNOWLEDGE_COLLECTION: echomind_agent_knowledge
       USER_MEMORY_RELATED_FACT_TOP_K: ${USER_MEMORY_RELATED_FACT_TOP_K:-12}
       USER_MEMORY_PROFILE_MAX_CHARS: ${USER_MEMORY_PROFILE_MAX_CHARS:-2000}
-      USER_MEMORY_BUFFER_LOCK_TTL_SECONDS: ${USER_MEMORY_BUFFER_LOCK_TTL_SECONDS:-60}
-      USER_MEMORY_BUFFER_TTL_DAYS: ${USER_MEMORY_BUFFER_TTL_DAYS:-7}
-      USER_MEMORY_EXTRACTOR_MODEL_ID: ${USER_MEMORY_EXTRACTOR_MODEL_ID:-}
+      USER_MEMORY_EXTRACTOR_MODEL_ID: ${USER_MEMORY_EXTRACTOR_MODEL_ID:-deepseek:deepseek-v4-flash}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${ANTHROPIC_API_KEY:-}}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${ANTHROPIC_BASE_URL:-https://api.deepseek.com}}
       ALIYUN_BAILIAN_API_KEY: ${ALIYUN_BAILIAN_API_KEY:-}
@@ -322,6 +376,9 @@ services:
 volumes:
   mysql_data:
   redis_data:
+  milvus_etcd_data:
+  milvus_minio_data:
+  milvus_data:
   echomind_data:
   portainer_data:
 

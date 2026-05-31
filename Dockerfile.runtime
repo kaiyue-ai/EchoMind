@@ -25,7 +25,6 @@ COPY echomind-app/target/echomind-app-*.jar /app/echomind-app.jar
 COPY external-mcp/nowcoder-java-interview-mcp-server-1.0.0.jar /app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
 COPY skills/skill-weather/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-calculator/target/*-jar-with-dependencies.jar /app/skills/
-COPY skills/skill-websearch/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-markdown-code/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-date-query/target/*-jar-with-dependencies.jar /app/skills/
 COPY skills/skill-github-intel/target/*-jar-with-dependencies.jar /app/skills/
@@ -37,4 +36,4 @@ USER echomind
 
 EXPOSE 8080
 
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/echomind-app.jar"]
+ENTRYPOINT ["sh", "-c", "java -Dfile.encoding=UTF-8 $JAVA_OPTS -jar /app/echomind-app.jar"]

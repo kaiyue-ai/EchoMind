@@ -91,6 +91,8 @@ public class TeamBlackboardService {
 
     // 删除 Team/Run 后，后台异步任务可能仍在收尾；用它阻止继续写事件。
     private final Set<String> deletedRunIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> stoppingRunIds = ConcurrentHashMap.newKeySet();
+    private final Map<String, String> pendingClarifications = new ConcurrentHashMap<>();
 
     public TeamBlackboardService(TeamMapper teamMapper,
                                  TeamMemberMapper memberMapper,
@@ -126,10 +128,8 @@ public class TeamBlackboardService {
     }
 
     @Transactional(readOnly = true)
-    public List<TeamSnapshot> listTeams() {
-        // 返回所有的团队
-        return teamMapper.selectAll().stream()
-            .sorted(Comparator.comparing(TeamEntity::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder())))
+    public List<TeamSnapshot> listTeams(String userId) {
+        return teamMapper.selectByOwnerUserIdOrderByCreatedAtAsc(userId).stream()
             .map(this::toTeamSnapshot)
             .toList();
     }
@@ -143,15 +143,13 @@ public class TeamBlackboardService {
     }
 
     @Transactional
-    // 创建团队 参数1团队名称 参数2团队成员规格列表
-    public TeamSnapshot createTeam(String requestedName, List<TeamMemberSpec> specs) {
+    public TeamSnapshot createTeam(String userId, String requestedName, List<TeamMemberSpec> specs) {
         List<TeamMemberSpec> normalized = normalizeSpecs(specs);
-        // 验证团队成员规格
         validateMembers(normalized);
 
-        //创建团队实体
         TeamEntity team = new TeamEntity();
         team.setTeamId(UUID.randomUUID().toString());
+        team.setOwnerUserId(userId);
         team.setName(requestedName == null || requestedName.isBlank()
             ? "Team-" + UUID.randomUUID().toString().substring(0, 8)
             : requestedName.trim());
@@ -172,17 +170,22 @@ public class TeamBlackboardService {
     }
 
     @Transactional
-    // 删除团队顺便删除团队的所有记录
-    public void deleteTeam(String teamId) {
+    public void deleteTeam(String teamId, String userId) {
         if (teamId == null || teamId.isBlank()) {
             throw new IllegalArgumentException("teamId is required");
         }
         TeamEntity team = teamMapper.selectOptionalById(teamId)
             .orElseThrow(() -> new IllegalArgumentException("Team not found: " + teamId));
+        if (!team.getOwnerUserId().equals(userId)) {
+            throw new IllegalArgumentException("Not authorized to delete this team");
+        }
         List<String> runIds = runMapper.selectByTeamIdOrderByCreatedAtDesc(team.getTeamId()).stream()
             .map(TeamRunEntity::getRunId)
             .toList();
         deletedRunIds.addAll(runIds);
+        for (String runId : runIds) {
+            pendingClarifications.remove(runId);
+        }
         if (!runIds.isEmpty()) {
             eventMapper.deleteByRunIdIn(runIds);
             stepMapper.deleteByRunIdIn(runIds);
@@ -272,24 +275,41 @@ public class TeamBlackboardService {
     }
 
     @Transactional
-    // 澄清团队协作任务 参数1团队id 参数2用户id 参数3任务id 参数4澄清答案
     public TeamRunSnapshot resumeRun(String teamId, String runId, String clarificationAnswer) {
-        return resumeRun(teamId, "default", runId, clarificationAnswer);
+        return resumeRun(teamId, "default", runId, clarificationAnswer, null);
     }
 
     @Transactional
     public TeamRunSnapshot resumeRun(String teamId, String userId, String runId, String clarificationAnswer) {
+        return resumeRun(teamId, userId, runId, clarificationAnswer, null);
+    }
+
+    @Transactional
+    public TeamRunSnapshot resumeRun(String teamId, String userId, String runId, String clarificationAnswer,
+                                     Map<String, String> stepClarificationAnswers) {
         TeamRunEntity run = loadRun(teamId, normalizeUserId(userId), runId);
-        // 检查团队协作任务状态是否为需要澄清
         if (run.getStatus() != TeamRunStatus.NEEDS_CLARIFICATION) {
             throw new IllegalArgumentException("Run is not waiting for clarification: " + runId);
         }
-        // 检查澄清答案是否为空
-        if (clarificationAnswer == null || clarificationAnswer.isBlank()) {
-            throw new IllegalArgumentException("clarificationAnswer is required");
+        boolean hasRunAnswer = clarificationAnswer != null && !clarificationAnswer.isBlank();
+        boolean hasStepAnswers = stepClarificationAnswers != null
+            && stepClarificationAnswers.values().stream().anyMatch(v -> v != null && !v.isBlank());
+        if (!hasRunAnswer && !hasStepAnswers) {
+            throw new IllegalArgumentException("clarificationAnswer or stepClarificationAnswers is required");
         }
-        // 设置澄清答案
-        run.setClarificationAnswer(clarificationAnswer.trim());
+        if (hasRunAnswer) {
+            run.setClarificationAnswer(clarificationAnswer.trim());
+        } else {
+            StringBuilder merged = new StringBuilder();
+            for (Map.Entry<String, String> entry : stepClarificationAnswers.entrySet()) {
+                if (entry.getValue() != null && !entry.getValue().isBlank()) {
+                    TeamStepEntity step = stepMapper.selectOptionalById(entry.getKey()).orElse(null);
+                    String stepTitle = step != null ? step.getTitle() : entry.getKey();
+                    merged.append("[").append(stepTitle).append("] ").append(entry.getValue().trim()).append("\n");
+                }
+            }
+            run.setClarificationAnswer(merged.toString().trim());
+        }
         if (run.getClarificationStage() == TeamClarificationStage.PLAN_REVIEW) {
             stepMapper.deleteByRunId(runId);
             run.setPlanReviewJson(null);
@@ -298,6 +318,16 @@ public class TeamBlackboardService {
             run.setMermaidDiagram(null);
             run.setPlanRetryCount(0);
         } else if (run.getClarificationStage() == TeamClarificationStage.RESULT_REVIEW) {
+            if (hasStepAnswers) {
+                for (Map.Entry<String, String> entry : stepClarificationAnswers.entrySet()) {
+                    TeamStepEntity step = stepMapper.selectOptionalById(entry.getKey()).orElse(null);
+                    if (step != null && entry.getValue() != null && !entry.getValue().isBlank()) {
+                        String existing = step.getRevisionInstructions() == null ? "" : step.getRevisionInstructions();
+                        step.setRevisionInstructions(existing + "\n用户澄清: " + entry.getValue().trim());
+                        stepMapper.upsertById(step);
+                    }
+                }
+            }
             run.setResultReviewJson(null);
             run.setFinalOutput(null);
             run.setMermaidDiagram(null);
@@ -309,7 +339,6 @@ public class TeamBlackboardService {
         run.setStatus(TeamRunStatus.PENDING);
         runMapper.upsertById(run);
         recordEvent(runId, null, TeamEventType.RUN_RESUMED, null, null, "User clarification received", null);
-        // 澄清答案写回同一个 Run，保留原 DAG 和事件历史。
         scheduleRun(runId);
         return getRun(teamId, userId, runId);
     }
@@ -397,7 +426,8 @@ public class TeamBlackboardService {
         // 5. 执行 DAG 步骤
         executeDagSteps(run, team);
         run = runMapper.selectOptionalById(runId).orElse(run);
-        if (run.getStatus() == TeamRunStatus.FAILED || run.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION) {
+        if (run.getStatus() == TeamRunStatus.FAILED || run.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION
+            || isRunDeleted(runId)) {
             return;
         }
 
@@ -558,6 +588,11 @@ public class TeamBlackboardService {
 
         // 3. DAG 执行主循环
         while (true) {
+            // 要检查删除没有删除,以防止用户删除team之后,却还是在DAG循环当中
+            if (isRunDeleted(run.getRunId())) {
+                return;
+            }
+
             // 3.1 检查任务是否超时
             if (failIfRunTimedOut(run)) {
                 return;
@@ -571,20 +606,20 @@ public class TeamBlackboardService {
                 .filter(step -> step.getStatus() == TeamStepStatus.READY)
                 .limit(runtimeProperties.getMaxConcurrentSteps())
                 .toList();
-            
-            // 3.4 没有可执行的步骤
+
+            // 3.4 存在失败步骤时立即终止，避免无谓执行
+            if (stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
+                .anyMatch(step -> step.getStatus() == TeamStepStatus.FAILED)) {
+                failRun(run.getRunId(), "存在失败 Step，DAG 停止执行");
+                return;
+            }
+
+            // 3.5 没有可执行的步骤 -> 判断原因
             if (readySteps.isEmpty()) {
                 List<TeamStepEntity> all = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId());
-                // 没有可执行 Step 时：已有失败、有步骤执行中、或全部完成。
-                
-                // 情况1：存在失败的步骤，标记任务失败
-                if (all.stream().anyMatch(step -> step.getStatus() == TeamStepStatus.FAILED)) {
-                    failRun(run.getRunId(), "存在失败 Step，DAG 停止执行");
-                    return;
-                }
-                
-                // 情况2：有步骤正在执行，等待后重试
-                if (all.stream().anyMatch(step -> step.getStatus() == TeamStepStatus.EXECUTING)) {
+
+                // 情况1：有步骤正在执行，等待后重试
+                if (all.stream().anyMatch(step -> step.getStatus() == TeamStepStatus.RUNNING)) {
                     log.debug("[DAG] Steps still executing for run {}, waiting {}ms", run.getRunId(),
                         runtimeProperties.getStepPollIntervalMs());
                     try {
@@ -607,7 +642,7 @@ public class TeamBlackboardService {
                 return;
             }
 
-            // 3.5 并发执行就绪的步骤
+            // 3.6 并发执行就绪的步骤
             List<CompletableFuture<Void>> futures = new ArrayList<>();
             for (TeamStepEntity step : readySteps) {
                 // 使用线程池异步执行步骤
@@ -626,22 +661,45 @@ public class TeamBlackboardService {
                 }));
             }
             
-            // 3.6 等待所有步骤完成
+            // 3.7 等待所有步骤完成
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
             
-            // 3.7 检查最新状态
+            // 3.8 检查是否应该停止（pauseForClarification / failRun 设置的内存标记，
+            //     防止用户在原线程退出前 resumeRun 导致两个线程同时执行）
+            if (stoppingRunIds.remove(run.getRunId())) {
+                return;
+            }
+
+            // 3.9 子线程可能标记了 Step FAILED，优先于澄清处理
+            if (stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
+                .anyMatch(step -> step.getStatus() == TeamStepStatus.FAILED)) {
+                failRun(run.getRunId(), "存在失败 Step，DAG 停止执行");
+                return;
+            }
+
+            // 3.10 子线程收集的澄清请求：主线程统一合并后一次性暂停，
+            //      解决多个并行 Step 同时要求澄清时前端竞态问题
+            String clarificationQuestion = pendingClarifications.remove(run.getRunId());
+            if (clarificationQuestion != null) {
+                stoppingRunIds.add(run.getRunId());
+                run.setClarificationQuestion(clarificationQuestion);
+                run.setClarificationStage(TeamClarificationStage.RESULT_REVIEW);
+                run.setStatus(TeamRunStatus.NEEDS_CLARIFICATION);
+                runMapper.upsertById(run);
+                recordEvent(run.getRunId(), null, TeamEventType.CLARIFICATION_REQUESTED, TeamRole.REVIEWER,
+                    null, clarificationQuestion, null);
+                return;
+            }
+
+            // 3.11 检查最新状态
             TeamRunEntity latest = runMapper.selectOptionalById(run.getRunId()).orElse(run);
             run.setStatus(latest.getStatus());
             
-            // 3.8 检查是否需要暂停或失败
+            // 3.10 检查是否需要暂停或失败
             if (latest.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION || latest.getStatus() == TeamRunStatus.FAILED) {
                 return;
             }
         }
-    }
-
-    private void executePendingSteps(TeamRunEntity run, TeamSnapshot team) {
-        executeDagSteps(run, team);
     }
 
     /**
@@ -705,15 +763,20 @@ public class TeamBlackboardService {
 
     private void executeStepSafely(String runId, String stepId) {
         try {
-            // 执行step
             executeStep(runId, stepId);
         } catch (Exception e) {
+            if (isRunDeleted(runId)) {
+                return;
+            }
             log.error("Team step failed: {}", stepId, e);
             markStepFailed(runId, stepId, e.getMessage());
         }
     }
 
     private void handleStepFutureFailure(String runId, String stepId, Throwable error) {
+        if (isRunDeleted(runId)) {
+            return;
+        }
         Throwable root = unwrapCompletion(error);
         if (root instanceof TimeoutException) {
             markStepTimedOut(runId, stepId);
@@ -798,14 +861,9 @@ public class TeamBlackboardService {
         
         // 设置分配的 Agent ID
         step.setAssignedAgentId(executor.agentId());
-        
-        // 设置状态：重试时保持 RETRYING，首次执行时设为 ASSIGNED
         step.setStatus(retrying ? TeamStepStatus.RETRYING : TeamStepStatus.ASSIGNED);
-        
-        // 记录步骤开始时间
         step.setStartedAt(Instant.now());
-        
-        // 持久化状态变更
+        step.setSubReviewJson(null);
         stepMapper.upsertById(step);
         
         // 记录步骤分配事件
@@ -865,7 +923,7 @@ public class TeamBlackboardService {
         // 阶段7：保存执行结果
         // ============================================
         // 检查任务是否可写（用于并发控制）
-        requireRunWritable(runId);
+        requireRunWritable(runId); // 这个是防止用户在正在跑的时候直接删除team就浪费资源了
         
         // 保存 Agent 的输出结果
         step.setRawOutput(output);
@@ -947,10 +1005,13 @@ public class TeamBlackboardService {
     }
 
     private void reviewHighRiskStep(TeamRunEntity run, TeamSnapshot team, TeamStepEntity step, boolean retrying) {
-        // 高风险 Step 不能直接进入下游，必须先过 SubReviewer；失败时写 Reflexion 再重试。
+        // 获取reviewer成员
         TeamMember reviewer = subReviewer(team);
+        // 事件
         recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_SUB_REVIEW_STARTED, TeamRole.SUB_REVIEWER,
             reviewer.agentId(), "SubReviewer 开始校验高风险 Step", null);
+
+        // 调用 SubReviewer 审查 Step 输出
         ReviewerDecision decision = callSubReviewer(run, reviewer, step);
         step.setSubReviewJson(json.toJson(decision));
         step.setLastReviewReason(decision.reason());
@@ -958,20 +1019,30 @@ public class TeamBlackboardService {
             reviewer.agentId(), decision.reason(), decision);
 
         if (decision.action() == ReviewerAction.CONTINUE) {
+            // 审查通过，标记完成
             completeStep(run.getRunId(), step, step.getAssignedAgentId(), retrying, TeamStepQualityStatus.PASSED);
             return;
         }
         if (decision.action() == ReviewerAction.ASK_CLARIFICATION) {
-            pauseForClarification(run, decision, TeamClarificationStage.RESULT_REVIEW);
+            step.setStatus(TeamStepStatus.PENDING);
+            step.setRevisionInstructions("SubReviewer requested clarification: " + decision.reason());
+            stepMapper.upsertById(step);
+            String question = decision.questions().isEmpty()
+                ? decision.reason()
+                : String.join("\n", decision.questions());
+            pendingClarifications.merge(run.getRunId(), question,
+                (existing, newQ) -> existing + "\n\n" + newQ);
             return;
         }
         if (step.getRetryCount() >= runtimeProperties.getMaxStepRetries()) {
+            // 重试次数耗尽，标记为 FLAWED_ACCEPTED（有缺陷但接受），允许继续推进
             step.setQualityStatus(TeamStepQualityStatus.FLAWED_ACCEPTED);
             step.setReviewStatus("FLAWED_ACCEPTED");
             step.setReflectionJson(json.toJson(reflectionForStep(step, decision)));
             completeStep(run.getRunId(), step, step.getAssignedAgentId(), retrying, TeamStepQualityStatus.FLAWED_ACCEPTED);
             return;
         }
+        // 重试次数未耗尽，写入 Reflexion 上下文后重新执行
         prepareStepRetry(run, step, decision, reviewer);
     }
 
@@ -981,6 +1052,9 @@ public class TeamBlackboardService {
 
     private void completeStep(String runId, TeamStepEntity step, String actorAgentId, boolean retrying,
                               TeamStepQualityStatus qualityStatus) {
+        if (isRunDeleted(runId)) {
+            return;
+        }
         step.setQualityStatus(qualityStatus);
         step.setReviewStatus(qualityStatus.name());
         step.setStatus(TeamStepStatus.COMPLETED);
@@ -1474,41 +1548,15 @@ public class TeamBlackboardService {
      * @param stage 澄清阶段（计划审核/结果审核）
      */
     private void pauseForClarification(TeamRunEntity run, ReviewerDecision decision, TeamClarificationStage stage) {
-        // 1. 构建澄清问题：从决策的 questions 列表或 reason 中获取
+        stoppingRunIds.add(run.getRunId());
+
         String question = decision.questions().isEmpty() ? decision.reason() : String.join("\n", decision.questions());
-        
-        // 2. 保存澄清问题和当前阶段
         run.setClarificationQuestion(question);
         run.setClarificationStage(stage);
-        
-        // 3. 设置任务状态为需要澄清
         run.setStatus(TeamRunStatus.NEEDS_CLARIFICATION);
-        
-        // 4. 保存到数据库
         runMapper.upsertById(run);
-        
-        // 5. 记录澄清请求事件
         recordEvent(run.getRunId(), null, TeamEventType.CLARIFICATION_REQUESTED, TeamRole.REVIEWER,
             null, question, decision);
-    }
-
-    private void prepareStepsForClarificationResume(TeamRunEntity run) {
-        for (TeamStepEntity step : stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId())) {
-            if (step.getStatus() == TeamStepStatus.FAILED) {
-                continue;
-            }
-            List<String> previous = new ArrayList<>(json.stringList(step.getPreviousOutputsJson()));
-            if (step.getRawOutput() != null && !step.getRawOutput().isBlank()) {
-                previous.add(step.getRawOutput());
-            }
-            step.setPreviousOutputsJson(json.toJson(previous));
-            step.setRevisionInstructions("User clarification: " + run.getClarificationAnswer());
-            step.setStatus(TeamStepStatus.RETRYING);
-            step.setQualityStatus(TeamStepQualityStatus.RETRY_REQUESTED);
-            step.setStartedAt(null);
-            step.setCompletedAt(null);
-            stepMapper.upsertById(step);
-        }
     }
 
     private void validateReviewerDecision(ReviewerDecision decision, boolean requireFinalReport) {
@@ -1545,6 +1593,9 @@ public class TeamBlackboardService {
 
     @Transactional
     protected void markStepFailed(String runId, String stepId, String message) {
+        if (isRunDeleted(runId)) {
+            return;
+        }
         TeamStepEntity step = stepMapper.selectOptionalById(stepId).orElse(null);
         if (step != null) {
             step.setStatus(TeamStepStatus.FAILED);
@@ -1558,6 +1609,9 @@ public class TeamBlackboardService {
 
     @Transactional
     protected void markStepTimedOut(String runId, String stepId) {
+        if (isRunDeleted(runId)) {
+            return;
+        }
         String message = "Step execution timed out after " + runtimeProperties.getStepTimeoutSeconds() + " seconds";
         TeamStepEntity step = stepMapper.selectOptionalById(stepId).orElse(null);
         if (step != null && step.getStatus() != TeamStepStatus.COMPLETED) {
@@ -1587,6 +1641,8 @@ public class TeamBlackboardService {
 
     @Transactional
     protected void failRun(String runId, String message) {
+        stoppingRunIds.add(runId);
+        pendingClarifications.remove(runId);
         TeamRunEntity run = runMapper.selectOptionalById(runId).orElse(null);
         if (run != null) {
             run.setStatus(TeamRunStatus.FAILED);
@@ -1950,7 +2006,7 @@ public class TeamBlackboardService {
         List<TeamMember> members = memberMapper.selectByTeamIdOrderBySortOrderAscIdAsc(team.getTeamId()).stream()
             .map(this::toMember)
             .toList();
-        return new TeamSnapshot(team.getTeamId(), team.getName(), members, team.getCreatedAt(), team.getUpdatedAt());
+        return new TeamSnapshot(team.getTeamId(), team.getOwnerUserId(), team.getName(), members, team.getCreatedAt(), team.getUpdatedAt());
     }
 
     private TeamMember toMember(TeamMemberEntity entity) {

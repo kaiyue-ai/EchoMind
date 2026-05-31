@@ -47,7 +47,6 @@ COPY --from=build /app/external-mcp/nowcoder-java-interview-mcp-server-1.0.0.jar
 # 复制预编译的 Skill JAR
 COPY --from=build /app/skills/skill-weather/target/*-jar-with-dependencies.jar /app/skills/
 COPY --from=build /app/skills/skill-calculator/target/*-jar-with-dependencies.jar /app/skills/
-COPY --from=build /app/skills/skill-websearch/target/*-jar-with-dependencies.jar /app/skills/
 COPY --from=build /app/skills/skill-markdown-code/target/*-jar-with-dependencies.jar /app/skills/
 COPY --from=build /app/skills/skill-date-query/target/*-jar-with-dependencies.jar /app/skills/
 COPY --from=build /app/skills/skill-github-intel/target/*-jar-with-dependencies.jar /app/skills/
@@ -66,4 +65,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD java -cp /app/echomind-app.jar org.springframework.boot.loader.launch.PropertiesLauncher \
       --server.port=8080 2>&1 | grep -q "Started" || exit 1
 
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/echomind-app.jar"]
+ENTRYPOINT ["sh", "-c", "java -Dfile.encoding=UTF-8 $JAVA_OPTS -jar /app/echomind-app.jar"]
