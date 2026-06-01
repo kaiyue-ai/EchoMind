@@ -107,7 +107,7 @@ services:
     environment:
       MODE: http
       PORT: 3000
-      DEFAULT_SEARCH_ENGINE: ${OPEN_WEBSEARCH_DEFAULT_ENGINE:-duckduckgo}
+      DEFAULT_SEARCH_ENGINE: ${OPEN_WEBSEARCH_DEFAULT_ENGINE:-bing}
       SEARCH_MODE: ${OPEN_WEBSEARCH_SEARCH_MODE:-auto}
       USE_PROXY: ${OPEN_WEBSEARCH_USE_PROXY:-false}
       PROXY_URL: ${OPEN_WEBSEARCH_PROXY_URL:-http://host.docker.internal:7890}
