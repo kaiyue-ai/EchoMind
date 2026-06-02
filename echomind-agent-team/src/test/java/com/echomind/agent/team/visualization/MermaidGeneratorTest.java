@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MermaidGeneratorTest {
 
     @Test
-    void generatesFullChineseControlCenterFlow() {
+    void generatesEmptyDagWaitingState() {
         String mermaid = MermaidGenerator.generateFromSnapshots(
             "活动策划团队",
             TeamRunStatus.MERGING,
@@ -19,12 +19,11 @@ class MermaidGeneratorTest {
             List.of()
         );
 
-        assertThat(mermaid).contains("TaskPlanner 规划器");
-        assertThat(mermaid).contains("TeamControlCenter 管控中心");
-        assertThat(mermaid).contains("AgentSelector 按能力/负载/健康度选择 Agent");
-        assertThat(mermaid).contains("冲突检测与统一规范");
-        assertThat(mermaid).contains("Planner 仲裁分歧");
-        assertThat(mermaid).contains("深度与迭代次数拦截");
-        assertThat(mermaid).contains("class M active");
+        assertThat(mermaid).contains("本次协作流程");
+        assertThat(mermaid).contains("团队：活动策划团队");
+        assertThat(mermaid).contains("状态：聚合中");
+        assertThat(mermaid).contains("暂无 Step");
+        assertThat(mermaid).contains("等待 Planner 生成本次 DAG");
+        assertThat(mermaid).contains("class EMPTY waiting");
     }
 }

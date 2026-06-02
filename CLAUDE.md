@@ -20,7 +20,7 @@ EchoMind 是 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 - `echomind-skill-api`：Skill SPI。
 - `echomind-skill`：Skill 加载、注册、热加载、市场状态。
 - `echomind-llm`：模型 Provider 和模型路由；Provider implementation 通过 Spring AI adapter 调用 OpenAI-compatible / DeepSeek Chat Completions。
-- `echomind-memory`：会话记忆、Redis Stack 向量检索、Agent 知识库。
+- `echomind-memory`：会话记忆、Milvus Agent 知识库向量检索。
 - `echomind-mcp`：外部 MCP 客户端和 stdio 通信。
 - `echomind-agent`：单 Agent 执行、Pipeline、能力注册表。
 - `echomind-agent/src/main/java/com/echomind/agent/tool`：工具注册、匹配、URL/domain 兼容、消歧和直调参数兜底。
@@ -45,7 +45,7 @@ Controller / CLI
 - Controller 不直接拼业务流程。
 - Application Service 负责校验、持久化顺序和运行时同步。
 - `AgentFactory`、`SkillRegistry`、`CapabilityRegistry` 只是运行时索引。
-- MySQL 保存业务事实和完整会话历史；Redis 保存短期上下文和用户画像快照；Redis Stack 保存用户长期事实向量和 Agent 知识库向量。
+- MySQL 保存业务事实和完整会话历史；Redis 保存短期上下文和用户画像快照；Redis Stack 保存用户长期事实向量；Milvus 保存 Agent 知识库切片正文和向量。
 - `ToolRouter` 只作为工具路由入口；URL/domain 兼容性在 `ToolCompatibilityPolicy`，打分在 `ToolMatchScorer`，确定性消歧在 `ToolDisambiguationPolicy`，直调参数兜底在 `ToolParameterExtractor`。
 - LLM Provider 只处理模型协议；Spring AI 只放在 Provider adapter seam 内，不接管 Agent、Skill、MCP 或 Memory。Provider 不按具体 Skill 名称硬编码参数、工具选择或最终答案策略；工具可用 `direct-result` / `final-answer` tag 声明输出可直接交付。
 - 主项目只接入外部 MCP Server，不暴露自身 MCP Server。

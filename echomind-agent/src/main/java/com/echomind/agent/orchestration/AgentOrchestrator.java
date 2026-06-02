@@ -58,7 +58,13 @@ public class AgentOrchestrator {
 
     /** 执行内部任务，不读取或写入普通聊天记忆。 */
     public PipelineContext executeInternal(String agentId, String sessionId, String userMessage) {
-        return execute(agentId, sessionId, userMessage, null, List.of(), false);
+        return executeInternal(agentId, sessionId, userMessage, false);
+    }
+
+    /** 执行内部任务，可由调用方显式控制是否持久化普通聊天记忆。 */
+    public PipelineContext executeInternal(String agentId, String sessionId, String userMessage,
+                                           boolean memoryPersistenceEnabled) {
+        return execute(agentId, sessionId, userMessage, null, List.of(), memoryPersistenceEnabled);
     }
 
     private Agent resolveAgent(String agentId) {

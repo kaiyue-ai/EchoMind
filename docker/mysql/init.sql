@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_memory_embeddings (
     INDEX idx_memory_embedding_message (message_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Agent 私有知识库文档表：每个 Agent 独立管理上传的 txt/pdf
+-- Agent 私有知识库文档表：每个 Agent 独立管理上传的 txt/pdf；切片正文和向量保存在 Milvus
 CREATE TABLE IF NOT EXISTS echomind.echomind_agent_knowledge_documents (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     agent_id VARCHAR(128) NOT NULL,
@@ -223,26 +223,15 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_agent_knowledge_documents (
     INDEX idx_agent_knowledge_doc_agent (agent_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Agent 私有知识库切片表：MySQL 保存原文切片和向量备份，Redis Stack 负责在线 KNN 检索
-CREATE TABLE IF NOT EXISTS echomind.echomind_agent_knowledge_chunks (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    agent_id VARCHAR(128) NOT NULL,
-    document_id BIGINT NOT NULL,
-    file_name VARCHAR(255) NOT NULL,
-    chunk_index INT NOT NULL,
-    content LONGTEXT NOT NULL,
-    embedding_json LONGTEXT NOT NULL,
-    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    INDEX idx_agent_knowledge_chunk_agent (agent_id),
-    INDEX idx_agent_knowledge_chunk_doc (document_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- Agent Team 定义表：团队配置的事实来源
 CREATE TABLE IF NOT EXISTS echomind.echomind_agent_teams (
     team_id VARCHAR(128) PRIMARY KEY,
+    owner_user_id VARCHAR(128) NOT NULL DEFAULT 'default',
     name VARCHAR(255) NOT NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+    ,
+    INDEX idx_agent_team_owner_time (owner_user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Agent Team 成员表：角色、Agent、能力标签和排序

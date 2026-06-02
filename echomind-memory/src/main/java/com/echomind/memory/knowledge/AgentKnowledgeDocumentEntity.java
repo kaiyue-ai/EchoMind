@@ -17,8 +17,8 @@ import java.time.Instant;
 /**
  * Agent 知识库文档表。
  *
- * <p>一个 Agent 可以拥有多份 txt/pdf 文档。文档表保存文件级元数据，
- * 真正进入向量检索的是 {@link AgentKnowledgeChunkEntity} 中的切片。</p>
+ * <p>一个 Agent 可以拥有多份 txt/pdf 文档。文档表只保存文件级元数据；
+ * 切片正文、切片序号和向量都进入 Milvus。</p>
  */
 @Entity
 @Table(

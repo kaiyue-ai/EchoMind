@@ -333,6 +333,7 @@ public class MermaidGenerator {
             case EXECUTING -> "执行中";
             case MERGING -> "聚合中";
             case GLOBAL_REVIEWING -> "全局终审中";
+            case RESULT_REVIEWING -> "结果审查中";
             case NEEDS_CLARIFICATION -> "等待用户澄清";
             case COMPLETED -> "已完成";
             case FAILED -> "失败";

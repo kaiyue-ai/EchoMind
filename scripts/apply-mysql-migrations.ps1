@@ -102,6 +102,20 @@ function Escape-SqlLiteral {
     return $Value.Replace("'", "''")
 }
 
+function Get-MigrationChecksum {
+    param([string]$Path)
+
+    $sql = [System.IO.File]::ReadAllText($Path)
+    $normalized = $sql.Replace("`r`n", "`n").Replace("`r", "`n")
+    $bytes = $utf8NoBom.GetBytes($normalized)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
 Push-Location $rootDir
 try {
     if ($StartDatabase) {
@@ -130,7 +144,7 @@ CREATE TABLE IF NOT EXISTS echomind_schema_migrations (
     foreach ($file in $migrationFiles) {
         $version = $file.Name
         $versionSql = Escape-SqlLiteral $version
-        $checksum = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $checksum = Get-MigrationChecksum $file.FullName
 
         $appliedChecksum = Invoke-MysqlScalar "SELECT checksum_sha256 FROM echomind_schema_migrations WHERE version = '$versionSql';"
         if ($appliedChecksum) {

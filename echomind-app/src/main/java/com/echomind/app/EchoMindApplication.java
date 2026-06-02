@@ -1,8 +1,15 @@
 package com.echomind.app;
 
+import com.baomidou.mybatisplus.annotation.DbType;
+import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
+import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
+import com.echomind.common.mybatis.MybatisPlusMetaObjectHandler;
+import org.apache.ibatis.annotations.Mapper;
+import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.context.annotation.Bean;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -18,6 +25,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *       启用 Spring Data JPA 仓库扫描，覆盖 Skill、Agent 等需要持久化的模块</li>
  *   <li>{@link EntityScan}{@code (basePackages = "com.echomind")}：
  *       扫描所有 EchoMind 模块中的 JPA 实体类</li>
+ *   <li>{@link MapperScan}{@code (basePackages = "com.echomind")}：
+ *       扫描 MyBatis-Plus Mapper，供 Team 等运行时持久化模块使用</li>
  *   <li>{@link EnableAsync}：启用 Spring 异步执行能力，支持
  *       {@code @Async} 注解的异步方法（如技能并发调用）</li>
  *   <li>{@link EnableScheduling}：启用 Spring 定时任务调度，
@@ -38,6 +47,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication(scanBasePackages = "com.echomind")
 @EnableJpaRepositories(basePackages = "com.echomind")
 @EntityScan(basePackages = "com.echomind")
+@MapperScan(basePackages = "com.echomind", annotationClass = Mapper.class)
 @EnableAsync
 @EnableScheduling
 public class EchoMindApplication {
@@ -49,5 +59,17 @@ public class EchoMindApplication {
      */
     public static void main(String[] args) {
         SpringApplication.run(EchoMindApplication.class, args);
+    }
+
+    @Bean
+    public MybatisPlusInterceptor mybatisPlusInterceptor() {
+        MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
+        interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.MYSQL));
+        return interceptor;
+    }
+
+    @Bean
+    public MybatisPlusMetaObjectHandler mybatisPlusMetaObjectHandler() {
+        return new MybatisPlusMetaObjectHandler();
     }
 }

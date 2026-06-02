@@ -9,9 +9,9 @@
 - Skill 和外部 MCP 工具统一进入 `CapabilityRegistry`，供 Agent 对话时使用。
 - 对话记忆已改为按 `userId + sessionId` 隔离，不再按 Agent 共享记忆。
 - 已新增第一阶段用户登录和认证上下文：无 token 兼容请求归属 `default` 用户。
-- MySQL 保存完整会话历史，Redis 保存近期上下文，Redis Stack 承担用户长期事实向量和知识库向量。
+- MySQL 保存完整会话历史，Redis 保存近期上下文，Redis Stack 承担用户长期事实向量，Milvus 承担 Agent 知识库切片正文和向量。
 - 已新增批量用户长期记忆方案：主应用按 `userId` 读取 Redis 用户画像快照并从 Redis Stack 召回相关事实；`echomind-user-memory` 通过 RabbitMQ 接收事件，Redis 缓冲满 5 轮后批量更新事实层和画像快照。
-- Agent 知识库已支持文档上传、切片、向量化、检索和前端展示。
+- Agent 知识库已支持文档上传、段落/标点切片、Milvus 向量化、检索窗口召回和前端展示。
 - 前端聊天状态已通过 Pinia 持有，避免普通页面跳转导致智能对话重置。
 - 前端已支持 Markdown 渲染和代码块一键复制。
 - 已新增 `markdown-code` Skill，用于约束代码输出使用 Markdown fenced code block。

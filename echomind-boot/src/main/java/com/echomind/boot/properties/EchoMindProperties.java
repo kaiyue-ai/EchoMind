@@ -137,6 +137,12 @@ public class EchoMindProperties {
         private String embeddingApiKey;
         /** 向量模型，按需求默认使用 tongyi-embedding-vision-plus。 */
         private String embeddingModel = "tongyi-embedding-vision-plus";
+        /** Milvus Host，用于知识库向量存储。 */
+        private String milvusHost = "localhost";
+        /** Milvus Port。 */
+        private int milvusPort = 19530;
+        /** Milvus Agent 知识库 Collection。 */
+        private String milvusKnowledgeCollection = "echomind_agent_knowledge";
         /** 已废弃普通消息向量索引名，仅用于启动时幂等清理旧数据。 */
         private String legacyVectorIndexName = "idx:echomind:memory:vectors";
         /** 已废弃普通消息向量 key 前缀，仅用于启动时幂等清理旧数据。 */
@@ -155,22 +161,12 @@ public class EchoMindProperties {
         private int summaryRefreshInterval = 6;
         /** Agent 私有知识库召回条数。 */
         private int knowledgeTopK = 4;
-        /** Agent 私有知识库单片最大字符数。 */
-        private int knowledgeChunkSize = 1000;
-        /** Agent 私有知识库切片重叠字符数。 */
-        private int knowledgeChunkOverlap = 150;
+        /** Agent 私有知识库单片最大字符数，近似控制 token 预算。 */
+        private int knowledgeChunkSize = 500;
+        /** Agent 私有知识库切片重叠比例。 */
+        private double knowledgeChunkOverlapRatio = 0.15;
         /** Agent 私有知识库向量召回最小相似度，低于该值的片段不注入提示词。 */
         private double knowledgeMinVectorSimilarity = 0.25;
-        /** Agent 私有知识库混合召回中向量相似度的权重。 */
-        private double knowledgeVectorWeight = 0.75;
-        /** Agent 私有知识库混合召回中关键词匹配的权重。 */
-        private double knowledgeKeywordWeight = 0.25;
-        /** Agent 私有知识库关键词粗召回最大候选数。 */
-        private int knowledgeKeywordCandidateLimit = 40;
-        /** Agent 私有知识库 Redis Stack 索引名。 */
-        private String knowledgeVectorIndexName = "idx:echomind:agent:knowledge:vectors";
-        /** Agent 私有知识库 Redis Stack Hash key 前缀。 */
-        private String knowledgeVectorKeyPrefix = "echomind:agent:knowledge:vector:";
         /** 是否启用扫描版 PDF OCR。 */
         private boolean knowledgeOcrEnabled = true;
         /** OCR 语言包，chi_sim+eng 表示简体中文和英文混合识别。 */

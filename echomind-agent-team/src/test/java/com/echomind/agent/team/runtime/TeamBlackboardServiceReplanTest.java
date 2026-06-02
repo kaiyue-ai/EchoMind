@@ -148,7 +148,7 @@ class TeamBlackboardServiceReplanTest {
     }
 
     @Test
-    void executorToolBudgetLimitFallsBackToToollessSummary() {
+    void executorToolBudgetLimitFailsRun() {
         RuntimeHarness harness = new RuntimeHarness();
         TeamRunEntity run = harness.run();
         harness.wire(run);
@@ -168,23 +168,16 @@ class TeamBlackboardServiceReplanTest {
             );
         when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
             .thenReturn(context("[Error] 工具调用次数超过上限(50)，已中止本轮模型调用，防止工具循环。最后一次工具: open_web_search"));
-        when(harness.orchestrator.executeInternal(eq("executor"),
-            startsWith("team-run-run-1-step-"), contains("本轮禁止再调用任何工具"), eq(false)))
-            .thenReturn(context("基于已有信息的降级总结"));
 
         harness.service.executeRun("run-1");
 
-        assertThat(run.getStatus()).isEqualTo(TeamRunStatus.COMPLETED);
+        assertThat(run.getStatus()).isEqualTo(TeamRunStatus.FAILED);
         assertThat(harness.persistedSteps)
             .singleElement()
             .satisfies(step -> {
-                assertThat(step.getStatus()).isEqualTo(TeamStepStatus.COMPLETED);
-                assertThat(step.getQualityStatus()).isEqualTo(TeamStepQualityStatus.FLAWED_ACCEPTED);
-                assertThat(step.getRawOutput()).contains("工具调用达到上限，已降级总结");
-                assertThat(step.getRawOutput()).contains("基于已有信息的降级总结");
+                assertThat(step.getStatus()).isEqualTo(TeamStepStatus.FAILED);
+                assertThat(step.getRawOutput()).contains("工具调用次数超过上限");
             });
-        verify(harness.orchestrator).executeInternal(eq("executor"),
-            startsWith("team-run-run-1-step-"), contains("本轮禁止再调用任何工具"), eq(false));
     }
 
     private static PipelineContext context(String finalResponse) {
@@ -219,7 +212,12 @@ class TeamBlackboardServiceReplanTest {
             team.setTeamId("team-1");
             team.setOwnerUserId("default");
             team.setName("测试团队");
+            when(teamMapper.selectOptionalById("team-1")).thenReturn(Optional.of(team));
             when(teamMapper.selectOptionalByTeamIdAndOwnerUserId("team-1", "default")).thenReturn(Optional.of(team));
+            when(runMapper.tryAcquireExecuteLock("run-1")).thenAnswer(invocation -> {
+                run.setStatus(TeamRunStatus.EXECUTING);
+                return true;
+            });
             when(runMapper.selectOptionalById("run-1")).thenReturn(Optional.of(run));
             when(runMapper.existsById("run-1")).thenReturn(true);
             when(runMapper.upsertById(any(TeamRunEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -265,6 +263,7 @@ class TeamBlackboardServiceReplanTest {
             TeamRunEntity run = new TeamRunEntity();
             run.setRunId("run-1");
             run.setTeamId("team-1");
+            run.setUserId("default");
             run.setTask("策划活动");
             run.setStatus(TeamRunStatus.PENDING);
             return run;

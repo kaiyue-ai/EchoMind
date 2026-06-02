@@ -7,14 +7,14 @@ import com.echomind.agent.team.state.TeamRole;
 import com.echomind.agent.team.state.TeamRunStatus;
 import com.echomind.agent.team.state.TeamStepStatus;
 import com.echomind.agent.team.store.TeamEntity;
-import com.echomind.agent.team.store.TeamEventRepository;
+import com.echomind.agent.team.store.TeamEventMapper;
 import com.echomind.agent.team.store.TeamMemberEntity;
-import com.echomind.agent.team.store.TeamMemberRepository;
-import com.echomind.agent.team.store.TeamRepository;
+import com.echomind.agent.team.store.TeamMapper;
+import com.echomind.agent.team.store.TeamMemberMapper;
 import com.echomind.agent.team.store.TeamRunEntity;
-import com.echomind.agent.team.store.TeamRunRepository;
+import com.echomind.agent.team.store.TeamRunMapper;
 import com.echomind.agent.team.store.TeamStepEntity;
-import com.echomind.agent.team.store.TeamStepRepository;
+import com.echomind.agent.team.store.TeamStepMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.TaskExecutor;
 
@@ -33,11 +33,11 @@ import static org.mockito.Mockito.when;
 
 class TeamBlackboardServiceResumeTest {
 
-    private final TeamRepository teamRepository = mock(TeamRepository.class);
-    private final TeamMemberRepository memberRepository = mock(TeamMemberRepository.class);
-    private final TeamRunRepository runRepository = mock(TeamRunRepository.class);
-    private final TeamStepRepository stepRepository = mock(TeamStepRepository.class);
-    private final TeamEventRepository eventRepository = mock(TeamEventRepository.class);
+    private final TeamMapper teamMapper = mock(TeamMapper.class);
+    private final TeamMemberMapper memberMapper = mock(TeamMemberMapper.class);
+    private final TeamRunMapper runMapper = mock(TeamRunMapper.class);
+    private final TeamStepMapper stepMapper = mock(TeamStepMapper.class);
+    private final TeamEventMapper eventMapper = mock(TeamEventMapper.class);
     private final AgentFactory agentFactory = mock(AgentFactory.class);
     private final List<Runnable> scheduled = new ArrayList<>();
     private final TeamJsonSupport json = new TeamJsonSupport();
@@ -51,7 +51,7 @@ class TeamBlackboardServiceResumeTest {
         TeamRunSnapshot snapshot = service().resumeRun("team-1", "run-1", "预算300元/人");
 
         assertThat(snapshot.status()).isEqualTo(TeamRunStatus.PENDING);
-        assertThat(snapshot.clarificationStage()).isEqualTo("PLAN_REVIEW");
+        assertThat(snapshot.clarificationStage()).isNull();
         assertThat(snapshot.steps()).isEmpty();
         assertThat(run.getClarificationAnswer()).isEqualTo("预算300元/人");
         assertThat(run.getPlanReviewJson()).isNull();
@@ -59,7 +59,7 @@ class TeamBlackboardServiceResumeTest {
         assertThat(run.getFinalOutput()).isNull();
         assertThat(run.getMermaidDiagram()).isNull();
         assertThat(scheduled).hasSize(1);
-        verify(stepRepository).deleteByRunId("run-1");
+        verify(stepMapper).deleteByRunId("run-1");
     }
 
     @Test
@@ -71,27 +71,26 @@ class TeamBlackboardServiceResumeTest {
         TeamRunSnapshot snapshot = service().resumeRun("team-1", "run-1", "人数改为20人");
 
         assertThat(snapshot.status()).isEqualTo(TeamRunStatus.PENDING);
-        assertThat(snapshot.clarificationStage()).isEqualTo("RESULT_REVIEW");
+        assertThat(snapshot.clarificationStage()).isNull();
         assertThat(snapshot.steps()).hasSize(1);
         TeamStepSnapshot retried = snapshot.steps().get(0);
-        assertThat(retried.status()).isEqualTo(TeamStepStatus.RETRYING);
-        assertThat(retried.revisionInstructions()).contains("人数改为20人");
-        assertThat(json.stringList(oldStep.getPreviousOutputsJson())).containsExactly("old raw");
+        assertThat(retried.status()).isEqualTo(TeamStepStatus.COMPLETED);
+        assertThat(oldStep.getRawOutput()).isEqualTo("old raw");
         assertThat(run.getResultReviewJson()).isNull();
         assertThat(run.getFinalOutput()).isNull();
         assertThat(run.getMermaidDiagram()).isNull();
         assertThat(scheduled).hasSize(1);
-        verify(stepRepository, never()).deleteByRunId("run-1");
+        verify(stepMapper, never()).deleteByRunId("run-1");
     }
 
     private TeamBlackboardService service() {
         TaskExecutor executor = scheduled::add;
         return new TeamBlackboardService(
-            teamRepository,
-            memberRepository,
-            runRepository,
-            stepRepository,
-            eventRepository,
+            teamMapper,
+            memberMapper,
+            runMapper,
+            stepMapper,
+            eventMapper,
             agentFactory,
             null,
             executor
@@ -102,12 +101,13 @@ class TeamBlackboardServiceResumeTest {
         List<TeamStepEntity> persistedSteps = new ArrayList<>(steps);
         TeamEntity team = new TeamEntity();
         team.setTeamId("team-1");
+        team.setOwnerUserId("default");
         team.setName("测试团队");
-        when(teamRepository.findById("team-1")).thenReturn(Optional.of(team));
-        when(runRepository.findById("run-1")).thenReturn(Optional.of(run));
-        when(stepRepository.findByRunIdOrderByStepIndexAsc("run-1")).thenAnswer(invocation -> List.copyOf(persistedSteps));
-        when(eventRepository.findByRunIdOrderByCreatedAtAscIdAsc("run-1")).thenReturn(List.of());
-        when(memberRepository.findByTeamIdOrderBySortOrderAscIdAsc("team-1")).thenReturn(List.of(
+        when(teamMapper.selectOptionalById("team-1")).thenReturn(Optional.of(team));
+        when(runMapper.selectOptionalById("run-1")).thenReturn(Optional.of(run));
+        when(stepMapper.selectByRunIdOrderByStepIndexAsc("run-1")).thenAnswer(invocation -> List.copyOf(persistedSteps));
+        when(eventMapper.selectByRunIdOrderByCreatedAtAscIdAsc("run-1")).thenReturn(List.of());
+        when(memberMapper.selectByTeamIdOrderBySortOrderAscIdAsc("team-1")).thenReturn(List.of(
             member("planner", TeamRole.PLANNER, 10),
             member("executor", TeamRole.EXECUTOR, 20),
             member("reviewer", TeamRole.REVIEWER, 30)
@@ -118,12 +118,12 @@ class TeamBlackboardServiceResumeTest {
         when(agentFactory.get("planner")).thenReturn(planner);
         when(agentFactory.get("executor")).thenReturn(executor);
         when(agentFactory.get("reviewer")).thenReturn(reviewer);
-        when(runRepository.save(any(TeamRunEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(stepRepository.save(any(TeamStepEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(runMapper.upsertById(any(TeamRunEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(stepMapper.upsertById(any(TeamStepEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         doAnswer(invocation -> {
             persistedSteps.clear();
             return null;
-        }).when(stepRepository).deleteByRunId("run-1");
+        }).when(stepMapper).deleteByRunId("run-1");
     }
 
     private Agent agent(String id) {
@@ -148,6 +148,7 @@ class TeamBlackboardServiceResumeTest {
         TeamRunEntity run = new TeamRunEntity();
         run.setRunId("run-1");
         run.setTeamId("team-1");
+        run.setUserId("default");
         run.setTask("策划活动");
         run.setStatus(TeamRunStatus.NEEDS_CLARIFICATION);
         run.setClarificationStage(stage);

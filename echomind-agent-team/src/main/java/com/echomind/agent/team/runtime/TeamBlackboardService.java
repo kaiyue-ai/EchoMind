@@ -128,6 +128,11 @@ public class TeamBlackboardService {
     }
 
     @Transactional(readOnly = true)
+    public List<TeamSnapshot> listTeams() {
+        return listTeams("default");
+    }
+
+    @Transactional(readOnly = true)
     public List<TeamSnapshot> listTeams(String userId) {
         return teamMapper.selectByOwnerUserIdOrderByCreatedAtAsc(userId).stream()
             .map(this::toTeamSnapshot)
@@ -140,6 +145,11 @@ public class TeamBlackboardService {
         return teamMapper.selectOptionalById(teamId)
             .map(this::toTeamSnapshot)
             .orElseThrow(() -> new IllegalArgumentException("Team not found: " + teamId));
+    }
+
+    @Transactional
+    public TeamSnapshot createTeam(String requestedName, List<TeamMemberSpec> specs) {
+        return createTeam("default", requestedName, specs);
     }
 
     @Transactional
@@ -170,6 +180,11 @@ public class TeamBlackboardService {
     }
 
     @Transactional
+    public void deleteTeam(String teamId) {
+        deleteTeam(teamId, "default");
+    }
+
+    @Transactional
     public void deleteTeam(String teamId, String userId) {
         if (teamId == null || teamId.isBlank()) {
             throw new IllegalArgumentException("teamId is required");
@@ -193,6 +208,18 @@ public class TeamBlackboardService {
         runMapper.deleteByTeamId(team.getTeamId());
         memberMapper.deleteByTeamId(team.getTeamId());
         teamMapper.deleteEntity(team);
+    }
+
+    String buildPlannerPrompt(TeamRunEntity run, TeamSnapshot team, List<PlannedStep> previousPlan,
+                              String plannerRevisionInstructions) {
+        return buildPlannerPrompt(run, team, previousPlan, plannerRevisionInstructions, List.of());
+    }
+
+    String buildPlannerPrompt(TeamRunEntity run, TeamSnapshot team, List<PlannedStep> previousPlan,
+                              String plannerRevisionInstructions,
+                              List<TeamStepSnapshot> previousExecutionResults) {
+        return TeamPromptFactory.planner(run, team, previousPlan, plannerRevisionInstructions,
+            previousExecutionResults, json);
     }
 
     @Transactional
@@ -958,7 +985,11 @@ public class TeamBlackboardService {
     private TeamAgentSelection selectExecutorWithModel(TeamRunEntity run, TeamSnapshot team, TeamStepEntity step,
                                                        List<String> requiredCapabilities) {
         // 1. 获取候选 Executor 列表（按能力匹配度排序）
-        List<TeamAgentSelection> candidates = agentSelector.rankExecutors(team.members(), requiredCapabilities);
+        List<TeamStepEntity> runSteps = stepMapper == null
+            ? List.of()
+            : stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId());
+        List<TeamAgentSelection> candidates = agentSelector.rankExecutors(team.members(), requiredCapabilities,
+            runSteps);
         if (candidates.isEmpty()) {
             return null;  // 无候选 Executor
         }

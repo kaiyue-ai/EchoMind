@@ -1,6 +1,6 @@
 # 数据库与存储硬约束
 
-本文档用于约束 EchoMind 的持久化设计。核心原则是：可审计业务配置和普通聊天历史进 MySQL，LLM 短期上下文进 Redis，用户长期事实和知识库向量进 Redis Stack，运行时 Map 只做索引。用户画像快照是 Redis 中的派生摘要，不替代事实层。
+本文档用于约束 EchoMind 的持久化设计。核心原则是：可审计业务配置和普通聊天历史进 MySQL，LLM 短期上下文进 Redis，用户长期事实进 Redis Stack，Agent 知识库切片正文和向量进 Milvus，运行时 Map 只做索引。用户画像快照是 Redis 中的派生摘要，不替代事实层。
 
 ## 存储分工
 
@@ -16,7 +16,7 @@
 | 敏感数据治理 | MySQL `echomind_sensitive_rules` 保存规则，`echomind_sensitive_events` 保存脱敏后事件样本 | `ChatApplicationService` 请求/响应治理钩子 |
 | 告警治理 | MySQL `echomind_alert_rules` 保存阈值、静默期和升级策略，`echomind_alert_events` 保存推送结果、升级标记和飞书响应摘要 | 飞书 Webhook 客户端，不作为事实来源；地址来自后端运行环境变量 `Webhook` |
 | 用户长期记忆 | Redis Stack `idx:user:memory:vectors` 按 `userId` 保存细粒度事实；Redis `echomind:user-profile:snapshot:*` 保存画像快照 | 主应用 Pipeline 读取画像快照并按 `userId` KNN 召回相关事实 |
-| Agent 知识库文档 | MySQL 文档表 + 对象存储文件，切片正文/元数据进 MySQL | Redis Stack 知识库向量索引 |
+| Agent 知识库文档 | MySQL 文档表 + 对象存储文件；Milvus 保存切片正文、切片序号和向量 | `KnowledgeRetrievalStage` 只走 Milvus，并按命中片段扩展前后 5 个切片窗口 |
 | 上传文件 | 阿里云 OSS 或本地对象目录 | 数据库只保存引用信息 |
 | 外部 MCP 运行状态 | 配置文件或后续 MySQL 配置表 | `ExternalMcpRuntimeService` 子进程和工具 provider |
 | Team 定义和执行记录 | MySQL `echomind_agent_teams` / `members` / `runs` / `steps` / `events` | `TaskExecutor` 运行中任务 |
@@ -43,7 +43,7 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 - 客户端用户账号和管理端用户账号，但两者必须分表、分 JWT、分接口。
 - AI 调用用量审计，包含 `trace_id`、客户端 `user_id`、`operation`、模型、prompt/completion/total token、耗时、状态和错误信息。
 - 敏感数据规则、脱敏事件、告警规则和告警事件。敏感事件只能保存脱敏后的样本，不允许落原始手机号、身份证、邮箱、银行卡等命中文本。
-- Agent 知识库文档元数据、切片正文和切片元数据。
+- Agent 知识库文档元数据。
 - 后续 Agent Team 的 Team、Member、Run、Step。
 
 管理端用户管理只能操作客户端用户表 `echomind_users`。封禁账号只改 `status`；删除账号是硬删除该客户端用户的
@@ -59,10 +59,9 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 
 ## Redis Stack 负责什么
 
-Redis 和 Redis Stack 负责速度、短期上下文和向量检索；用户长期事实和知识库向量由 Redis Stack 承担事实来源：
+Redis 和 Redis Stack 负责速度、短期上下文和用户长期事实向量检索：
 
 - 单会话短期上下文热缓存，按总字数预算和最大条数双重裁剪，是 LLM prompt 的聊天历史来源。
-- Agent 知识库向量索引，KNN 检索只走 Redis Stack。
 - 用户长期事实向量，按 `userId` 全局隔离。
 - 用户画像快照，存 Redis Hash，是长期事实的固定长度压缩摘要。
 - 可以重建的临时检索结构。
@@ -118,9 +117,10 @@ Agent 知识库支持 txt、pdf 等文件上传后切片和向量化。
 
 - 原文件进入 OSS 或本地对象存储。
 - 文档元数据进 MySQL。
-- 切片文本和切片元数据进 MySQL。
-- 向量只进入 Redis Stack 知识库索引，不再写 MySQL embedding 备份，也不使用 MySQL 线性向量兜底。
-- 删除文档时，必须删除或标记删除对应切片和向量。
+- 切片文本、切片序号和向量只进入 Milvus，不进入 MySQL。
+- 切片策略先按段落切片；段落超限时按标点切片；仍超限才硬切。默认单片预算 500 字符，重叠比例约 15%。
+- 检索只走 Milvus，不使用 MySQL keyword/LIKE 或 MySQL 线性向量兜底；命中中心片段后按同文档前后 5 个切片扩窗。
+- 删除文档时，必须删除或标记删除对应 Milvus 切片和向量。
 - 修改文档时，不要在旧向量上追加新版本；应明确版本、重建或清理旧切片。
 
 ## Agent Team 持久化方向
@@ -153,7 +153,7 @@ Team 执行记录至少要支持：
 改数据库相关代码前检查：
 
 - 新数据是否必须重启后保留；如果是，必须进 MySQL。
-- 是否只是可重建索引；如果是，可以进 Redis Stack。
+- 是否只是可重建索引；如果是，用户长期事实可进 Redis Stack，知识库切片和向量可进 Milvus。
 - 是否需要 OSS 保存原文件。
 - 是否需要软删。
 - 是否需要唯一约束。

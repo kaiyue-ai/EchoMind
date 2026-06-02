@@ -34,9 +34,9 @@ import com.echomind.memory.embedding.LegacyChatMessageVectorCleaner;
 import com.echomind.memory.persistence.ChatMessageRepository;
 import com.echomind.memory.persistence.ChatSessionRepository;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
-import com.echomind.memory.knowledge.AgentKnowledgeChunkRepository;
 import com.echomind.memory.knowledge.AgentKnowledgeDocumentRepository;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
+import com.echomind.memory.milvus.MilvusClientFactory;
 import com.echomind.memory.usermemory.NoopUserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserMemoryStore;
@@ -291,29 +291,28 @@ public class EchoMindAutoConfiguration {
         );
     }
 
+    @Bean(destroyMethod = "close")
+    public MilvusClientFactory milvusClientFactory(EchoMindProperties props) {
+        return new MilvusClientFactory(
+            props.getMemory().getMilvusHost(),
+            props.getMemory().getMilvusPort()
+        );
+    }
+
     @Bean
     public AgentKnowledgeService agentKnowledgeService(AgentKnowledgeDocumentRepository documentRepository,
-                                                       AgentKnowledgeChunkRepository chunkRepository,
                                                        EmbeddingClient embeddingClient,
-                                                       ObjectMapper mapper,
                                                        EchoMindProperties props,
-                                                       ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
-        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
+                                                       MilvusClientFactory milvusClientFactory) {
         return new AgentKnowledgeService(
             documentRepository,
-            chunkRepository,
             embeddingClient,
-            mapper,
-            factory,
+            milvusClientFactory.getClient(),
             props.getMemory().isEmbeddingEnabled(),
-            props.getMemory().getKnowledgeVectorIndexName(),
-            props.getMemory().getKnowledgeVectorKeyPrefix(),
+            props.getMemory().getMilvusKnowledgeCollection(),
             props.getMemory().getKnowledgeChunkSize(),
-            props.getMemory().getKnowledgeChunkOverlap(),
+            props.getMemory().getKnowledgeChunkOverlapRatio(),
             props.getMemory().getKnowledgeMinVectorSimilarity(),
-            props.getMemory().getKnowledgeVectorWeight(),
-            props.getMemory().getKnowledgeKeywordWeight(),
-            props.getMemory().getKnowledgeKeywordCandidateLimit(),
             props.getMemory().isKnowledgeOcrEnabled(),
             props.getMemory().getKnowledgeOcrLanguage(),
             props.getMemory().getKnowledgeOcrDpi(),

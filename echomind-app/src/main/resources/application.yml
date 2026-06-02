@@ -184,12 +184,9 @@ echomind:
     summary-max-chars: 3000
     summary-refresh-interval: 6
     knowledge-top-k: ${ECHOMIND_MEMORY_KNOWLEDGE_TOP_K:4}
-    knowledge-chunk-size: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_SIZE:1000}
-    knowledge-chunk-overlap: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_OVERLAP:150}
+    knowledge-chunk-size: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_SIZE:500}
+    knowledge-chunk-overlap-ratio: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_OVERLAP_RATIO:0.15}
     knowledge-min-vector-similarity: ${ECHOMIND_MEMORY_KNOWLEDGE_MIN_VECTOR_SIMILARITY:0.25}
-    knowledge-vector-weight: ${ECHOMIND_MEMORY_KNOWLEDGE_VECTOR_WEIGHT:0.75}
-    knowledge-keyword-weight: ${ECHOMIND_MEMORY_KNOWLEDGE_KEYWORD_WEIGHT:0.25}
-    knowledge-keyword-candidate-limit: ${ECHOMIND_MEMORY_KNOWLEDGE_KEYWORD_CANDIDATE_LIMIT:40}
     knowledge-ocr-enabled: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_ENABLED:true}
     knowledge-ocr-language: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_LANGUAGE:chi_sim+eng}
     knowledge-ocr-dpi: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_DPI:200}

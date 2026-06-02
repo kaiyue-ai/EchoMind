@@ -1,6 +1,7 @@
 package com.echomind.agent.team.store;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.echomind.agent.team.state.TeamRunStatus;
 import com.echomind.common.mybatis.MybatisPlusMapper;
 import org.apache.ibatis.annotations.Mapper;
 

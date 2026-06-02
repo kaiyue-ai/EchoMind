@@ -121,9 +121,10 @@ class TeamBlackboardServicePromptTest {
         repaired.setFinalResponse("""
             {"action":"CONTINUE","reason":"格式已修复","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
             """);
-        when(orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), eq("原始审查提示")))
+        when(orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), eq("原始审查提示"), eq(false)))
             .thenReturn(broken);
-        when(orchestrator.executeInternal(eq("reviewer"), startsWith("team-run-run-1-reviewer-repair-"), contains("Invalid response excerpt")))
+        when(orchestrator.executeInternal(eq("reviewer"), startsWith("team-run-run-1-reviewer-repair-"),
+            contains("Invalid response excerpt"), eq(false)))
             .thenReturn(repaired);
 
         var decision = service.executeReviewerDecision(reviewer, run, "原始审查提示", true);
