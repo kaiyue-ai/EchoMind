@@ -8,14 +8,14 @@ import java.util.List;
  * Planner 结构化拆出的子任务。
  */
 public record PlannedStep(
-    String clientStepId,
-    String title,
-    String description,
-    List<String> requiredCapabilities,
-    String acceptanceCriteria,
-    List<String> dependsOn,
-    TeamRiskLevel riskLevel,
-    String riskReason
+    String clientStepId, // 客户步骤ID
+    String title, // 标题
+    String description, // 描述
+    List<String> requiredCapabilities, //需要的tool
+    String acceptanceCriteria, // 接受标准
+    List<String> dependsOn, // 依赖的步骤ID
+    TeamRiskLevel riskLevel, // 风险等级
+    String riskReason // 风险原因
 ) {
     public PlannedStep(String title, String description, List<String> requiredCapabilities,
                        String acceptanceCriteria) {

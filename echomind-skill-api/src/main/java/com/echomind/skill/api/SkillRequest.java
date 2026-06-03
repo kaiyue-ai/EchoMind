@@ -1,6 +1,5 @@
 package com.echomind.skill.api;
 
-import java.util.Collections;
 import java.util.Map;
 
 /**
@@ -55,6 +54,6 @@ public record SkillRequest(
      * @param toolCallId 工具调用 ID（可为 null）
      */
     public SkillRequest {
-        parameters = parameters == null ? Collections.emptyMap() : parameters;
+        parameters = parameters == null ? Map.of() : parameters;
     }
 }

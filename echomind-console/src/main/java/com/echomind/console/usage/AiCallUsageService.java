@@ -2,28 +2,54 @@ package com.echomind.console.usage;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.common.model.TokenUsage;
+import com.echomind.console.budget.ProviderTokenBudgetService;
 import com.echomind.console.auth.AuthUser;
-import com.echomind.console.auth.UserAccountRepository;
+import com.echomind.console.auth.UserAccountMapper;
+import com.echomind.console.quota.TokenQuotaExceededException;
+import com.echomind.console.quota.TokenQuotaService;
 import io.opentelemetry.api.trace.Span;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 
 @Service
-@RequiredArgsConstructor
 public class AiCallUsageService {
 
-    private final AiCallUsageRepository repository;
-    private final UserAccountRepository userRepository;
+    private final AiCallUsageMapper usageMapper;
+    private final UserAccountMapper userMapper;
+    private final ObjectProvider<ProviderTokenBudgetService> providerTokenBudgetService;
+    private final ObjectProvider<TokenQuotaService> tokenQuotaService;
 
-    @Transactional
+    @Autowired
+    public AiCallUsageService(AiCallUsageMapper usageMapper,
+                              UserAccountMapper userMapper,
+                              ObjectProvider<ProviderTokenBudgetService> providerTokenBudgetService,
+                              ObjectProvider<TokenQuotaService> tokenQuotaService) {
+        this.usageMapper = usageMapper;
+        this.userMapper = userMapper;
+        this.providerTokenBudgetService = providerTokenBudgetService;
+        this.tokenQuotaService = tokenQuotaService;
+    }
+
+    AiCallUsageService(AiCallUsageMapper usageMapper, UserAccountMapper userMapper) {
+        this(usageMapper, userMapper, null, null);
+    }
+
+    AiCallUsageService(AiCallUsageMapper usageMapper,
+                       UserAccountMapper userMapper,
+                       ObjectProvider<TokenQuotaService> tokenQuotaService) {
+        this(usageMapper, userMapper, null, tokenQuotaService);
+    }
+
+    @Transactional(noRollbackFor = TokenQuotaExceededException.class)
     public AiCallUsageEntity recordSuccess(String operation, AuthUser user, PipelineContext ctx, long startedNanos) {
         return record(operation, user, ctx, startedNanos, "OK", null);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = TokenQuotaExceededException.class)
     public AiCallUsageEntity recordError(String operation, AuthUser user, PipelineContext ctx, long startedNanos,
                                          String errorMessage) {
         return record(operation, user, ctx, startedNanos, "ERROR", errorMessage);
@@ -43,6 +69,7 @@ public class AiCallUsageService {
         entity.setAgentId(ctx.getAgentId());
         entity.setSessionId(ctx.getSessionId());
         entity.setModelId(ctx.getModelId());
+        entity.setProviderId(providerId(ctx));
         entity.setOperation(operation);
         entity.setStatus(status);
         entity.setErrorMessage(truncate(errorMessage, 1000));
@@ -53,17 +80,28 @@ public class AiCallUsageService {
         entity.setUsageSource(TokenUsageSource.PROVIDER);
         entity.setPromptTokens(providerUsage.promptTokens());
         entity.setCompletionTokens(providerUsage.completionTokens());
-        entity.setTotalTokens(entity.getPromptTokens() + entity.getCompletionTokens());
+        entity.setTotalTokens(providerUsage.totalTokens());
         entity.setDurationMs(durationMs(startedNanos));
-        tagCurrentSpan(entity);
-        return repository.save(entity);
+        AiCallUsageEntity saved = usageMapper.upsertById(entity);
+        tagCurrentSpan(saved);
+        ProviderTokenBudgetService budgetService = providerTokenBudgetService == null
+            ? null
+            : providerTokenBudgetService.getIfAvailable();
+        if (budgetService != null) {
+            budgetService.recordWarnings(saved);
+        }
+        TokenQuotaService quotaService = tokenQuotaService == null ? null : tokenQuotaService.getIfAvailable();
+        if (quotaService != null) {
+            quotaService.settleUsage(owner, providerUsage.totalTokens());
+        }
+        return saved;
     }
 
     private String username(AuthUser user) {
         if (user == null || !user.authenticated()) {
             return "default";
         }
-        return userRepository.findById(user.userId())
+        return userMapper.selectOptionalById(user.userId())
             .map(entity -> entity.getUsername())
             .orElse(user.username());
     }
@@ -73,8 +111,13 @@ public class AiCallUsageService {
         if (!span.getSpanContext().isValid()) {
             return;
         }
+        span.setAttribute("echomind.user_id", blankToFallback(usage.getUserId(), ""));
         span.setAttribute("echomind.account_type", usage.getAccountType());
         span.setAttribute("echomind.username", blankToFallback(usage.getUsername(), ""));
+        span.setAttribute("echomind.agent_id", blankToFallback(usage.getAgentId(), ""));
+        span.setAttribute("echomind.session_id", blankToFallback(usage.getSessionId(), ""));
+        span.setAttribute("echomind.model_id", blankToFallback(usage.getModelId(), ""));
+        span.setAttribute("echomind.provider_id", blankToFallback(usage.getProviderId(), ""));
         span.setAttribute("echomind.prompt_tokens", usage.getPromptTokens());
         span.setAttribute("echomind.completion_tokens", usage.getCompletionTokens());
         span.setAttribute("echomind.total_tokens", usage.getTotalTokens());
@@ -90,6 +133,19 @@ public class AiCallUsageService {
 
     private String blankToFallback(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private String providerId(PipelineContext ctx) {
+        if (ctx.getResolvedModel() != null && ctx.getResolvedModel().providerId() != null
+            && !ctx.getResolvedModel().providerId().isBlank()) {
+            return ctx.getResolvedModel().providerId();
+        }
+        String modelId = ctx.getModelId();
+        if (modelId == null || modelId.isBlank()) {
+            return null;
+        }
+        int separator = modelId.indexOf(':');
+        return separator > 0 ? modelId.substring(0, separator) : modelId;
     }
 
     private String truncate(String value, int maxLength) {

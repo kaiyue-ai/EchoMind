@@ -36,7 +36,8 @@ class AgentApplicationServiceTest {
         AgentFactory factory = mock(AgentFactory.class);
         AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
         AgentPersistenceService persistenceService = mock(AgentPersistenceService.class);
-        AgentApplicationService service = new AgentApplicationService(factory, orchestrator, persistenceService);
+        AgentApplicationService service = new AgentApplicationService(
+            factory, orchestrator, persistenceService, mock(AgentKnowledgeApplicationService.class));
 
         AgentConfig config = validConfig();
         Agent runtimeAgent = new Agent(
@@ -65,7 +66,8 @@ class AgentApplicationServiceTest {
         AgentApplicationService service = new AgentApplicationService(
             factory,
             mock(AgentOrchestrator.class),
-            mock(AgentPersistenceService.class)
+            mock(AgentPersistenceService.class),
+            mock(AgentKnowledgeApplicationService.class)
         );
         AgentConfig config = validConfig();
         config.setSkillIds(null);
@@ -90,7 +92,8 @@ class AgentApplicationServiceTest {
         AgentApplicationService service = new AgentApplicationService(
             factory,
             mock(AgentOrchestrator.class),
-            persistenceService
+            persistenceService,
+            mock(AgentKnowledgeApplicationService.class)
         );
         AgentConfig config = validConfig();
         config.setAgentId(" ");
@@ -108,7 +111,8 @@ class AgentApplicationServiceTest {
         AgentApplicationService service = new AgentApplicationService(
             mock(AgentFactory.class),
             orchestrator,
-            mock(AgentPersistenceService.class)
+            mock(AgentPersistenceService.class),
+            mock(AgentKnowledgeApplicationService.class)
         );
         PipelineContext context = new PipelineContext();
         context.setSessionId("session-1");
@@ -122,6 +126,28 @@ class AgentApplicationServiceTest {
 
         assertThat(response).containsEntry("sessionId", "session-1");
         assertThat(response).containsEntry("response", "完成");
+    }
+
+    @Test
+    void deleteAgentCleansKnowledgeBeforeRemovingRuntimeAndPersistence() {
+        AgentFactory factory = mock(AgentFactory.class);
+        AgentPersistenceService persistenceService = mock(AgentPersistenceService.class);
+        AgentKnowledgeApplicationService knowledgeService = mock(AgentKnowledgeApplicationService.class);
+        AgentApplicationService service = new AgentApplicationService(
+            factory,
+            mock(AgentOrchestrator.class),
+            persistenceService,
+            knowledgeService
+        );
+        when(persistenceService.exists("agent-test")).thenReturn(true);
+
+        service.deleteAgent("agent-test");
+
+        InOrder order = inOrder(persistenceService, knowledgeService, factory);
+        order.verify(persistenceService).exists("agent-test");
+        order.verify(knowledgeService).deleteAll("agent-test");
+        order.verify(factory).remove("agent-test");
+        order.verify(persistenceService).delete("agent-test");
     }
 
     private AgentConfig validConfig() {

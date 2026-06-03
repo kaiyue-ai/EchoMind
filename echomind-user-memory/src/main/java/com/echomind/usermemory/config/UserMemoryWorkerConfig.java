@@ -10,9 +10,10 @@ import com.echomind.llm.router.ModelSpec;
 import com.echomind.memory.embedding.DashScopeEmbeddingClient;
 import com.echomind.memory.embedding.DisabledEmbeddingClient;
 import com.echomind.memory.embedding.EmbeddingClient;
-import com.echomind.memory.usermemory.RedisUserProfileSnapshotStore;
+import com.echomind.memory.usermemory.impl.RedisUserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
-import com.echomind.memory.usermemory.UserMemoryVectorStore;
+import com.echomind.memory.milvus.MilvusClientFactory;
+import com.echomind.memory.usermemory.impl.MilvusUserMemoryStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -52,13 +53,17 @@ public class UserMemoryWorkerConfig {
         );
     }
 
+    @Bean(destroyMethod = "close")
+    public MilvusClientFactory milvusClientFactory(UserMemoryProperties properties) {
+        return new MilvusClientFactory(properties.getMilvusHost(), properties.getMilvusPort());
+    }
+
     @Bean
-    public UserMemoryVectorStore userMemoryVectorStore(UserMemoryProperties properties,
-                                                       RedisConnectionFactory connectionFactory) {
-        return new UserMemoryVectorStore(
-            connectionFactory,
-            properties.getVectorIndexName(),
-            properties.getVectorKeyPrefix()
+    public MilvusUserMemoryStore userMemoryVectorStore(UserMemoryProperties properties,
+                                                       MilvusClientFactory milvusClientFactory) {
+        return new MilvusUserMemoryStore(
+            milvusClientFactory.getClient(),
+            properties.getMilvusUserMemoryCollection()
         );
     }
 

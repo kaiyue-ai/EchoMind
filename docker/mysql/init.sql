@@ -2,7 +2,7 @@
 CREATE DATABASE IF NOT EXISTS echomind CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS swtest CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- 创建 Skill 表（如果 JPA 未自动创建）
+-- 创建 Skill 表（MyBatis-Plus 运行时不自动建表，初始化脚本负责兜底）
 CREATE TABLE IF NOT EXISTS echomind.echomind_skills (
     id VARCHAR(255) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_ai_call_usage (
     agent_id VARCHAR(128),
     session_id VARCHAR(128),
     model_id VARCHAR(255),
+    provider_id VARCHAR(128),
     operation VARCHAR(64) NOT NULL,
     prompt_tokens BIGINT NOT NULL DEFAULT 0,
     completion_tokens BIGINT NOT NULL DEFAULT 0,
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_ai_call_usage (
     error_message VARCHAR(1000),
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     INDEX idx_ai_usage_user_time (user_id, created_at),
+    INDEX idx_ai_usage_provider_time (provider_id, created_at),
     INDEX idx_ai_usage_trace (trace_id),
     INDEX idx_ai_usage_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -76,6 +78,32 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_token_quotas (
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     INDEX idx_token_quotas_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Token 配额结算账本：模型返回真实 provider usage 后按用户日/月桶原子结算
+CREATE TABLE IF NOT EXISTS echomind.echomind_token_quota_usage (
+    user_id VARCHAR(128) NOT NULL,
+    scope VARCHAR(16) NOT NULL,
+    bucket_start DATE NOT NULL,
+    used_tokens BIGINT NOT NULL DEFAULT 0,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (user_id, scope, bucket_start),
+    INDEX idx_token_quota_usage_bucket (scope, bucket_start),
+    CONSTRAINT chk_token_quota_usage_scope CHECK (scope IN ('daily', 'monthly'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Provider 级 Token 预算表：管理端配置平台级日/周/月 Provider 总预算
+CREATE TABLE IF NOT EXISTS echomind.echomind_provider_token_budgets (
+    provider_id VARCHAR(128) PRIMARY KEY,
+    daily_limit_tokens BIGINT,
+    weekly_limit_tokens BIGINT,
+    monthly_limit_tokens BIGINT,
+    warning_threshold_percent INT NOT NULL DEFAULT 80,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    INDEX idx_provider_token_budgets_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 项目三治理：敏感数据规则和事件，只保存脱敏后的样本
@@ -140,6 +168,7 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_alert_events (
     username VARCHAR(128),
     agent_id VARCHAR(128),
     session_id VARCHAR(128),
+    provider_id VARCHAR(128),
     title VARCHAR(255) NOT NULL,
     message VARCHAR(2000),
     suggestion VARCHAR(1000),
@@ -150,11 +179,12 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_alert_events (
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     INDEX idx_alert_events_time (created_at),
     INDEX idx_alert_events_type_time (alert_type, created_at),
+    INDEX idx_alert_events_provider_time (provider_id, created_at),
     INDEX idx_alert_events_trace (trace_id),
     INDEX idx_alert_events_user_time (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 创建 Agent 表（生产环境 ddl-auto=validate，需要初始化脚本兜底）
+-- 创建 Agent 表（生产环境由初始化脚本和迁移脚本保证表结构）
 CREATE TABLE IF NOT EXISTS echomind.echomind_agents (
     agent_id VARCHAR(128) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -197,19 +227,6 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_chat_messages (
     INDEX idx_chat_msg_user_session_time (user_id, session_id, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 会话向量表：MySQL 作为 Redis Stack 向量索引的持久备份和兜底检索
-CREATE TABLE IF NOT EXISTS echomind.echomind_memory_embeddings (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    session_id VARCHAR(128) NOT NULL,
-    message_id BIGINT NOT NULL,
-    role VARCHAR(32) NOT NULL,
-    content_preview VARCHAR(1000),
-    embedding_json LONGTEXT NOT NULL,
-    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    INDEX idx_memory_embedding_session (session_id),
-    INDEX idx_memory_embedding_message (message_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- Agent 私有知识库文档表：每个 Agent 独立管理上传的 txt/pdf
 CREATE TABLE IF NOT EXISTS echomind.echomind_agent_knowledge_documents (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -217,32 +234,22 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_agent_knowledge_documents (
     file_name VARCHAR(255) NOT NULL,
     file_type VARCHAR(32) NOT NULL,
     file_size BIGINT NOT NULL,
+    object_uri VARCHAR(512) NULL,
+    content_type VARCHAR(128) NULL,
     chunk_count INT NOT NULL DEFAULT 0,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     INDEX idx_agent_knowledge_doc_agent (agent_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Agent 私有知识库切片表：MySQL 保存原文切片和向量备份，Redis Stack 负责在线 KNN 检索
-CREATE TABLE IF NOT EXISTS echomind.echomind_agent_knowledge_chunks (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    agent_id VARCHAR(128) NOT NULL,
-    document_id BIGINT NOT NULL,
-    file_name VARCHAR(255) NOT NULL,
-    chunk_index INT NOT NULL,
-    content LONGTEXT NOT NULL,
-    embedding_json LONGTEXT NOT NULL,
-    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    INDEX idx_agent_knowledge_chunk_agent (agent_id),
-    INDEX idx_agent_knowledge_chunk_doc (document_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- Agent Team 定义表：团队配置的事实来源
 CREATE TABLE IF NOT EXISTS echomind.echomind_agent_teams (
     team_id VARCHAR(128) PRIMARY KEY,
+    owner_user_id VARCHAR(128) NOT NULL DEFAULT 'default',
     name VARCHAR(255) NOT NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    INDEX idx_agent_team_owner_time (owner_user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Agent Team 成员表：角色、Agent、能力标签和排序

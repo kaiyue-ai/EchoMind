@@ -60,9 +60,9 @@ public class RabbitMQConfig {
     public SimpleRabbitListenerContainerFactory chatStreamEventRabbitListenerContainerFactory(
             ConnectionFactory connectionFactory,
             Jackson2JsonMessageConverter converter,
-            @Value("${echomind.rabbitmq.chat-stream-event.concurrent-consumers:4}") int concurrentConsumers,
-            @Value("${echomind.rabbitmq.chat-stream-event.max-concurrent-consumers:4}") int maxConcurrentConsumers,
-            @Value("${echomind.rabbitmq.chat-stream-event.prefetch:50}") int prefetchCount) {
+            @Value("${echomind.rabbitmq.chat-stream-event.concurrent-consumers:${echomind.rabbitmq.chat-response.concurrent-consumers:4}}") int concurrentConsumers,
+            @Value("${echomind.rabbitmq.chat-stream-event.max-concurrent-consumers:${echomind.rabbitmq.chat-response.max-concurrent-consumers:4}}") int maxConcurrentConsumers,
+            @Value("${echomind.rabbitmq.chat-stream-event.prefetch:${echomind.rabbitmq.chat-response.prefetch:50}}") int prefetchCount) {
         return listenerFactory(connectionFactory, converter, concurrentConsumers, maxConcurrentConsumers, prefetchCount);
     }
 

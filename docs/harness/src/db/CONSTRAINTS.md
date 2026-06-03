@@ -1,6 +1,6 @@
 # 数据库与存储硬约束
 
-本文档用于约束 EchoMind 的持久化设计。核心原则是：可审计业务配置和普通聊天历史进 MySQL，LLM 短期上下文进 Redis，用户长期事实和知识库向量进 Redis Stack，运行时 Map 只做索引。用户画像快照是 Redis 中的派生摘要，不替代事实层。
+本文档用于约束 EchoMind 的持久化设计。核心原则是：可审计业务配置和普通聊天历史进 MySQL，LLM 短期上下文和用户画像快照进 Redis，用户长期事实和知识库向量进 Milvus，运行时 Map 只做索引。用户画像快照是 Redis 中的派生摘要，不替代事实层。
 
 ## 存储分工
 
@@ -13,12 +13,13 @@
 | 用户账号 | MySQL `echomind_users`，含用户名、密码哈希、状态和 `avatar_uri` | 头像二进制在 OSS / 本地对象存储 |
 | 管理端账号 | MySQL `echomind_admin_users`，独立于客户端账号 | 独立 admin JWT，不进入客户端用户统计 |
 | AI 调用用量 | MySQL `echomind_ai_call_usage`，按客户端 `user_id` 记录 TraceID、模型、token、延迟和状态 | 管理端仪表盘和 Trace 跳转 |
-| 敏感数据治理 | MySQL `echomind_sensitive_rules` 保存规则，`echomind_sensitive_events` 保存脱敏后事件样本 | `ChatApplicationService` 请求/响应治理钩子 |
+| 用户 Token 配额 | MySQL `echomind_token_quotas` 保存用户日/月限额配置；`echomind_token_quota_usage` 按 `user_id + scope + bucket_start` 保存已结算 token | 请求前快速检查已满额用户；模型返回真实 provider usage 后行锁结算 |
+| 敏感数据治理 | MySQL `echomind_sensitive_rules` 保存规则，`echomind_sensitive_events` 保存脱敏后事件样本 | Redis `echomind:sensitive:rules:*` 只做规则热缓存；`ChatApplicationService` 请求/响应治理钩子 |
 | 告警治理 | MySQL `echomind_alert_rules` 保存阈值、静默期和升级策略，`echomind_alert_events` 保存推送结果、升级标记和飞书响应摘要 | 飞书 Webhook 客户端，不作为事实来源；地址来自后端运行环境变量 `Webhook` |
-| 用户长期记忆 | Redis Stack `idx:user:memory:vectors` 按 `userId` 保存细粒度事实；Redis `echomind:user-profile:snapshot:*` 保存画像快照 | 主应用 Pipeline 读取画像快照并按 `userId` KNN 召回相关事实 |
-| Agent 知识库文档 | MySQL 文档表 + 对象存储文件，切片正文/元数据进 MySQL | Redis Stack 知识库向量索引 |
+| 用户长期记忆 | Milvus `echomind_user_memory_v2` 按 `userId` 保存细粒度事实；Redis `echomind:user-profile:snapshot:*` 保存画像快照 | 主应用 Pipeline 读取画像快照并按 `userId` KNN 召回相关事实 |
+| Agent 知识库文档 | MySQL 文档表 + 对象存储文件 | Milvus 保存切片正文、切片元数据和知识库向量索引 |
 | 上传文件 | 阿里云 OSS 或本地对象目录 | 数据库只保存引用信息 |
-| 外部 MCP 运行状态 | 配置文件或后续 MySQL 配置表 | `ExternalMcpRuntimeService` 子进程和工具 provider |
+| 外部 MCP 运行状态 | 配置文件或后续 MySQL 配置表 | `ExternalMcpRuntimeService` 持有的 Spring AI MCP client 和工具 provider |
 | Team 定义和执行记录 | MySQL `echomind_agent_teams` / `members` / `runs` / `steps` / `events` | `TaskExecutor` 运行中任务 |
 
 ## 禁止事项
@@ -42,12 +43,13 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 - 会话摘要。
 - 客户端用户账号和管理端用户账号，但两者必须分表、分 JWT、分接口。
 - AI 调用用量审计，包含 `trace_id`、客户端 `user_id`、`operation`、模型、prompt/completion/total token、耗时、状态和错误信息。
+- 用户 Token 配额配置和日/月结算账本；账本行按 `user_id + scope + bucket_start` 唯一，结算时必须锁行，不能只从审计表聚合判断并发 quota。
 - 敏感数据规则、脱敏事件、告警规则和告警事件。敏感事件只能保存脱敏后的样本，不允许落原始手机号、身份证、邮箱、银行卡等命中文本。
-- Agent 知识库文档元数据、切片正文和切片元数据。
+- Agent 知识库文档元数据和原文件引用。
 - 后续 Agent Team 的 Team、Member、Run、Step。
 
 管理端用户管理只能操作客户端用户表 `echomind_users`。封禁账号只改 `status`；删除账号是硬删除该客户端用户的
-账号、普通聊天会话、消息、AI 调用用量、Token 配额和旧 MySQL 记忆嵌入，并尽力清理 Redis 近期上下文、
+账号、普通聊天会话、消息、AI 调用用量、Token 配额配置、Token 配额账本和旧 MySQL 记忆嵌入，并尽力清理 Redis 近期上下文、
 用户画像快照、用户长期事实向量。删除客户端用户不能级联删除全局 Agent、Skill、MCP、Team 或管理端账号。
 
 写入顺序建议：
@@ -57,13 +59,13 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 3. 写成功后刷新运行时索引。
 4. 运行时刷新失败时，要返回明确错误，并尽量保留可重试路径。
 
-## Redis Stack 负责什么
+## Redis 和 Milvus 负责什么
 
-Redis 和 Redis Stack 负责速度、短期上下文和向量检索；用户长期事实和知识库向量由 Redis Stack 承担事实来源：
+Redis 和 Milvus 负责速度、短期上下文和向量检索；用户长期事实和知识库向量由 Milvus 承担事实来源：
 
 - 单会话短期上下文热缓存，按总字数预算和最大条数双重裁剪，是 LLM prompt 的聊天历史来源。
-- Agent 知识库向量索引，KNN 检索只走 Redis Stack。
-- 用户长期事实向量，按 `userId` 全局隔离。
+- Agent 知识库切片正文、切片元数据和向量索引，KNN 检索和窗口扩展只走 Milvus。
+- 用户长期事实向量，按 `userId` 全局隔离，事实带 `firstObservedAt`、`lastObservedAt` 和 `updatedAt`；召回和合并旧事实必须同时过滤事实置信度和 Milvus COSINE 向量相似度，不能只取无阈值 TopK。
 - 用户画像快照，存 Redis Hash，是长期事实的固定长度压缩摘要。
 - 可以重建的临时检索结构。
 
@@ -96,8 +98,14 @@ AI 模型调用。`echomind_ai_call_usage.trace_id` 必须能关联到导出到 
 `usage_source` 固定为 `PROVIDER`；模型未返回原生 usage 时不允许写入本地预估 Token。
 管理端仪表盘的请求量、Token、平均响应、模型分布、趋势和最近调用都只能从该表的真实记录聚合；
 项目没有落库的成本、余额、API 密钥消费等数据不能在管理端展示为真实指标。
+用户日/月 quota 不做请求前 token 预留；请求前只读取 `echomind_token_quota_usage` 快速拒绝已经满额的用户。
+模型返回真实 provider usage 后，`AiCallUsageService` 先保留 `echomind_ai_call_usage` 审计记录，再用
+`echomind_token_quota_usage` 在事务内 `INSERT IGNORE` 初始化 bucket、`SELECT ... FOR UPDATE` 锁行并递增
+`used_tokens`。若 `used + currentCallTokens > limit`，必须抛 `TokenQuotaExceededException` 返回配额错误；
+这类结算失败不能发普通 `CALL_ERROR` 告警，也不能删除本次真实审计记录。
 项目三 AI Infra 是当前 Agent 项目的管理端，不新增独立网关或应用 API Key；配额仍按客户端用户维度执行。
 脱敏/告警属于管理端治理事实，必须落 MySQL，不能只放内存 Map；飞书自定义机器人 Webhook 只负责通知，不是告警事实来源。Webhook 地址只来自后端运行环境变量 `Webhook`，不在管理端前端配置规则级 Webhook。
+敏感规则可以进入 Redis 热缓存来减少聊天治理链路反复查库，但 MySQL 仍是事实来源；规则写入成功后必须删除对应 Redis 缓存，让下一次读取回源刷新。
 
 每次聊天进入提示词的内容应该是：
 
@@ -105,7 +113,7 @@ AI 模型调用。`echomind_ai_call_usage.trace_id` 必须能关联到导出到 
 - 当前用户消息。
 - Redis 单会话短期历史，按字符预算和最大条数裁剪。
 - 按 `userId` 读取的用户画像快照。
-- 按 `userId` 召回的相关用户长期事实。
+- 按 `userId` 从 Milvus 召回的相关用户长期事实。
 - Agent 知识库召回片段。
 
 不要从 MySQL 全量或回源拼接历史。`prompt-max-chars`、`prompt-max-history-message-chars` 等配置必须生效。
@@ -117,10 +125,10 @@ Agent 知识库支持 txt、pdf 等文件上传后切片和向量化。
 约束：
 
 - 原文件进入 OSS 或本地对象存储。
-- 文档元数据进 MySQL。
-- 切片文本和切片元数据进 MySQL。
-- 向量只进入 Redis Stack 知识库索引，不再写 MySQL embedding 备份，也不使用 MySQL 线性向量兜底。
-- 删除文档时，必须删除或标记删除对应切片和向量。
+- 文档元数据进 MySQL，包括可空 `object_uri` 和 `content_type`；旧文档允许没有原文件对象。
+- 切片文本、切片元数据和向量进入 Milvus 知识库索引，不再进入 MySQL 分片表。
+- 检索只走 Milvus：先向量命中中心片段，再扩展同文档前后窗口，不使用 MySQL 关键词或线性向量兜底。
+- 删除文档时，必须删除或标记删除对应切片、向量，并尽力删除原文件对象。
 - 修改文档时，不要在旧向量上追加新版本；应明确版本、重建或清理旧切片。
 
 ## Agent Team 持久化方向
@@ -153,7 +161,7 @@ Team 执行记录至少要支持：
 改数据库相关代码前检查：
 
 - 新数据是否必须重启后保留；如果是，必须进 MySQL。
-- 是否只是可重建索引；如果是，可以进 Redis Stack。
+- 是否只是可重建索引；如果是，可以进 Milvus。
 - 是否需要 OSS 保存原文件。
 - 是否需要软删。
 - 是否需要唯一约束。

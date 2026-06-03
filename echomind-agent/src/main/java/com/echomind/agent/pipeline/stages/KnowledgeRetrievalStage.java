@@ -2,12 +2,12 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
+import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.embedding.QueryEmbeddingCache;
 import com.echomind.memory.knowledge.AgentKnowledgeHit;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
-import lombok.RequiredArgsConstructor;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -18,7 +18,6 @@ import java.util.stream.Collectors;
  * <p>会话记忆解决“这个对话之前说过什么”，知识库解决“这个 Agent 上传过哪些资料”。
  * 两者不能混成一份记忆，否则不同 Agent 的知识会互相污染。</p>
  */
-@RequiredArgsConstructor
 public class KnowledgeRetrievalStage implements PipelineStage {
 
     // 知识库服务
@@ -27,6 +26,23 @@ public class KnowledgeRetrievalStage implements PipelineStage {
     private final EmbeddingClient embeddingClient;
     // 向量搜索结果数量
     private final int topK;
+    private final RetrievalQueryRewriter queryRewriter;
+
+    public KnowledgeRetrievalStage(AgentKnowledgeService knowledgeService,
+                                   EmbeddingClient embeddingClient,
+                                   int topK) {
+        this(knowledgeService, embeddingClient, topK, RetrievalQueryRewriter.disabled());
+    }
+
+    public KnowledgeRetrievalStage(AgentKnowledgeService knowledgeService,
+                                   EmbeddingClient embeddingClient,
+                                   int topK,
+                                   RetrievalQueryRewriter queryRewriter) {
+        this.knowledgeService = knowledgeService;
+        this.embeddingClient = embeddingClient;
+        this.topK = topK;
+        this.queryRewriter = queryRewriter == null ? RetrievalQueryRewriter.disabled() : queryRewriter;
+    }
 
     @Override
     public int order() {
@@ -36,7 +52,8 @@ public class KnowledgeRetrievalStage implements PipelineStage {
     @Override
     // 搜素与用户消息相关的向量数据库的三四条消息
     public PipelineContext process(PipelineContext ctx) {
-        return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, ctx.getUserMessage())
+        String retrievalQuery = queryRewriter.queryFor(ctx);
+        return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, retrievalQuery)
             .map(vector -> knowledgeService.search(ctx.getAgentId(), ctx.getUserMessage(), vector, topK))
             .map(hits -> injectHits(ctx, hits))
             .orElse(ctx);

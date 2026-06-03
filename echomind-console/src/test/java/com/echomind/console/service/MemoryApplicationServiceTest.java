@@ -2,6 +2,7 @@ package com.echomind.console.service;
 
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MessageAttachment;
+import com.echomind.common.model.SessionSummary;
 import com.echomind.memory.MemoryManager;
 import com.echomind.skill.storage.ObjectStorageService;
 import org.junit.jupiter.api.Test;
@@ -9,12 +10,10 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -27,15 +26,18 @@ import static org.mockito.Mockito.when;
 class MemoryApplicationServiceTest {
 
     @Test
-    void getMemoryDelegatesToMemoryManager() {
+    void listSessionsStripsLeakedHiddenMemoryDecisionFromPreview() {
         MemoryManager memoryManager = mock(MemoryManager.class);
         MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
-        AgentMessage message = new AgentMessage("user", "你好", Instant.now(), null);
-        when(memoryManager.getFullContext("default", "session-1")).thenReturn(List.of(message));
+        when(memoryManager.listSessions("default")).thenReturn(List.of(
+            new SessionSummary("session-1", 1,
+                "正文<ECHOMIMD_MEMORY_DECISION>{\"rememberFacts\":false,\"refreshProfile\":false,\"reason\":\"闲聊\"}</ECHOMIMD_MEMORY_DECISION>",
+                Instant.now())
+        ));
 
-        List<AgentMessage> result = service.getMemory("session-1");
+        List<SessionSummary> result = service.listSessions();
 
-        assertThat(result).containsExactly(message);
+        assertThat(result.get(0).lastMessage()).isEqualTo("正文");
     }
 
     @Test
@@ -63,15 +65,18 @@ class MemoryApplicationServiceTest {
     }
 
     @Test
-    void clearMemoryValidatesSessionIdBeforeDeleting() {
+    void getChatHistoryStripsLeakedHiddenMemoryDecision() {
         MemoryManager memoryManager = mock(MemoryManager.class);
         MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
+        when(memoryManager.getFullContext("default", "session-1")).thenReturn(List.of(
+            new AgentMessage("assistant",
+                "正文<ECHOMIMD_MEMORY_DECISION>{\"rememberFacts\":false,\"refreshProfile\":false,\"reason\":\"闲聊\"}</ECHOMIMD_MEMORY_DECISION>",
+                Instant.now(), null)
+        ));
 
-        Map<String, String> result = service.clearMemory("session-1");
+        List<AgentMessage> result = service.getChatHistory("session-1");
 
-        verify(memoryManager).clearSession("default", "session-1");
-        assertThat(result).containsEntry("status", "cleared");
-        assertThat(result).containsEntry("sessionId", "session-1");
+        assertThat(result.get(0).content()).isEqualTo("正文");
     }
 
     @Test
@@ -79,7 +84,7 @@ class MemoryApplicationServiceTest {
         MemoryManager memoryManager = mock(MemoryManager.class);
         MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
 
-        assertThatThrownBy(() -> service.getMemory(" "))
+        assertThatThrownBy(() -> service.getChatHistory(" "))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("sessionId不能为空");
 

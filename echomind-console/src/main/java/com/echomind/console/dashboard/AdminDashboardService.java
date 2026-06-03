@@ -1,20 +1,19 @@
 package com.echomind.console.dashboard;
 
-import com.echomind.console.auth.UserAccountRepository;
+import com.echomind.console.auth.UserAccountMapper;
 import com.echomind.console.auth.UserAccountStatus;
 import com.echomind.console.dashboard.AdminDashboardDtos.DashboardResponse;
 import com.echomind.console.dashboard.AdminDashboardDtos.DashboardSummary;
 import com.echomind.console.dashboard.AdminDashboardDtos.ModelDistribution;
 import com.echomind.console.dashboard.AdminDashboardDtos.TokenTrendPoint;
-import com.echomind.console.alerts.AlertEventRepository;
-import com.echomind.console.sensitive.SensitiveEventRepository;
+import com.echomind.console.alerts.AlertEventMapper;
+import com.echomind.console.sensitive.SensitiveEventMapper;
 import com.echomind.console.usage.AiCallUsageEntity;
-import com.echomind.console.usage.AiCallUsageRepository;
+import com.echomind.console.usage.AiCallUsageMapper;
 import com.echomind.console.usage.TokenUsageSource;
 import com.echomind.console.usage.UsageDtos.CallUsage;
 import com.echomind.console.usage.UsageDtos.TokenTotals;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,49 +30,49 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AdminDashboardService {
 
-    private final AiCallUsageRepository usageRepository;
-    private final UserAccountRepository userRepository;
-    private final SensitiveEventRepository sensitiveEventRepository;
-    private final AlertEventRepository alertEventRepository;
+    private final AiCallUsageMapper usageMapper;
+    private final UserAccountMapper userMapper;
+    private final SensitiveEventMapper SensitiveEventMapper;
+    private final AlertEventMapper AlertEventMapper;
     private final Clock clock = Clock.systemDefaultZone();
 
     @Transactional(readOnly = true)
     public DashboardResponse dashboard(String range) {
         Instant rangeStart = rangeStart(range);
         Instant todayStart = startOfDay();
-        TokenTotals totalTokens = totals(usageRepository.globalTotals());
-        TokenTotals rangeTokens = totals(usageRepository.totalsSince(rangeStart));
-        TokenTotals todayTokens = totals(usageRepository.totalsSince(todayStart));
-        long rangeErrors = usageRepository.countByUsageSourceAndStatusAndCreatedAtGreaterThanEqual(
+        TokenTotals totalTokens = totals(usageMapper.globalTotals());
+        TokenTotals rangeTokens = totals(usageMapper.totalsSince(rangeStart));
+        TokenTotals todayTokens = totals(usageMapper.totalsSince(todayStart));
+        long rangeErrors = usageMapper.countByUsageSourceAndStatusAndCreatedAtGreaterThanEqual(
             TokenUsageSource.PROVIDER, "ERROR", rangeStart);
         double rangeErrorRate = rangeTokens.callCount() == 0 ? 0 : (rangeErrors * 100.0) / rangeTokens.callCount();
         DashboardSummary summary = new DashboardSummary(
             totalTokens,
             rangeTokens,
             todayTokens,
-            userRepository.count(),
-            userRepository.countByStatus(UserAccountStatus.ACTIVE),
-            userRepository.countByStatus(UserAccountStatus.DISABLED),
+            userMapper.selectCountAll(),
+            userMapper.countByStatus(UserAccountStatus.ACTIVE),
+            userMapper.countByStatus(UserAccountStatus.DISABLED),
             rangeTokens.callCount(),
             todayTokens.callCount(),
             totalTokens.callCount(),
-            usageRepository.averageDurationMs(),
-            usageRepository.averageDurationMsSince(rangeStart),
+            usageMapper.averageDurationMs(),
+            usageMapper.averageDurationMsSince(rangeStart),
             rangeErrorRate,
-            sensitiveEventRepository.countByCreatedAtGreaterThanEqual(rangeStart),
-            alertEventRepository.countByCreatedAtGreaterThanEqual(rangeStart)
+            SensitiveEventMapper.countByCreatedAtGreaterThanEqual(rangeStart),
+            AlertEventMapper.countByCreatedAtGreaterThanEqual(rangeStart)
         );
-        List<ModelDistribution> modelDistribution = usageRepository.modelTotalsSince(rangeStart).stream()
+        List<ModelDistribution> modelDistribution = usageMapper.modelTotalsSince(rangeStart).stream()
             .map(this::modelDistribution)
             .toList();
-        List<TokenTrendPoint> tokenTrend = usageRepository.dailyTrendSince(rangeStart).stream()
+        List<TokenTrendPoint> tokenTrend = usageMapper.dailyTrendSince(rangeStart).stream()
             .map(this::trendPoint)
             .toList();
-        List<CallUsage> recentCalls = usageRepository
+        List<CallUsage> recentCalls = usageMapper
             .findByUsageSourceAndCreatedAtGreaterThanEqualOrderByCreatedAtDesc(
                 TokenUsageSource.PROVIDER,
                 rangeStart,
-                PageRequest.of(0, 8)
+                8
             )
             .stream()
             .map(this::call)

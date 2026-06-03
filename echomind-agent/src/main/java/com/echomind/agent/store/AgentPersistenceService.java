@@ -12,7 +12,7 @@ import java.util.List;
 /**
  * Agent持久化服务。
  *
- * <p>负责在运行时Agent配置和MySQL实体之间转换，避免Controller直接操作JPA实体。</p>
+ * <p>负责在运行时Agent配置和MySQL实体之间转换，避免Controller直接操作持久化实体。</p>
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -21,7 +21,7 @@ public class AgentPersistenceService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
 
-    private final AgentRepository repository;
+    private final AgentMapper agentMapper;
 
     /**
      * 保存Agent配置。
@@ -30,13 +30,13 @@ public class AgentPersistenceService {
      * @return 保存后的配置
      */
     public AgentConfig save(AgentConfig config) {
-        AgentEntity entity = repository.findById(config.getAgentId()).orElseGet(AgentEntity::new);
+        AgentEntity entity = agentMapper.selectOptionalById(config.getAgentId()).orElseGet(AgentEntity::new);
         entity.setAgentId(config.getAgentId());
         entity.setName(config.getName());
         entity.setSystemPrompt(config.getSystemPrompt());
         entity.setModelId(config.getModelId());
         entity.setSkillIdsJson(toJson(config.getSkillIds()));
-        repository.save(entity);
+        agentMapper.upsertById(entity);
         return config;
     }
 
@@ -46,7 +46,7 @@ public class AgentPersistenceService {
      * @return Agent配置列表
      */
     public List<AgentConfig> loadAll() {
-        return repository.findAll().stream()
+        return agentMapper.selectAll().stream()
             .map(this::toConfig)
             .toList();
     }
@@ -58,7 +58,7 @@ public class AgentPersistenceService {
      * @return true表示数据库中存在
      */
     public boolean exists(String agentId) {
-        return repository.existsById(agentId);
+        return agentMapper.existsById(agentId);
     }
 
     /**
@@ -68,10 +68,10 @@ public class AgentPersistenceService {
      * @return true表示删除成功，false表示Agent不存在
      */
     public boolean delete(String agentId) {
-        if (!repository.existsById(agentId)) {
+        if (!agentMapper.existsById(agentId)) {
             return false;
         }
-        repository.deleteById(agentId);
+        agentMapper.deleteById(agentId);
         return true;
     }
 

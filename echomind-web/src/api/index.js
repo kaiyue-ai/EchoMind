@@ -64,7 +64,7 @@ function streamChatResult(requestId) {
   })
 }
 
-function streamChat(agentId, message, sessionId, modelId, attachments = [], onToken, onDone, onError, onMeta) {
+function streamChat(agentId, message, sessionId, modelId, attachments = [], onToken, onDone, onError, onMeta, onTool) {
   let es = null
   let timer
   let completed = false
@@ -103,6 +103,14 @@ function streamChat(agentId, message, sessionId, modelId, attachments = [], onTo
           if (cancelled) return
           const data = JSON.parse(e.data)
           if (data.token && onToken) onToken(data.token)
+        })
+        es.addEventListener('tool_start', (e) => {
+          if (cancelled) return
+          if (onTool) onTool({ type: 'start', ...JSON.parse(e.data) })
+        })
+        es.addEventListener('tool_end', (e) => {
+          if (cancelled) return
+          if (onTool) onTool({ type: 'end', ...JSON.parse(e.data) })
         })
         es.addEventListener('result', (e) => finish(() => {
           if (cancelled) return
@@ -277,7 +285,7 @@ export default {
     /** 当前用户的Team Run历史，和普通会话历史分开 */
     listUserRuns: () => api.get('/team-runs').then(r => r.data),
     /** 提交澄清信息并继续Run */
-    resumeRun: (teamId, runId, clarificationAnswer) =>
-      api.post(`/teams/${teamId}/runs/${runId}/resume`, { clarificationAnswer }).then(r => r.data)
+    resumeRun: (teamId, runId, payload) =>
+      api.post(`/teams/${teamId}/runs/${runId}/resume`, payload).then(r => r.data)
   }
 }

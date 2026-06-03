@@ -7,5 +7,5 @@ public enum TeamStepQualityStatus {
     PENDING,
     PASSED,
     RETRY_REQUESTED,
-    FLAWED_ACCEPTED
+    FLAWED_ACCEPTED // 微瑕
 }

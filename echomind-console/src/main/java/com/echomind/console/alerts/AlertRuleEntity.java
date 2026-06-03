@@ -1,76 +1,51 @@
 package com.echomind.console.alerts;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.Id;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
-import jakarta.persistence.Table;
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.Setter;
 
 import java.time.Instant;
-import java.util.UUID;
 
-@Entity
-@Table(name = "echomind_alert_rules")
+@TableName("echomind_alert_rules")
 @Getter
 @Setter
 public class AlertRuleEntity {
 
-    @Id
-    @Column(name = "rule_id", length = 128)
+    @TableId(value = "rule_id", type = IdType.ASSIGN_UUID)
     private String ruleId;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "alert_type", nullable = false, length = 64)
+    @TableField("alert_type")
     private AlertType alertType;
 
-    @Column(name = "rule_name", nullable = false, length = 128)
+    @TableField("rule_name")
     private String ruleName;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "severity", nullable = false, length = 32)
     private AlertSeverity severity = AlertSeverity.WARNING;
 
-    @Column(name = "enabled", nullable = false)
     private boolean enabled = true;
 
-    @Column(name = "threshold_percent")
+    @TableField("threshold_percent")
     private Double thresholdPercent;
 
-    @Column(name = "window_minutes")
+    @TableField("window_minutes")
     private Integer windowMinutes;
 
-    @Column(name = "quiet_minutes", nullable = false)
+    @TableField("quiet_minutes")
     private int quietMinutes = 30;
 
-    @Column(name = "escalation_enabled", nullable = false)
+    @TableField("escalation_enabled")
     private boolean escalationEnabled = true;
 
-    @Column(name = "escalation_threshold", nullable = false)
+    @TableField("escalation_threshold")
     private int escalationThreshold = 3;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private Instant createdAt;
 
-    @Column(name = "updated_at", nullable = false)
+    @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private Instant updatedAt;
-
-    @PrePersist
-    void prePersist() {
-        if (ruleId == null || ruleId.isBlank()) {
-            ruleId = UUID.randomUUID().toString();
-        }
-        Instant now = Instant.now();
-        createdAt = now;
-        updatedAt = now;
-    }
-
-    @PreUpdate
-    void preUpdate() {
-        updatedAt = Instant.now();
-    }
 }

@@ -2,8 +2,11 @@ package com.echomind.console.service;
 
 import com.echomind.agent.usermemory.UserMemoryPersistPublisher;
 import com.echomind.common.model.ChatMemoryPersistEvent;
+import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.memory.MemoryManager;
 import com.echomind.console.config.RabbitMQConfig;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -27,16 +30,40 @@ public class ChatMemoryPersistConsumer {
             || event.messages() == null || event.messages().isEmpty()) {
             return;
         }
-        String userId = normalizeUserId(event.userId());
-        for (var message : event.messages()) {
-            memoryManager.addMessage(userId, event.sessionId(), event.agentId(), message);
+        Span span = EchoMindTrace.startSpan("echomind.chat.memory.persist",
+            EchoMindTrace.extractContext(event.traceparent(), event.traceId()));
+        tagEvent(span, event);
+        try (Scope ignored = span.makeCurrent()) {
+            String userId = normalizeUserId(event.userId());
+            for (var message : event.messages()) {
+                memoryManager.addMessage(userId, event.sessionId(), event.agentId(), message);
+            }
+            if (event.memoryDecision().shouldProcessUserMemory()) {
+                userMemoryPublisher.publish(userId, event.sessionId(), event.agentId(), event.messages(), event.memoryDecision());
+            }
+            log.debug("Persisted chat memory event userId={} sessionId={} messages={}",
+                userId, event.sessionId(), event.messages().size());
+        } catch (RuntimeException e) {
+            EchoMindTrace.recordException(span, e);
+            throw e;
+        } finally {
+            span.end();
         }
-        userMemoryPublisher.publish(userId, event.sessionId(), event.agentId(), event.messages(), event.memorySignal());
-        log.debug("Persisted chat memory event userId={} sessionId={} messages={}",
-            userId, event.sessionId(), event.messages().size());
     }
 
     private String normalizeUserId(String userId) {
         return userId == null || userId.isBlank() ? "default" : userId;
+    }
+
+    private void tagEvent(Span span, ChatMemoryPersistEvent event) {
+        span.setAttribute("echomind.trace.parent_id", safe(event.traceId()));
+        span.setAttribute("echomind.user_id", safe(event.userId()));
+        span.setAttribute("echomind.agent_id", safe(event.agentId()));
+        span.setAttribute("echomind.session_id", safe(event.sessionId()));
+        span.setAttribute("echomind.message_count", event.messages() == null ? 0 : event.messages().size());
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

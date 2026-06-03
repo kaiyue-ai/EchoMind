@@ -36,6 +36,7 @@ public class AgentApplicationService {
     private final AgentFactory factory;
     private final AgentOrchestrator orchestrator;
     private final AgentPersistenceService persistenceService;
+    private final AgentKnowledgeApplicationService knowledgeService;
 
     /**
      * 列出当前运行时可用的全部Agent。
@@ -131,10 +132,11 @@ public class AgentApplicationService {
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agentId不能为空");
         }
-        factory.remove(agentId);
-        boolean deleted = persistenceService.delete(agentId);
-        if (!deleted) {
+        if (!persistenceService.exists(agentId)) {
             throw new IllegalArgumentException("Agent不存在: " + agentId);
         }
+        knowledgeService.deleteAll(agentId);
+        factory.remove(agentId);
+        persistenceService.delete(agentId);
     }
 }

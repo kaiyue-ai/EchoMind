@@ -25,14 +25,17 @@ import java.util.Map;
 @Slf4j
 public class TeamJsonSupport {
 
+    // JSON 转换工具
     private static final ObjectMapper MAPPER = new ObjectMapper()
         .registerModule(new JavaTimeModule())
         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    // 字符串列表类型引用
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
     private static final TypeReference<List<PlannedStep>> PLANNED_STEPS = new TypeReference<>() {};
     private static final TypeReference<List<Map<String, Object>>> MAP_LIST = new TypeReference<>() {};
     private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() {};
 
+    // 这个方法将对象转换为 JSON 字符串
     public String toJson(Object value) {
         try {
             return MAPPER.writeValueAsString(value);
@@ -42,6 +45,7 @@ public class TeamJsonSupport {
         }
     }
 
+    // 这个方法将 JSON 字符串转换为字符串列表
     public List<String> stringList(String json) {
         if (json == null || json.isBlank()) {
             return List.of();
@@ -54,6 +58,7 @@ public class TeamJsonSupport {
         }
     }
 
+    // 将字符串转为计划步骤列表
     public List<PlannedStep> parsePlan(String raw) {
         if (raw != null && raw.trim().startsWith("[Error]")) {
             throw new IllegalArgumentException("Planner response is an error: " + raw.trim());
@@ -73,8 +78,9 @@ public class TeamJsonSupport {
         return parsePlanText(raw);
     }
 
+    // 解析出来任务等级
     public TeamTaskLevel parseTaskLevel(String raw, int stepCount) {
-        String json = extractJson(raw);
+        String json = extractJson(raw); // 先解析出来json
         if (json != null) {
             try {
                 JsonNode root = MAPPER.readTree(json);
@@ -89,8 +95,9 @@ public class TeamJsonSupport {
         return stepCount <= 1 ? TeamTaskLevel.SIMPLE : TeamTaskLevel.COMPLEX;
     }
 
+    // 解析出来审核决策
     public ReviewerDecision parseDecision(String raw) {
-        String json = extractJson(raw);
+        String json = extractJson(raw); // 先解析出来json
         if (json == null) {
             throw new IllegalArgumentException("Reviewer response must be valid JSON");
         }
@@ -117,6 +124,7 @@ public class TeamJsonSupport {
         }
     }
 
+
     public TeamConflictReport parseConflictReport(String raw) {
         String json = extractJson(raw);
         if (json == null) {
@@ -136,8 +144,9 @@ public class TeamJsonSupport {
         }
     }
 
+    // 解析出来执行器选择决策
     public TeamExecutorSelectionDecision parseExecutorSelectionDecision(String raw) {
-        String json = extractJson(raw);
+        String json = extractJson(raw); // 先解析出来json
         if (json == null) {
             throw new IllegalArgumentException("AgentSelector response must be valid JSON");
         }
@@ -153,6 +162,7 @@ public class TeamJsonSupport {
         }
     }
 
+    // 从文本中提取json
     public String extractJson(String text) {
         if (text == null || text.isBlank()) {
             return null;
@@ -182,6 +192,7 @@ public class TeamJsonSupport {
         return null;
     }
 
+    // 这是不完整步骤的规范器,会把不完整的数据不全成规范的PlannedStep对象
     private List<PlannedStep> normalizePlannedSteps(List<Map<String, Object>> values) {
         List<PlannedStep> steps = new ArrayList<>();
         int index = 1;
@@ -216,6 +227,8 @@ public class TeamJsonSupport {
         return steps;
     }
 
+    // 解析计划文本
+    // 这是不完整步骤的规范器,会把不完整的数据不全成规范的PlannedStep对象
     private List<PlannedStep> parsePlanText(String raw) {
         if (raw == null || raw.isBlank()) {
             return List.of();
@@ -243,6 +256,7 @@ public class TeamJsonSupport {
         return steps;
     }
 
+    // 解析审核要求的行动
     private ReviewerAction parseAction(String raw) {
         if (raw == null || raw.isBlank()) {
             throw new IllegalArgumentException("Reviewer action is required");
@@ -256,6 +270,8 @@ public class TeamJsonSupport {
         throw new IllegalArgumentException("Unknown reviewer action: " + raw);
     }
 
+    // 从json节点中提取字符串列表
+    // 这是不完整步骤的规范器,会把不完整的数据不全成规范的PlannedStep对象
     private List<String> nodeTextList(JsonNode node) {
         if (node == null || node.isNull()) {
             return List.of();
@@ -278,6 +294,8 @@ public class TeamJsonSupport {
     }
 
     @SuppressWarnings("unchecked")
+    // 解析步骤反思映射
+    // 这是不完整步骤的规范器,会把不完整的数据不全成规范的PlannedStep对象
     private Map<String, StepReflection> parseStepReflections(JsonNode node) {
         if (node == null || node.isNull() || !node.isObject()) {
             return Map.of();

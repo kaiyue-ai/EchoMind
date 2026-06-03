@@ -23,7 +23,7 @@ public class ContextEnrichStage implements PipelineStage {
             return ctx;
         }
         // 如果需要持久化的话,就从redis数据库中加载历史信息
-        var history = memoryManager.getPromptContext(ctx.getMemoryKey());
+        var history = memoryManager.getPromptContext(ctx.getUserId(), ctx.getMemoryKey());
         ctx.getMessages().addAll(history);
         ctx.getMessages().add(AgentMessage.user(ctx.getUserMessage(), ctx.getAttachments()));
         return ctx;

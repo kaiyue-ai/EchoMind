@@ -6,11 +6,16 @@ import com.echomind.console.dto.AgentView;
 import com.echomind.console.service.AgentApplicationService;
 import com.echomind.console.service.AgentKnowledgeApplicationService;
 import com.echomind.memory.knowledge.AgentKnowledgeDocument;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -106,6 +111,23 @@ public class AgentController {
             @PathVariable String agentId, @PathVariable Long documentId) {
         knowledgeService.deleteDocument(agentId, documentId);
         return ResponseEntity.ok(Map.of("deleted", true));
+    }
+
+    /** 下载指定 Agent 的知识库原文件；历史无原文件文档不可下载。 */
+    @GetMapping("/{agentId}/knowledge/{documentId}/download")
+    public ResponseEntity<ByteArrayResource> downloadKnowledge(
+            @PathVariable String agentId, @PathVariable Long documentId) throws IOException {
+        AgentKnowledgeApplicationService.KnowledgeDownload download =
+            knowledgeService.download(agentId, documentId);
+        ByteArrayResource resource = new ByteArrayResource(download.bytes());
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(download.contentType()))
+            .contentLength(download.bytes().length)
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename(download.fileName(), StandardCharsets.UTF_8)
+                .build()
+                .toString())
+            .body(resource);
     }
 
     /**

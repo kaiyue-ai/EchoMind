@@ -18,11 +18,6 @@ public class UserMemoryRabbitConfig {
     }
 
     @Bean
-    public Queue userMemoryFlushQueue(UserMemoryProperties properties) {
-        return new Queue(properties.getFlushQueueName(), true);
-    }
-
-    @Bean
     public Jackson2JsonMessageConverter userMemoryMessageConverter(ObjectMapper mapper) {
         return new Jackson2JsonMessageConverter(mapper);
     }

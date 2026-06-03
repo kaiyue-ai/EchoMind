@@ -3,6 +3,7 @@ package com.echomind.boot.properties;
 import java.util.List;
 import java.util.Map;
 
+import com.echomind.agent.tool.mcp.ExternalMcpToolMetadata;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -137,10 +138,6 @@ public class EchoMindProperties {
         private String embeddingApiKey;
         /** 向量模型，按需求默认使用 tongyi-embedding-vision-plus。 */
         private String embeddingModel = "tongyi-embedding-vision-plus";
-        /** 已废弃普通消息向量索引名，仅用于启动时幂等清理旧数据。 */
-        private String legacyVectorIndexName = "idx:echomind:memory:vectors";
-        /** 已废弃普通消息向量 key 前缀，仅用于启动时幂等清理旧数据。 */
-        private String legacyVectorKeyPrefix = "echomind:memory:vector:";
         /** 普通聊天记忆持久化 RabbitMQ 队列名。 */
         private String persistQueueName = "echomind.chat-memory.persist.requests";
         /** 普通聊天记忆持久化 RabbitMQ Direct Exchange 名。 */
@@ -155,22 +152,20 @@ public class EchoMindProperties {
         private int summaryRefreshInterval = 6;
         /** Agent 私有知识库召回条数。 */
         private int knowledgeTopK = 4;
-        /** Agent 私有知识库单片最大字符数。 */
-        private int knowledgeChunkSize = 1000;
-        /** Agent 私有知识库切片重叠字符数。 */
-        private int knowledgeChunkOverlap = 150;
+        /** Agent 私有知识库单片最大近似 token 预算，当前用字符数近似。 */
+        private int knowledgeChunkSize = 500;
+        /** Agent 私有知识库相邻切片重叠比例。 */
+        private double knowledgeChunkOverlapRatio = 0.15;
         /** Agent 私有知识库向量召回最小相似度，低于该值的片段不注入提示词。 */
         private double knowledgeMinVectorSimilarity = 0.25;
-        /** Agent 私有知识库混合召回中向量相似度的权重。 */
-        private double knowledgeVectorWeight = 0.75;
-        /** Agent 私有知识库混合召回中关键词匹配的权重。 */
-        private double knowledgeKeywordWeight = 0.25;
-        /** Agent 私有知识库关键词粗召回最大候选数。 */
-        private int knowledgeKeywordCandidateLimit = 40;
-        /** Agent 私有知识库 Redis Stack 索引名。 */
-        private String knowledgeVectorIndexName = "idx:echomind:agent:knowledge:vectors";
-        /** Agent 私有知识库 Redis Stack Hash key 前缀。 */
-        private String knowledgeVectorKeyPrefix = "echomind:agent:knowledge:vector:";
+        /** Milvus 向量数据库 host。 */
+        private String milvusHost = "localhost";
+        /** Milvus 向量数据库端口。 */
+        private int milvusPort = 19530;
+        /** Milvus 用户长期事实 Collection 名；v2 schema 包含三类时间戳。 */
+        private String milvusUserMemoryCollection = "echomind_user_memory_v2";
+        /** Milvus Agent 知识库 Collection 名。 */
+        private String milvusKnowledgeCollection = "echomind_agent_knowledge";
         /** 是否启用扫描版 PDF OCR。 */
         private boolean knowledgeOcrEnabled = true;
         /** OCR 语言包，chi_sim+eng 表示简体中文和英文混合识别。 */
@@ -189,12 +184,20 @@ public class EchoMindProperties {
         private int promptMaxSystemMessageChars = 12000;
         /** 普通历史消息单条最大字符数。 */
         private int promptMaxHistoryMessageChars = 4000;
+        /** 向量检索前是否启用轻量模型查询改写。 */
+        private boolean retrievalQueryRewriteEnabled = true;
+        /** 查询改写使用的轻量模型 ID，格式 provider:model。 */
+        private String retrievalQueryRewriteModelId = "deepseek:deepseek-v4-flash";
+        /** 查询改写超时时间，失败会回退原句。 */
+        private int retrievalQueryRewriteTimeoutMs = 1500;
+        /** 查询改写结果最大字符数，过长会回退原句。 */
+        private int retrievalQueryRewriteMaxChars = 120;
     }
 
     /** 用户长期画像配置。 */
     @Data
     public static class UserMemory {
-        /** 是否启用用户长期画像检索和异步写入。 */
+        /** 是否启用用户长期事实、画像检索和异步写入。 */
         private boolean enabled = true;
         /** RabbitMQ 队列名。 */
         private String queueName = "echomind.user-memory.requests";
@@ -202,18 +205,22 @@ public class EchoMindProperties {
         private int topK = 5;
         /** 注入画像的最低置信度。 */
         private double minConfidence = 0.3;
-        /** Redis Stack 用户画像索引名。 */
-        private String vectorIndexName = "idx:user:memory:vectors";
-        /** Redis Stack 用户画像 Hash key 前缀。 */
-        private String vectorKeyPrefix = "user:memory:vector:";
+        /** 回答前注入用户事实的最低向量相似度。 */
+        private double retrievalMinSimilarity = 0.40;
+        /** 合并旧事实候选的最低向量相似度。 */
+        private double mergeMinSimilarity = 0.65;
         /** Redis 用户画像快照 key 前缀。 */
         private String profileKeyPrefix = "echomind:user-profile:snapshot:";
-        /** 微服务提取时最多读取多少条既有画像作为上下文。 */
+        /** 轻量模型判断相近事实时召回的旧事实数量。 */
+        private int relatedFactTopK = 12;
+        /** Redis 用户画像快照最大字符数。 */
+        private int profileMaxChars = 2000;
+        /** 微服务提取时最多读取多少条既有事实作为上下文。 */
         private int existingProfileLimit = 30;
-        /** 单次提取最多写入多少条画像。 */
+        /** 单次提取最多写入多少条用户事实。 */
         private int maxExtractedEntries = 10;
-        /** 微服务提取画像使用的模型 ID，为空时使用默认模型。 */
-        private String extractorModelId;
+        /** 轻量级用户记忆模型，默认 DeepSeek V4 Flash。 */
+        private String extractorModelId = "deepseek:deepseek-v4-flash";
     }
 
     /**
@@ -263,7 +270,7 @@ public class EchoMindProperties {
     /**
      * 外部 MCP Server 配置。
      *
-     * <p>当前支持 stdio 方式：主项目启动一个本地命令，把它当 MCP 子进程通信。</p>
+     * <p>当前支持 stdio、sse 和 streamable-http。stdio 启动本地子进程；远程传输连接外部 URL。</p>
      */
     @Data
     public static class ExternalMcpServer {
@@ -271,12 +278,22 @@ public class EchoMindProperties {
         private String id;
         /** 是否启用该外部 MCP Server。 */
         private boolean enabled = true;
-        /** 传输方式，当前实现 stdio。 */
+        /** 传输方式：stdio、sse、streamable-http。 */
         private String transport = "stdio";
         /** 启动命令，例如 ["java", "-jar", "/app/mcp/nowcoder.jar"]。 */
         private List<String> command = List.of();
         /** 子进程工作目录，可为空。 */
         private String workingDirectory;
+        /** stdio 子进程环境变量。 */
+        private Map<String, String> environment = Map.of();
+        /** 远程 MCP 服务 base URL，sse/streamable-http 必填。 */
+        private String url;
+        /** 远程 MCP endpoint，sse 默认 /sse，streamable-http 默认 /mcp。 */
+        private String endpoint;
+        /** 远程 MCP 请求头，例如 Authorization。 */
+        private Map<String, String> headers = Map.of();
+        /** EchoMind 侧工具 metadata，key 为 MCP tool name。 */
+        private Map<String, ExternalMcpToolMetadata> toolMetadata = Map.of();
     }
 
     /**
@@ -297,50 +314,19 @@ public class EchoMindProperties {
      */
     @Data
     public static class AgentBootstrap {
-        /** 已持久化默认 Agent 启动时允许补齐的默认 Skill。 */
-        private List<String> defaultSkillMergeIds = List.of(
-            "markdown-code",
-            "date-query",
-            "github-intel",
-            "12306",
-            "travel-planning"
-        );
-        /** 旧模型 ID 到当前模型 ID 的启动迁移规则。 */
-        private List<ModelMigration> modelMigrations = defaultModelMigrations();
+        /** 已持久化默认 Agent 启动时允许补齐的默认 Skill；具体清单由 application.yml 声明。 */
+        private List<String> defaultSkillMergeIds = List.of();
+        /** 旧模型 ID 到当前模型 ID 的启动迁移规则；具体规则由 application.yml 声明。 */
+        private List<ModelMigration> modelMigrations = List.of();
         /** 极端情况下没有 MySQL Agent 且没有配置 Agent 时使用的兜底 Agent。 */
         private AgentDef fallbackAgent = defaultFallbackAgent();
-
-        private static List<ModelMigration> defaultModelMigrations() {
-            ModelMigration anthropicClaude = new ModelMigration();
-            anthropicClaude.setFromPrefix("anthropic:claude-");
-            anthropicClaude.setToModelId("deepseek:deepseek-v4-flash");
-
-            ModelMigration openAiGpt = new ModelMigration();
-            openAiGpt.setFromPrefix("openai:gpt-");
-            openAiGpt.setToModelId("deepseek:deepseek-v4-flash");
-
-            ModelMigration oldDeepSeekChat = new ModelMigration();
-            oldDeepSeekChat.setFrom("deepseek:deepseek-chat");
-            oldDeepSeekChat.setToModelId("deepseek:deepseek-v4-flash");
-            return List.of(anthropicClaude, openAiGpt, oldDeepSeekChat);
-        }
 
         private static AgentDef defaultFallbackAgent() {
             AgentDef config = new AgentDef();
             config.setAgentId("default");
             config.setName("EchoMind Assistant");
-            config.setSystemPrompt("You are a helpful AI assistant. You have access to tools for web search, weather, calculations, date/time queries, Markdown code formatting, GitHub repository intelligence, 12306 train queries, and travel planning. Always use these tools when the user asks for real-time information, weather, math, dates, trains, itineraries, or GitHub repositories. For 12306 train tickets, return available seats and fares; when the user asks for transfers or there is no direct train, include transfer options.");
-            config.setModelId("deepseek:deepseek-v4-flash");
-            config.setSkillIds(List.of(
-                "weather-query",
-                "calculator",
-                "web-search",
-                "markdown-code",
-                "date-query",
-                "github-intel",
-                "12306",
-                "travel-planning"
-            ));
+            config.setSystemPrompt("You are a helpful AI assistant.");
+            config.setSkillIds(List.of());
             return config;
         }
     }
@@ -364,35 +350,9 @@ public class EchoMindProperties {
     @Data
     public static class RetiredSkills {
         /** 已退役 Skill ID；同时匹配带版本后缀的 sourceId。 */
-        private List<String> skillIds = List.of("qq-mail");
+        private List<String> skillIds = List.of();
         /** 从持久化 Agent system prompt 中清理旧 Skill 文案的替换规则。 */
-        private List<TextReplacement> promptReplacements = defaultPromptReplacements();
-
-        private static List<TextReplacement> defaultPromptReplacements() {
-            return List.of(
-                replacement("、旅行规划和 QQ 邮箱工具", "和旅行规划"),
-                replacement("、旅行规划、QQ 邮箱工具", "、旅行规划"),
-                replacement("、QQ 邮箱工具", ""),
-                replacement("和 QQ 邮箱工具", ""),
-                replacement("QQ 邮箱工具", ""),
-                replacement("QQ邮箱工具", ""),
-                replacement("QQ Mail", ""),
-                replacement("and QQ Mail", ""),
-                replacement("or mail", ""),
-                replacement("mail,", ""),
-                replacement("邮箱工具", ""),
-                replacement("或邮件任务", ""),
-                replacement("、邮件", ""),
-                replacement("，邮件", "")
-            );
-        }
-
-        private static TextReplacement replacement(String from, String to) {
-            TextReplacement replacement = new TextReplacement();
-            replacement.setFrom(from);
-            replacement.setTo(to);
-            return replacement;
-        }
+        private List<TextReplacement> promptReplacements = List.of();
     }
 
     /**

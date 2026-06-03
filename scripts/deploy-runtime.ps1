@@ -30,8 +30,34 @@ Invoke-Step "Build backend runtime image" {
     docker build -f Dockerfile.runtime -t ai-agent-backend:latest .
 }
 
+Invoke-Step "Build open-websearch runtime image" {
+    docker build -f docker/open-websearch/Dockerfile -t ai-agent-open-websearch:latest .
+}
+
+Invoke-Step "Build user memory runtime image" {
+    docker build -f Dockerfile.user-memory -t ai-agent-user-memory:latest .
+}
+
+Invoke-Step "Build client frontend dist" {
+    Push-Location .\echomind-web
+    try {
+        npm.cmd run build
+    } finally {
+        Pop-Location
+    }
+}
+
 Invoke-Step "Build client frontend runtime image" {
     docker build -f .\echomind-web\Dockerfile.runtime -t ai-agent-frontend:latest .\echomind-web
+}
+
+Invoke-Step "Build admin frontend dist" {
+    Push-Location .\echomind-web
+    try {
+        npm.cmd run build:admin
+    } finally {
+        Pop-Location
+    }
 }
 
 Invoke-Step "Build admin frontend runtime image" {
@@ -42,5 +68,5 @@ Write-Host "==> Apply MySQL migrations"
 & "$PSScriptRoot\apply-mysql-migrations.ps1" -StartDatabase
 
 Invoke-Step "Restart runtime containers" {
-    docker compose up -d --remove-orphans backend frontend admin-frontend otel-collector jaeger
+    docker compose up -d --remove-orphans open-websearch backend user-memory frontend admin-frontend otel-collector jaeger
 }

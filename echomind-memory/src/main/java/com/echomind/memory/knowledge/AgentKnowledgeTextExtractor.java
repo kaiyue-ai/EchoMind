@@ -73,6 +73,7 @@ public class AgentKnowledgeTextExtractor {
         throw new IllegalArgumentException("只支持上传 txt 或 pdf 文件");
     }
 
+    // 根据文件名检测文件类型
     private String detectType(String fileName) {
         String lower = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".pdf")) {
@@ -84,6 +85,7 @@ public class AgentKnowledgeTextExtractor {
         return "";
     }
 
+    // 提取PDF文本
     private String extractPdf(byte[] bytes) throws IOException {
         try (PDDocument document = PDDocument.load(new ByteArrayInputStream(bytes))) {
             String embeddedText = extractEmbeddedPdfText(document);

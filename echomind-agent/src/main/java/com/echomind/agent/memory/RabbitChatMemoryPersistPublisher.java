@@ -2,8 +2,9 @@ package com.echomind.agent.memory;
 
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.ChatMemoryPersistEvent;
-import com.echomind.common.model.MemorySignal;
+import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.messaging.ChatMemoryShardSupport;
+import com.echomind.common.observability.EchoMindTrace;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
@@ -13,10 +14,10 @@ import java.util.List;
 @Slf4j
 public class RabbitChatMemoryPersistPublisher implements ChatMemoryPersistPublisher {
 
-    private final RabbitTemplate rabbitTemplate;
-    private final String exchangeName;
-    private final int shardCount;
-    private final boolean enabled;
+    private final RabbitTemplate rabbitTemplate; // RabbitMQ 模板
+    private final String exchangeName; // 交换机名称
+    private final int shardCount; // 分片的数量
+    private final boolean enabled; // 是否启用
 
     public RabbitChatMemoryPersistPublisher(RabbitTemplate rabbitTemplate, String exchangeName,
                                             int shardCount, boolean enabled) {
@@ -33,21 +34,33 @@ public class RabbitChatMemoryPersistPublisher implements ChatMemoryPersistPublis
 
     @Override
     public void publish(String userId, String sessionId, String agentId, List<AgentMessage> messages) {
-        publish(userId, sessionId, agentId, messages, MemorySignal.NONE);
+        publish(userId, sessionId, agentId, messages, MemoryDecision.FALLBACK);
     }
 
     @Override
     public void publish(String userId, String sessionId, String agentId,
-                        List<AgentMessage> messages, MemorySignal memorySignal) {
+                        List<AgentMessage> messages, MemoryDecision memoryDecision) {
+        // 如果啥都没有,那也不用存储了
         if (!enabled || rabbitTemplate == null || exchangeName == null || exchangeName.isBlank()
             || sessionId == null || sessionId.isBlank() || messages == null || messages.isEmpty()) {
             return;
         }
         try {
+            // 同一个sessionId一定落到一个分片上去
             int shardIndex = ChatMemoryShardSupport.shardIndex(sessionId, shardCount);
+            // 创建一个routingKey
             String routingKey = ChatMemoryShardSupport.routingKey(shardIndex);
+            // 发消息
             rabbitTemplate.convertAndSend(exchangeName, routingKey,
-                new ChatMemoryPersistEvent(userId, sessionId, agentId, messages, memorySignal));
+                new ChatMemoryPersistEvent(
+                    userId,
+                    sessionId,
+                    agentId,
+                    messages,
+                    memoryDecision,
+                    EchoMindTrace.currentTraceId(),
+                    EchoMindTrace.injectContext().get("traceparent")
+                ));
         } catch (Exception e) {
             log.warn("Failed to publish chat memory persist event sessionId={}: {}", sessionId, e.getMessage());
         }

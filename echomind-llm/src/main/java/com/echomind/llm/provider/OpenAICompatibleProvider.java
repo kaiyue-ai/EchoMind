@@ -9,6 +9,8 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * OpenAI-compatible Provider backed by Spring AI.
@@ -38,11 +40,24 @@ public class OpenAICompatibleProvider extends SpringAiProviderSupport {
         if (toolCallbacks != null && !toolCallbacks.isEmpty()) {
             builder.toolCallbacks(toolCallbacks)
                 .internalToolExecutionEnabled(true);
-            if (requiredToolName != null && !requiredToolName.isBlank()) {
-                builder.toolChoice(OpenAiApi.ChatCompletionRequest.ToolChoiceBuilder.function(requiredToolName));
+            if (requiresNonThinkingToolMode(model)) {
+                builder.extraBody(Map.of("enable_thinking", false));
             }
         }
         return builder.build();
+    }
+
+    private boolean requiresNonThinkingToolMode(ModelSpec model) {
+        String modelName = model == null || model.modelName() == null ? "" : model.modelName().toLowerCase(Locale.ROOT);
+        if (!modelName.startsWith("qwen3")) {
+            return false;
+        }
+        String provider = providerId().toLowerCase(Locale.ROOT);
+        String url = baseUrl == null ? "" : baseUrl.toLowerCase(Locale.ROOT);
+        return provider.contains("aliyun")
+            || provider.contains("tongyi")
+            || provider.contains("dashscope")
+            || url.contains("dashscope.aliyuncs.com");
     }
 
     @Override

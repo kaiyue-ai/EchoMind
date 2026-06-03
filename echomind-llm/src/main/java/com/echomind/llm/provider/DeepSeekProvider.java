@@ -19,6 +19,8 @@ public class DeepSeekProvider extends SpringAiProviderSupport {
 
     private static final String DEFAULT_BASE_URL = "https://api.deepseek.com";
     private static final String DEFAULT_MODEL = "deepseek-chat";
+    private static final String V4_FLASH = "deepseek-v4-flash";
+    private static final String V4_FLASH_NON_THINKING_ALIAS = "deepseek-chat";
 
     private final String baseUrl;
     private final String apiKey;
@@ -44,19 +46,25 @@ public class DeepSeekProvider extends SpringAiProviderSupport {
 
     @Override
     protected ChatOptions chatOptions(ModelSpec model, List<ToolCallback> toolCallbacks, String requiredToolName) {
+        boolean hasTools = toolCallbacks != null && !toolCallbacks.isEmpty();
         DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder()
-            .model(model == null || model.modelName() == null || model.modelName().isBlank()
-                ? DEFAULT_MODEL
-                : model.modelName())
+            .model(modelName(model, hasTools))
             .maxTokens(maxTokens);
-        if (toolCallbacks != null && !toolCallbacks.isEmpty()) {
+        if (hasTools) {
             builder.toolCallbacks(toolCallbacks)
                 .internalToolExecutionEnabled(true);
-            if (requiredToolName != null && !requiredToolName.isBlank()) {
-                builder.toolChoice(DeepSeekApi.ChatCompletionRequest.ToolChoiceBuilder.FUNCTION(requiredToolName));
-            }
         }
         return builder.build();
+    }
+
+    private String modelName(ModelSpec model, boolean hasTools) {
+        String requested = model == null || model.modelName() == null || model.modelName().isBlank()
+            ? DEFAULT_MODEL
+            : model.modelName();
+        if (hasTools && V4_FLASH.equals(requested)) {
+            return V4_FLASH_NON_THINKING_ALIAS;
+        }
+        return requested;
     }
 
     @Override

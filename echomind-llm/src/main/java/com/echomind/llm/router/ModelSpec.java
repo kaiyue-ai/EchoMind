@@ -14,7 +14,7 @@ import java.util.Set;
  * @see ModelProviderRegistry
  */
 public record ModelSpec(
-        // 模型id
+    // 模型id
     String providerId,
     // 模型名称
     String modelName,

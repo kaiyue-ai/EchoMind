@@ -38,6 +38,7 @@ public final class AlertDtos {
         String username,
         String agentId,
         String sessionId,
+        String providerId,
         String title,
         String message,
         String suggestion,

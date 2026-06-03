@@ -35,9 +35,9 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class ChatController {
 
-    private final ChatApplicationService chatService;
-    private final MemoryApplicationService memoryService;
-    private final SsePushService ssePushService;
+    private final ChatApplicationService chatService; // 聊天应用服务
+    private final MemoryApplicationService memoryService; // 记忆应用服务
+    private final SsePushService ssePushService; // SSE 推送服务
 
     /**
      * 异步聊天入口：把请求写入 RabbitMQ，然后立刻返回 requestId。

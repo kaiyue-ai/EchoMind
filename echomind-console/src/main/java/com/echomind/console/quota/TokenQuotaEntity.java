@@ -1,56 +1,37 @@
 package com.echomind.console.quota;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.Id;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
-import jakarta.persistence.Table;
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.Setter;
 
 import java.time.Instant;
 
-@Entity
-@Table(name = "echomind_token_quotas")
+@TableName("echomind_token_quotas")
 @Getter
 @Setter
 public class TokenQuotaEntity {
 
-    @Id
-    @Column(name = "user_id", length = 128)
+    @TableId(value = "user_id", type = IdType.INPUT)
     private String userId;
 
-    @Column(name = "daily_limit_tokens")
+    @TableField("daily_limit_tokens")
     private Long dailyLimitTokens;
 
-    @Column(name = "monthly_limit_tokens")
+    @TableField("monthly_limit_tokens")
     private Long monthlyLimitTokens;
 
-    @Column(name = "warning_threshold_percent", nullable = false)
+    @TableField("warning_threshold_percent")
     private int warningThresholdPercent = 80;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false, length = 32)
     private TokenQuotaStatus status = TokenQuotaStatus.ACTIVE;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private Instant createdAt;
 
-    @Column(name = "updated_at", nullable = false)
+    @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private Instant updatedAt;
-
-    @PrePersist
-    void prePersist() {
-        Instant now = Instant.now();
-        createdAt = now;
-        updatedAt = now;
-    }
-
-    @PreUpdate
-    void preUpdate() {
-        updatedAt = Instant.now();
-    }
 }

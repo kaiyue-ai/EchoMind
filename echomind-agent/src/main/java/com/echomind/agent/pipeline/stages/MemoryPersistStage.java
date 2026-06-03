@@ -12,6 +12,8 @@ import java.util.List;
 /** 将本轮用户消息、工具调用记录和最终回复发布到异步记忆写入队列。 */
 public class MemoryPersistStage implements PipelineStage {
 
+    private static final String UNKNOWN_TOOL_CALL_ID = "unknown-tool";
+
     private final ChatMemoryPersistPublisher chatMemoryPublisher;
 
     public MemoryPersistStage(ChatMemoryPersistPublisher chatMemoryPublisher) {
@@ -36,10 +38,7 @@ public class MemoryPersistStage implements PipelineStage {
 
         if (!ctx.getSkillResults().isEmpty()) {
             for (String skillResult : ctx.getSkillResults()) {
-                String toolCallId = skillResult.startsWith("[") && skillResult.contains("]:")
-                    ? skillResult.substring(1, skillResult.indexOf("]:"))
-                    : "skill";
-                AgentMessage toolMessage = AgentMessage.tool(toolCallId, skillResult);
+                AgentMessage toolMessage = AgentMessage.tool(toolCallId(skillResult), skillResult);
                 persisted.add(toolMessage);
             }
         }
@@ -49,7 +48,17 @@ public class MemoryPersistStage implements PipelineStage {
             persisted.add(assistantMessage);
         }
         chatMemoryPublisher.publish(ctx.getUserId(), ctx.getSessionId(), ctx.getAgentId(),
-            List.copyOf(persisted), ctx.getMemorySignal());
+            List.copyOf(persisted), ctx.getMemoryDecision());
         return ctx;
+    }
+
+    private String toolCallId(String skillResult) {
+        if (skillResult == null || skillResult.isBlank()) {
+            return UNKNOWN_TOOL_CALL_ID;
+        }
+        if (skillResult.startsWith("[") && skillResult.contains("]:")) {
+            return skillResult.substring(1, skillResult.indexOf("]:"));
+        }
+        return skillResult;
     }
 }

@@ -1,7 +1,7 @@
 package com.echomind.agent.pipeline;
 
 import com.echomind.common.model.AgentMessage;
-import com.echomind.common.model.MemorySignal;
+import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.TokenUsage;
 import com.echomind.llm.router.ModelSpec;
@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -23,6 +24,26 @@ import lombok.Setter;
 @Getter
 @Setter
 public class PipelineContext {
+
+    /** Agent 允许暴露给模型的 Skill ID 列表。 */
+    public static final String ATTR_AGENT_SKILL_IDS = "agentSkillIds";
+    /** 治理前的用户原文，供工具调用理解原始意图。 */
+    public static final String ATTR_RAW_USER_MESSAGE = "rawUserMessage";
+    /** 工具暴露模式：关键词命中或交给模型自由选择。 */
+    public static final String ATTR_TOOL_MATCH_MODE = "toolMatchMode";
+    /** 内部控制面调用禁用工具暴露，避免 Planner/Reviewer 误触业务 Skill。 */
+    public static final String ATTR_TOOL_EXPOSURE_DISABLED = "toolExposureDisabled";
+    /** 关键词命中的工具名列表，仅用于调试和链路追踪。 */
+    public static final String ATTR_KEYWORD_MATCHED_TOOLS = "keywordMatchedTools";
+    /** 短句追问从最近上下文补回的工具名列表，仅用于调试和链路追踪。 */
+    public static final String ATTR_CONTEXT_MATCHED_TOOLS = "contextMatchedTools";
+    /** 本轮没有真实模型 usage，不应写入用量表。 */
+    public static final String ATTR_MODEL_USAGE_NOT_APPLICABLE = "modelUsageNotApplicable";
+    /** 平台 provider token 预算已阻断本轮模型调用。 */
+    public static final String ATTR_PROVIDER_TOKEN_BUDGET_BLOCKED = "providerTokenBudgetBlocked";
+    public static final String TOOL_MATCH_KEYWORD = "keyword";
+    public static final String TOOL_MATCH_MODEL = "model";
+    public static final String TOOL_MATCH_DISABLED = "disabled";
 
     private String sessionId;
     private String userId = "default";
@@ -44,9 +65,10 @@ public class PipelineContext {
     private boolean failed; // 模型调用失败
     private String failureReason; // 模型调用失败的原因
     private TokenUsage tokenUsage; // 模型调用的 token 使用情况
-    /** 主模型只产出是否需要优先沉淀记忆的信号，事实合并仍由后台 worker 完成。 */
-    private MemorySignal memorySignal = MemorySignal.NONE;
+    /** 主模型只产出是否需要异步处理用户事实和画像的决策，具体抽取仍由后台 worker 完成。 */
+    private MemoryDecision memoryDecision = MemoryDecision.FALLBACK;
     private final Map<String, Object> attributes = new ConcurrentHashMap<>(); // 模型调用过程中产生的临时状态
+    private Consumer<ToolProgressEvent> toolProgressSink;
 
     /** 判断本轮用户消息是否携带图片。 */
     public boolean hasImageAttachments() {
@@ -98,11 +120,39 @@ public class PipelineContext {
         return userId != null && !userId.isBlank() ? userId : "default";
     }
 
+    public void emitToolStart(String toolName) {
+        Consumer<ToolProgressEvent> sink = toolProgressSink;
+        if (sink != null) {
+            sink.accept(ToolProgressEvent.start(toolName));
+        }
+    }
+
+    public void emitToolEnd(String toolName, long durationMs) {
+        Consumer<ToolProgressEvent> sink = toolProgressSink;
+        if (sink != null) {
+            sink.accept(ToolProgressEvent.end(toolName, durationMs));
+        }
+    }
+
     private String normalizeFailureReason(String reason) {
         if (reason == null || reason.isBlank()) {
             return "模型调用失败";
         }
         String trimmed = reason.trim();
         return trimmed.startsWith("[Error]") ? trimmed.substring("[Error]".length()).trim() : trimmed;
+    }
+
+    public record ToolProgressEvent(String type, String toolName, long durationMs) {
+
+        public static final String TYPE_START = "start";
+        public static final String TYPE_END = "end";
+
+        public static ToolProgressEvent start(String toolName) {
+            return new ToolProgressEvent(TYPE_START, toolName, 0);
+        }
+
+        public static ToolProgressEvent end(String toolName, long durationMs) {
+            return new ToolProgressEvent(TYPE_END, toolName, Math.max(durationMs, 0));
+        }
     }
 }

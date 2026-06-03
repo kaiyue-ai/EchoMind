@@ -94,6 +94,16 @@ public final class EchoMindTrace {
         return propagators.getTextMapPropagator().extract(Context.current(), carrier, MapGetter.INSTANCE);
     }
 
+    public static Context extractContext(String traceparent, String traceId) {
+        Map<String, String> carrier = new java.util.LinkedHashMap<>();
+        if (traceparent != null && !traceparent.isBlank()) {
+            carrier.put("traceparent", traceparent);
+        } else if (isTraceId(traceId)) {
+            carrier.put("traceparent", traceparentFor(traceId));
+        }
+        return extractContext(carrier);
+    }
+
     public static void end(Span span) {
         if (span != null) {
             span.end();
@@ -158,7 +168,17 @@ public final class EchoMindTrace {
 
     private static String fallbackTraceparent() {
         String traceId = traceId(currentSpan());
-        return "00-" + traceId + "-" + newSpanId() + "-00";
+        return traceparentFor(traceId);
+    }
+
+    private static String traceparentFor(String traceId) {
+        return "00-" + traceId.toLowerCase(java.util.Locale.ROOT) + "-" + newSpanId() + "-01";
+    }
+
+    private static boolean isTraceId(String value) {
+        return value != null
+            && value.matches("[0-9a-fA-F]{32}")
+            && !value.matches("0{32}");
     }
 
     private enum MapSetter implements TextMapSetter<Map<String, String>> {

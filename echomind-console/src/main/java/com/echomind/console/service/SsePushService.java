@@ -1,7 +1,10 @@
 package com.echomind.console.service;
 
 import com.echomind.common.model.ChatStreamEvent;
+import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.console.config.RabbitMQConfig;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.http.HttpStatus;
@@ -63,6 +66,25 @@ public class SsePushService {
         if (event == null || event.requestId() == null || event.requestId().isBlank()) {
             return;
         }
+        if (ChatStreamEvent.TYPE_TOKEN.equals(event.type())) {
+            try (Scope ignored = extractEventContext(event).makeCurrent()) {
+                handleEvent(event);
+            }
+            return;
+        }
+        Span span = EchoMindTrace.startSpan("echomind.chat.sse.push", extractEventContext(event));
+        tagEvent(span, event);
+        try (Scope ignored = span.makeCurrent()) {
+            handleEvent(event);
+        } catch (RuntimeException e) {
+            EchoMindTrace.recordException(span, e);
+            throw e;
+        } finally {
+            span.end();
+        }
+    }
+
+    private void handleEvent(ChatStreamEvent event) {
         remember(event);
         SseEmitter emitter = emitters.get(event.requestId());
         if (emitter != null) {
@@ -119,6 +141,15 @@ public class SsePushService {
                 case ChatStreamEvent.TYPE_TOKEN -> emitter.send(SseEmitter.event()
                     .name("token")
                     .data(Map.of("token", safe(event.token()))));
+                case ChatStreamEvent.TYPE_TOOL_START -> emitter.send(SseEmitter.event()
+                    .name("tool_start")
+                    .data(Map.of("toolName", safe(event.toolName()))));
+                case ChatStreamEvent.TYPE_TOOL_END -> emitter.send(SseEmitter.event()
+                    .name("tool_end")
+                    .data(Map.of(
+                        "toolName", safe(event.toolName()),
+                        "durationMs", event.durationMs()
+                    )));
                 case ChatStreamEvent.TYPE_RESULT -> emitter.send(SseEmitter.event()
                     .name("result")
                     .data(event.response()));
@@ -164,5 +195,16 @@ public class SsePushService {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private io.opentelemetry.context.Context extractEventContext(ChatStreamEvent event) {
+        return EchoMindTrace.extractContext(event.traceparent(), event.traceId());
+    }
+
+    private void tagEvent(Span span, ChatStreamEvent event) {
+        span.setAttribute("echomind.request_id", safe(event.requestId()));
+        span.setAttribute("echomind.event_type", safe(event.type()));
+        span.setAttribute("echomind.session_id", safe(event.sessionId()));
+        span.setAttribute("echomind.trace.parent_id", safe(event.traceId()));
     }
 }

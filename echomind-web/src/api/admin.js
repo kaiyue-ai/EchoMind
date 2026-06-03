@@ -56,6 +56,10 @@ export default {
     list: () => http.get('/admin/quotas').then(r => r.data),
     update: (userId, payload) => http.put(`/admin/quotas/users/${userId}`, payload).then(r => r.data)
   },
+  providerBudgets: {
+    list: () => http.get('/admin/provider-token-budgets').then(r => r.data),
+    update: (payload) => http.put('/admin/provider-token-budgets', payload).then(r => r.data)
+  },
   sensitive: {
     rules: () => http.get('/admin/sensitive/rules').then(r => r.data),
     updateRules: (payload) => http.put('/admin/sensitive/rules', payload).then(r => r.data),

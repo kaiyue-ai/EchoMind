@@ -3,13 +3,16 @@ package com.echomind.memory.persistence;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.SessionSummary;
+import com.echomind.memory.persistence.entity.ChatMessageEntity;
+import com.echomind.memory.persistence.entity.ChatSessionEntity;
+import com.echomind.memory.persistence.mapper.ChatMessageMapper;
+import com.echomind.memory.persistence.mapper.ChatSessionMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -33,8 +36,8 @@ public class PersistentChatMemoryStore {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final TypeReference<List<MessageAttachment>> ATTACHMENT_LIST_TYPE = new TypeReference<>() {};
 
-    private final ChatSessionRepository sessionRepository;
-    private final ChatMessageRepository messageRepository;
+    private final ChatSessionMapper sessionMapper;
+    private final ChatMessageMapper messageMapper;
     private final ObjectMapper mapper;
 
     /**
@@ -54,7 +57,7 @@ public class PersistentChatMemoryStore {
     @Transactional
     public ChatMessageEntity saveMessage(String userId, String sessionId, String agentId, AgentMessage message) {
         String owner = normalizeUserId(userId);
-        ChatSessionEntity session = sessionRepository.findByUserIdAndSessionId(owner, sessionId)
+        ChatSessionEntity session = sessionMapper.selectByUserIdAndSessionId(owner, sessionId)
             .orElseGet(() -> newSession(owner, sessionId));
         session.setUserId(owner);
         if (agentId != null && !agentId.isBlank()) {
@@ -67,9 +70,9 @@ public class PersistentChatMemoryStore {
         session.setLastActivity(message.timestamp() != null ? message.timestamp() : Instant.now());
 
         ChatMessageEntity entity = toEntity(owner, sessionId, message);
-        ChatMessageEntity saved = messageRepository.save(entity);
-        session.setMessageCount((int) messageRepository.countByUserIdAndSessionId(owner, sessionId));
-        sessionRepository.save(session);
+        ChatMessageEntity saved = messageMapper.upsertById(entity);
+        session.setMessageCount((int) messageMapper.countByUserIdAndSessionId(owner, sessionId));
+        sessionMapper.upsertByUserIdAndSessionId(session);
         log.debug("Saved chat message user={} session={} id={} role={}", owner, sessionId, saved.getId(), saved.getRole());
         return saved;
     }
@@ -77,7 +80,7 @@ public class PersistentChatMemoryStore {
     /** 加载完整会话历史，按时间升序。 */
     @Transactional(readOnly = true)
     public List<AgentMessage> loadFullHistory(String sessionId) {
-        return messageRepository.findBySessionIdOrderByTimestampAscIdAsc(sessionId).stream()
+        return messageMapper.selectBySessionIdOrderByTimestampAscIdAsc(sessionId).stream()
             .map(this::toMessage)
             .toList();
     }
@@ -85,7 +88,7 @@ public class PersistentChatMemoryStore {
     /** 加载指定用户的完整会话历史，按时间升序。 */
     @Transactional(readOnly = true)
     public List<AgentMessage> loadFullHistory(String userId, String sessionId) {
-        return messageRepository.findByUserIdAndSessionIdOrderByTimestampAscIdAsc(normalizeUserId(userId), sessionId)
+        return messageMapper.selectByUserIdAndSessionIdOrderByTimestampAscIdAsc(normalizeUserId(userId), sessionId)
             .stream()
             .map(this::toMessage)
             .toList();
@@ -98,7 +101,7 @@ public class PersistentChatMemoryStore {
             return List.of();
         }
         List<ChatMessageEntity> rows = new ArrayList<>(
-            messageRepository.findBySessionIdOrderByTimestampDescIdDesc(sessionId, PageRequest.of(0, limit)));
+            messageMapper.selectBySessionIdOrderByTimestampDescIdDesc(sessionId, limit));
         Collections.reverse(rows);
         return rows.stream().map(this::toMessage).toList();
     }
@@ -106,7 +109,7 @@ public class PersistentChatMemoryStore {
     /** 读取会话摘要。 */
     @Transactional(readOnly = true)
     public String loadSummary(String sessionId) {
-        return sessionRepository.findByUserIdAndSessionId("default", sessionId)
+        return sessionMapper.selectByUserIdAndSessionId("default", sessionId)
             .map(ChatSessionEntity::getSummary)
             .orElse(null);
     }
@@ -114,9 +117,9 @@ public class PersistentChatMemoryStore {
     /** 更新会话摘要。 */
     @Transactional
     public void updateSummary(String sessionId, String summary) {
-        sessionRepository.findByUserIdAndSessionId("default", sessionId).ifPresent(session -> {
+        sessionMapper.selectByUserIdAndSessionId("default", sessionId).ifPresent(session -> {
             session.setSummary(summary);
-            sessionRepository.save(session);
+            sessionMapper.upsertByUserIdAndSessionId(session);
         });
     }
 
@@ -124,23 +127,23 @@ public class PersistentChatMemoryStore {
     @Transactional
     public void updateSummary(String userId, String sessionId, String summary) {
         String owner = normalizeUserId(userId);
-        sessionRepository.findByUserIdAndSessionId(owner, sessionId)
+        sessionMapper.selectByUserIdAndSessionId(owner, sessionId)
             .ifPresent(session -> {
                 session.setSummary(summary);
-                sessionRepository.save(session);
+                sessionMapper.upsertByUserIdAndSessionId(session);
             });
     }
 
     /** 统计会话消息数量。 */
     @Transactional(readOnly = true)
     public long countMessages(String sessionId) {
-        return messageRepository.countBySessionId(sessionId);
+        return messageMapper.countBySessionId(sessionId);
     }
 
     /** 统计指定用户会话消息数量。 */
     @Transactional(readOnly = true)
     public long countMessages(String userId, String sessionId) {
-        return messageRepository.countByUserIdAndSessionId(normalizeUserId(userId), sessionId);
+        return messageMapper.countByUserIdAndSessionId(normalizeUserId(userId), sessionId);
     }
 
     /** 删除会话和消息。Redis 近期缓存由 MemoryManager 统一清理。 */
@@ -153,14 +156,14 @@ public class PersistentChatMemoryStore {
     @Transactional
     public void deleteSession(String userId, String sessionId) {
         String owner = normalizeUserId(userId);
-        messageRepository.deleteByUserIdAndSessionId(owner, sessionId);
-        sessionRepository.deleteByUserIdAndSessionId(owner, sessionId);
+        messageMapper.deleteByUserIdAndSessionId(owner, sessionId);
+        sessionMapper.deleteByUserIdAndSessionId(owner, sessionId);
     }
 
     /** 会话列表 DTO，供前端侧边栏展示。 */
     @Transactional(readOnly = true)
     public List<SessionSummary> listSessions() {
-        return sessionRepository.findVisibleSessions("team-run-").stream()
+        return sessionMapper.selectVisibleSessions("team-run-").stream()
             .map(this::toSummary)
             .toList();
     }
@@ -168,7 +171,7 @@ public class PersistentChatMemoryStore {
     /** 用户会话列表 DTO，供前端侧边栏展示。 */
     @Transactional(readOnly = true)
     public List<SessionSummary> listSessions(String userId) {
-        return sessionRepository.findVisibleSessionsByUserId(normalizeUserId(userId), "team-run-").stream()
+        return sessionMapper.selectVisibleSessionsByUserId(normalizeUserId(userId), "team-run-").stream()
             .map(session -> toSummary(normalizeUserId(userId), session))
             .toList();
     }
@@ -211,8 +214,8 @@ public class PersistentChatMemoryStore {
     private SessionSummary toSummary(String userId, ChatSessionEntity session) {
         String lastMessage = "";
         List<ChatMessageEntity> lastRows =
-            messageRepository.findByUserIdAndSessionIdOrderByTimestampDescIdDesc(
-                normalizeUserId(userId), session.getSessionId(), PageRequest.of(0, 1));
+            messageMapper.selectByUserIdAndSessionIdOrderByTimestampDescIdDesc(
+                normalizeUserId(userId), session.getSessionId(), 1);
         if (!lastRows.isEmpty()) {
             lastMessage = truncate(lastRows.get(0).getContent(), LAST_MESSAGE_MAX_CHARS);
         }

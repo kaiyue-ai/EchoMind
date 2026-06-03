@@ -25,7 +25,7 @@ public class AuthApplicationService {
     private static final long MAX_AVATAR_SIZE = 2 * 1024 * 1024;
     private static final Set<String> SUPPORTED_AVATAR_TYPES = Set.of("image/jpeg", "image/png", "image/webp", "image/gif");
 
-    private final UserAccountRepository repository;
+    private final UserAccountMapper userMapper;
     private final PasswordHasher passwordHasher;
     private final AuthTokenService tokenService;
     private final ObjectStorageService storageService;
@@ -41,7 +41,7 @@ public class AuthApplicationService {
         ensureDefaultUser();
         String username = normalizeUsername(request == null ? null : request.username());
         String password = request == null ? null : request.password();
-        UserAccountEntity user = repository.findByUsername(username)
+        UserAccountEntity user = userMapper.selectByUsername(username)
             .orElseThrow(() -> new IllegalArgumentException("用户名或密码错误"));
         if (user.getStatus() != UserAccountStatus.ACTIVE || !passwordHasher.matches(password, user.getPasswordHash())) {
             throw new IllegalArgumentException("用户名或密码错误");
@@ -57,7 +57,7 @@ public class AuthApplicationService {
         if (password == null || password.isBlank()) {
             throw new IllegalArgumentException("password is required");
         }
-        if (repository.findByUsername(username).isPresent()) {
+        if (userMapper.selectByUsername(username).isPresent()) {
             throw new IllegalArgumentException("用户名已存在");
         }
         UserAccountEntity entity = new UserAccountEntity();
@@ -65,7 +65,7 @@ public class AuthApplicationService {
         entity.setUsername(username);
         entity.setPasswordHash(passwordHasher.hash(password));
         entity.setStatus(UserAccountStatus.ACTIVE);
-        repository.save(entity);
+        userMapper.upsertById(entity);
         AuthUser authUser = new AuthUser(entity.getUserId(), entity.getUsername(), true);
         return new AuthResponse(tokenService.issue(authUser), userView(entity));
     }
@@ -75,7 +75,7 @@ public class AuthApplicationService {
         if (!user.authenticated()) {
             return UserView.defaultUser();
         }
-        return repository.findById(user.userId())
+        return userMapper.selectOptionalById(user.userId())
             .filter(entity -> entity.getStatus() == UserAccountStatus.ACTIVE)
             .map(this::userView)
             .orElse(new UserView(user.userId(), user.username(), true, null, null));
@@ -87,7 +87,7 @@ public class AuthApplicationService {
         if (!current.authenticated()) {
             throw new IllegalArgumentException("请先登录后再上传头像");
         }
-        UserAccountEntity user = repository.findById(current.userId())
+        UserAccountEntity user = userMapper.selectOptionalById(current.userId())
             .filter(entity -> entity.getStatus() == UserAccountStatus.ACTIVE)
             .orElseThrow(() -> new IllegalArgumentException("用户不存在或已禁用"));
         validateAvatar(file);
@@ -103,7 +103,7 @@ public class AuthApplicationService {
             try {
                 var stored = storageService.putObject(key, temp, contentType);
                 user.setAvatarUri(stored.uri());
-                repository.save(user);
+                userMapper.upsertById(user);
                 deleteOldAvatarQuietly(oldAvatarUri);
                 return userView(user);
             } finally {
@@ -119,7 +119,7 @@ public class AuthApplicationService {
         if (tokenUser == null || !tokenUser.authenticated()) {
             return AuthUser.DEFAULT;
         }
-        return repository.findByUserIdAndStatus(tokenUser.userId(), UserAccountStatus.ACTIVE)
+        return userMapper.selectByUserIdAndStatus(tokenUser.userId(), UserAccountStatus.ACTIVE)
             .map(user -> new AuthUser(user.getUserId(), user.getUsername(), true))
             .orElse(null);
     }
@@ -127,11 +127,11 @@ public class AuthApplicationService {
     @Transactional
     public void ensureDefaultUser() {
         String username = normalizeUsername(defaultUsername);
-        UserAccountEntity existing = repository.findByUsername(username).orElse(null);
+        UserAccountEntity existing = userMapper.selectByUsername(username).orElse(null);
         if (existing != null) {
             if (AuthUser.DEFAULT_USER_ID.equals(existing.getUserId())) {
                 existing.setUserId(UUID.randomUUID().toString());
-                repository.save(existing);
+                userMapper.upsertById(existing);
             }
             return;
         }
@@ -140,7 +140,7 @@ public class AuthApplicationService {
         entity.setUsername(username);
         entity.setPasswordHash(passwordHasher.hash(defaultPassword));
         entity.setStatus(UserAccountStatus.ACTIVE);
-        repository.save(entity);
+        userMapper.upsertById(entity);
     }
 
     private String normalizeUsername(String username) {

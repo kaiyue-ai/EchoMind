@@ -1,7 +1,8 @@
 package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
-import com.echomind.agent.pipeline.PromptBudget;
+import com.echomind.agent.pipeline.composing.PromptBudget;
+import com.echomind.agent.pipeline.composing.PromptComposer;
 import com.echomind.common.model.AgentMessage;
 import org.junit.jupiter.api.Test;
 

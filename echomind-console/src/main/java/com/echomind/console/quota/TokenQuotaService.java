@@ -2,66 +2,79 @@ package com.echomind.console.quota;
 
 import com.echomind.console.auth.AuthUser;
 import com.echomind.console.auth.UserAccountEntity;
-import com.echomind.console.auth.UserAccountRepository;
+import com.echomind.console.auth.UserAccountMapper;
 import com.echomind.console.auth.UserAccountStatus;
 import com.echomind.console.quota.TokenQuotaDtos.TokenQuotaListResponse;
 import com.echomind.console.quota.TokenQuotaDtos.TokenQuotaView;
 import com.echomind.console.quota.TokenQuotaDtos.UpdateTokenQuotaRequest;
-import com.echomind.console.usage.AiCallUsageRepository;
+import com.echomind.console.usage.AiCallUsageMapper;
 import com.echomind.console.usage.UsageDtos.TokenTotals;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class TokenQuotaService {
 
-    private final TokenQuotaRepository quotaRepository;
-    private final UserAccountRepository userRepository;
-    private final AiCallUsageRepository usageRepository;
-    private final Clock clock = Clock.systemDefaultZone();
+    private static final String DAILY = "daily";
+    private static final String MONTHLY = "monthly";
+
+    private final TokenQuotaMapper quotaMapper;
+    private final UserAccountMapper userMapper;
+    private final AiCallUsageMapper usageMapper;
+    private final TokenQuotaUsageMapper quotaUsageMapper;
+    private final Clock clock;
+
+    @Autowired
+    public TokenQuotaService(TokenQuotaMapper quotaMapper,
+                             UserAccountMapper userMapper,
+                             AiCallUsageMapper usageMapper,
+                             TokenQuotaUsageMapper quotaUsageMapper) {
+        this(quotaMapper, userMapper, usageMapper, quotaUsageMapper, Clock.systemDefaultZone());
+    }
+
+    TokenQuotaService(TokenQuotaMapper quotaMapper,
+                      UserAccountMapper userMapper,
+                      AiCallUsageMapper usageMapper,
+                      TokenQuotaUsageMapper quotaUsageMapper,
+                      Clock clock) {
+        this.quotaMapper = quotaMapper;
+        this.userMapper = userMapper;
+        this.usageMapper = usageMapper;
+        this.quotaUsageMapper = quotaUsageMapper;
+        this.clock = clock == null ? Clock.systemDefaultZone() : clock;
+    }
 
     @Transactional(readOnly = true)
     public void assertAllowed(AuthUser user) {
         if (user == null || !user.authenticated()) {
             return;
         }
-        quotaRepository.findById(user.userId())
+        quotaMapper.selectOptionalById(user.userId())
             .filter(quota -> quota.getStatus() == TokenQuotaStatus.ACTIVE)
             .ifPresent(quota -> assertQuota(user.userId(), quota));
     }
 
     @Transactional(readOnly = true)
-    public List<QuotaSignal> warningSignals(AuthUser user) {
-        if (user == null || !user.authenticated()) {
-            return List.of();
-        }
-        return quotaRepository.findById(user.userId())
-            .filter(quota -> quota.getStatus() == TokenQuotaStatus.ACTIVE)
-            .map(quota -> signals(user.userId(), quota))
-            .orElse(List.of());
-    }
-
-    @Transactional(readOnly = true)
     public TokenQuotaListResponse list() {
         Map<String, TokenQuotaEntity> quotas = new HashMap<>();
-        quotaRepository.findAll().forEach(quota -> quotas.put(quota.getUserId(), quota));
+        quotaMapper.selectAll().forEach(quota -> quotas.put(quota.getUserId(), quota));
         Map<String, TokenTotals> totals = new HashMap<>();
-        for (Object[] row : usageRepository.totalsByUser()) {
+        for (Object[] row : usageMapper.totalsByUser()) {
             totals.put(String.valueOf(row[0]), totals(row, 1));
         }
-        return new TokenQuotaListResponse(userRepository.findAll().stream()
+        return new TokenQuotaListResponse(userMapper.selectAll().stream()
             .map(user -> view(user, quotas.get(user.getUserId()), totals.get(user.getUserId())))
             .sorted(Comparator.comparing((TokenQuotaView view) -> view.totalUsedTokens()).reversed()
                 .thenComparing(TokenQuotaView::username))
@@ -70,9 +83,9 @@ public class TokenQuotaService {
 
     @Transactional
     public TokenQuotaView update(String userId, UpdateTokenQuotaRequest request) {
-        UserAccountEntity user = userRepository.findById(userId)
+        UserAccountEntity user = userMapper.selectOptionalById(userId)
             .orElseThrow(() -> new IllegalArgumentException("客户端用户不存在"));
-        TokenQuotaEntity quota = quotaRepository.findById(userId).orElseGet(() -> {
+        TokenQuotaEntity quota = quotaMapper.selectOptionalById(userId).orElseGet(() -> {
             TokenQuotaEntity created = new TokenQuotaEntity();
             created.setUserId(userId);
             return created;
@@ -81,37 +94,52 @@ public class TokenQuotaService {
         quota.setMonthlyLimitTokens(normalizeLimit(request == null ? null : request.monthlyLimitTokens()));
         quota.setWarningThresholdPercent(normalizeThreshold(request == null ? null : request.warningThresholdPercent()));
         quota.setStatus(request == null || request.status() == null ? TokenQuotaStatus.ACTIVE : request.status());
-        TokenQuotaEntity saved = quotaRepository.save(quota);
-        return view(user, saved, totals(usageRepository.totalsByUserId(userId)));
+        TokenQuotaEntity saved = quotaMapper.upsertById(quota);
+        return view(user, saved, totals(usageMapper.totalsByUserId(userId)));
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void settleUsage(AuthUser user, long currentCallTokens) {
+        if (user == null || !user.authenticated() || currentCallTokens <= 0) {
+            return;
+        }
+        quotaMapper.selectOptionalById(user.userId())
+            .filter(quota -> quota.getStatus() == TokenQuotaStatus.ACTIVE)
+            .ifPresent(quota -> settleQuota(user.userId(), quota, currentCallTokens));
     }
 
     private void assertQuota(String userId, TokenQuotaEntity quota) {
-        long todayUsed = usageRepository.totalTokensByUserIdSince(userId, startOfDay());
-        long monthUsed = usageRepository.totalTokensByUserIdSince(userId, startOfMonth());
+        long todayUsed = usedTokens(userId, DAILY, todayBucket());
+        long monthUsed = usedTokens(userId, MONTHLY, monthBucket());
         if (quota.getDailyLimitTokens() != null && todayUsed >= quota.getDailyLimitTokens()) {
-            throw new TokenQuotaExceededException(userId, "daily", todayUsed, quota.getDailyLimitTokens());
+            throw new TokenQuotaExceededException(userId, DAILY, todayUsed, quota.getDailyLimitTokens());
         }
         if (quota.getMonthlyLimitTokens() != null && monthUsed >= quota.getMonthlyLimitTokens()) {
-            throw new TokenQuotaExceededException(userId, "monthly", monthUsed, quota.getMonthlyLimitTokens());
+            throw new TokenQuotaExceededException(userId, MONTHLY, monthUsed, quota.getMonthlyLimitTokens());
         }
     }
 
-    private List<QuotaSignal> signals(String userId, TokenQuotaEntity quota) {
-        List<QuotaSignal> signals = new ArrayList<>();
-        long todayUsed = usageRepository.totalTokensByUserIdSince(userId, startOfDay());
-        long monthUsed = usageRepository.totalTokensByUserIdSince(userId, startOfMonth());
-        addSignal(signals, "daily", todayUsed, quota.getDailyLimitTokens(), quota.getWarningThresholdPercent());
-        addSignal(signals, "monthly", monthUsed, quota.getMonthlyLimitTokens(), quota.getWarningThresholdPercent());
-        return signals;
+    private void settleQuota(String userId, TokenQuotaEntity quota, long currentCallTokens) {
+        List<SettlementBucket> buckets = new ArrayList<>(2);
+        addLockedBucket(buckets, userId, DAILY, todayBucket(), quota.getDailyLimitTokens(), currentCallTokens);
+        addLockedBucket(buckets, userId, MONTHLY, monthBucket(), quota.getMonthlyLimitTokens(), currentCallTokens);
+        for (SettlementBucket bucket : buckets) {
+            quotaUsageMapper.incrementUsedTokens(userId, bucket.scope(), bucket.bucketStart(), currentCallTokens);
+        }
     }
 
-    private void addSignal(List<QuotaSignal> signals, String scope, long used, Long limit, int threshold) {
+    private void addLockedBucket(List<SettlementBucket> buckets, String userId, String scope, LocalDate bucketStart,
+                                 Long limit, long currentCallTokens) {
         if (limit == null || limit <= 0) {
             return;
         }
-        double usagePercent = percent(used, limit);
-        signals.add(new QuotaSignal(scope, used, limit, usagePercent, warning(usagePercent, threshold),
-            exceeded(used, limit)));
+        quotaUsageMapper.insertIgnoreBucket(userId, scope, bucketStart);
+        long used = lockedUsedTokens(userId, scope, bucketStart);
+        long nextUsed = used + currentCallTokens;
+        if (nextUsed > limit) {
+            throw new TokenQuotaExceededException(userId, scope, nextUsed, limit);
+        }
+        buckets.add(new SettlementBucket(scope, bucketStart));
     }
 
     private TokenQuotaView view(UserAccountEntity user, TokenQuotaEntity quota, TokenTotals totals) {
@@ -120,8 +148,8 @@ public class TokenQuotaService {
         Long monthlyLimit = quota == null ? null : quota.getMonthlyLimitTokens();
         int threshold = quota == null ? 80 : quota.getWarningThresholdPercent();
         TokenQuotaStatus status = quota == null ? TokenQuotaStatus.ACTIVE : quota.getStatus();
-        long todayUsed = usageRepository.totalTokensByUserIdSince(user.getUserId(), startOfDay());
-        long monthUsed = usageRepository.totalTokensByUserIdSince(user.getUserId(), startOfMonth());
+        long todayUsed = usedTokens(user.getUserId(), DAILY, todayBucket());
+        long monthUsed = usedTokens(user.getUserId(), MONTHLY, monthBucket());
         double dailyPercent = percent(todayUsed, dailyLimit);
         double monthlyPercent = percent(monthUsed, monthlyLimit);
         return new TokenQuotaView(
@@ -146,16 +174,22 @@ public class TokenQuotaService {
         );
     }
 
-    private Instant startOfDay() {
-        return Instant.now(clock)
-            .atZone(ZoneId.systemDefault())
-            .truncatedTo(ChronoUnit.DAYS)
-            .toInstant();
+    private LocalDate todayBucket() {
+        return Instant.now(clock).atZone(ZoneId.systemDefault()).toLocalDate();
     }
 
-    private Instant startOfMonth() {
-        var now = Instant.now(clock).atZone(ZoneId.systemDefault());
-        return now.withDayOfMonth(1).truncatedTo(ChronoUnit.DAYS).toInstant();
+    private LocalDate monthBucket() {
+        return todayBucket().withDayOfMonth(1);
+    }
+
+    private long usedTokens(String userId, String scope, LocalDate bucketStart) {
+        Long used = quotaUsageMapper.selectUsedTokens(userId, scope, bucketStart);
+        return used == null ? 0 : used;
+    }
+
+    private long lockedUsedTokens(String userId, String scope, LocalDate bucketStart) {
+        Long used = quotaUsageMapper.selectUsedTokensForUpdate(userId, scope, bucketStart);
+        return used == null ? 0 : used;
     }
 
     private Long normalizeLimit(Long value) {
@@ -210,13 +244,6 @@ public class TokenQuotaService {
         return value == null ? 0 : Long.parseLong(String.valueOf(value));
     }
 
-    public record QuotaSignal(
-        String scope,
-        long usedTokens,
-        long limitTokens,
-        double usagePercent,
-        boolean warning,
-        boolean exceeded
-    ) {
+    private record SettlementBucket(String scope, LocalDate bucketStart) {
     }
 }

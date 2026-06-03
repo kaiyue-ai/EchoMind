@@ -45,6 +45,7 @@ public class DynamicModelRouter {
                 .orElseThrow(() -> new ModelRoutingException(
                     "Preferred model not found: " + preferredProvider + "/" + preferredModel));
         }
+        // 如果用户没有指定模型,则根据提供商查找默认模型
         if (preferredProvider != null) {
             List<ModelSpec> providerModels = registry.listByProvider(preferredProvider);
             return providerModels.stream()

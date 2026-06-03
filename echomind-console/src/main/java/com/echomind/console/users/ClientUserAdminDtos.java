@@ -49,8 +49,7 @@ public final class ClientUserAdminDtos {
         long messages,
         long usageRows,
         long quotas,
-        long redisKeys,
-        long memoryEmbeddings
+        long redisKeys
     ) {
     }
 }

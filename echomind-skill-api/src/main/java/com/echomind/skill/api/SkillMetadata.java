@@ -1,6 +1,5 @@
 package com.echomind.skill.api;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -30,76 +29,26 @@ import java.util.Map;
  * @see com.echomind.common.model.SkillMetadata 通用模型层的对应类型
  */
 public record SkillMetadata(
-    /**
-     * 技能名称，简短标识符，例如 {@code "weather"}、{@code "calculator"}。
-     * 建议使用小写字母和连字符/下划线，避免空格和特殊符号。
-     */
+   // skill名称
     String name,
-    /**
-     * 语义化版本号（SemVer），格式为 {@code MAJOR.MINOR.PATCH}，例如 {@code "2.1.0"}。
-     * 平台依赖此字段进行多版本管理、兼容性检查和依赖解析。
-     */
+   // 版本
     String version,
-    /**
-     * 技能的自然语言描述，说明技能的功能、适用场景和使用限制。
-     * 此文本可能注入到 LLM 的系统提示中，建议包含明确的使用指引和边界说明。
-     */
+   // 描述
     String description,
-    /**
-     * 技能执行所需的输入参数 Schema（JSON Schema 风格的 Map 结构）。
-     * 应包含 {@code type: "object"}、{@code properties} 和可选的 {@code required} 字段。
-     * 平台在调用 {@code execute()} 前会基于此 Schema 进行参数校验。
-     */
+  // 参数
     Map<String, Object> parameterSchema,
-    /**
-     * 当前技能所依赖的其他技能列表（使用 {@code name@version} 格式的 skillId）。
-     * 依赖技能必须在当前技能启用之前完成加载。
-     */
+   // 所需要依赖的其他的skill
     List<String> dependencies,
-    /**
-     * 技能作者或组织名称，用于技能市场的归属展示和联系方式提示。
-     */
+    // 作者
     String author,
-    /**
-     * 技能标签列表，用于分类、搜索和过滤。
-     * 建议标签包括领域关键词（如 {@code "weather"}、{@code "data"}、{@code "api"}）
-     * 和能力关键词（如 {@code "text-generation"}、{@code "image-analysis"}）。
-     */
+    // 标签
     List<String> tags,
-    /**
-     * 技能作者显式声明的触发关键词。
-     *
-     * <p>平台工具路由会优先使用此字段做强匹配。新 Skill JAR 建议把中文、英文、
-     * 行业术语和常见用户说法都放在这里，例如 {@code ["报销", "发票审核", "invoice"]}。
-     * 旧版 Skill 不提供此字段时会自动使用空列表。</p>
-     */
+    // 关键词
     List<String> keywords,
-    /**
-     * 关键词别名表。
-     *
-     * <p>key 可以是规范能力词，value 是用户可能说出的别名。例如：
-     * {@code {"invoice": ["发票", "票据"], "audit": ["审核", "检查"]}}。
-     * 该字段用于让新 JAR 自描述关键词，不需要平台为每个新技能改硬编码别名。</p>
-     */
+   // 别名
     Map<String, List<String>> aliases
 ) {
-    /**
-     * 紧凑构造函数：对集合类字段进行空值防护。
-     * <p>
-     * 当调用方传入 null 时，自动替换为不可变的空集合，确保下游代码无需进行 null 检查。
-     * 该转换在 record 构造阶段完成，保证了字段在后续使用中始终为非 null 值。
-     * </p>
-     *
-     * @param name             技能名称
-     * @param version          版本号
-     * @param description      技能描述
-     * @param parameterSchema  参数 Schema（null 时自动变为空 Map）
-     * @param dependencies     依赖列表（null 时自动变为空 List）
-     * @param author           作者名称
-     * @param tags             标签列表（null 时自动变为空 List）
-     * @param keywords         显式触发关键词（null 时自动变为空 List）
-     * @param aliases          关键词别名表（null 时自动变为空 Map）
-     */
+
     public SkillMetadata {
         parameterSchema = parameterSchema == null ? Map.of() : parameterSchema;
         dependencies = dependencies == null ? List.of() : dependencies;

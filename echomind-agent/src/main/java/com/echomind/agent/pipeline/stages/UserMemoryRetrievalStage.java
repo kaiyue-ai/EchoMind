@@ -2,6 +2,7 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
+import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.embedding.QueryEmbeddingCache;
@@ -9,7 +10,6 @@ import com.echomind.memory.usermemory.UserMemoryHit;
 import com.echomind.memory.usermemory.UserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshot;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Comparator;
@@ -18,10 +18,9 @@ import java.util.stream.Collectors;
 
 /** 按用户隔离后的 memoryKey 召回用户长期画像，并注入本轮模型上下文。 */
 @Slf4j
-@RequiredArgsConstructor
 public class UserMemoryRetrievalStage implements PipelineStage {
 
-    private final EmbeddingClient embeddingClient;
+    private final EmbeddingClient embeddingClient; // 向量嵌入客户端
     // 用户长期记忆的向量存储,用向量搜索跟用户相关的历史事实
     private final UserMemoryStore vectorStore;
     // 用户画像快照存储,存的是压缩后的长期用户画像摘要
@@ -32,6 +31,48 @@ public class UserMemoryRetrievalStage implements PipelineStage {
     private final int topK;
     // 向量检索的最低执行度阈值,低于这个值回直接过滤掉
     private final double minConfidence;
+    // 向量检索的最低相似度阈值，避免距离过远的事实乱入上下文
+    private final double minSimilarity;
+    private final RetrievalQueryRewriter queryRewriter;
+
+    public UserMemoryRetrievalStage(EmbeddingClient embeddingClient,
+                                    UserMemoryStore vectorStore,
+                                    UserProfileSnapshotStore snapshotStore,
+                                    boolean enabled,
+                                    int topK,
+                                    double minConfidence) {
+        this(embeddingClient, vectorStore, snapshotStore, enabled, topK, minConfidence,
+            0.40, RetrievalQueryRewriter.disabled());
+    }
+
+    public UserMemoryRetrievalStage(EmbeddingClient embeddingClient,
+                                    UserMemoryStore vectorStore,
+                                    UserProfileSnapshotStore snapshotStore,
+                                    boolean enabled,
+                                    int topK,
+                                    double minConfidence,
+                                    RetrievalQueryRewriter queryRewriter) {
+        this(embeddingClient, vectorStore, snapshotStore, enabled, topK, minConfidence,
+            0.40, queryRewriter);
+    }
+
+    public UserMemoryRetrievalStage(EmbeddingClient embeddingClient,
+                                    UserMemoryStore vectorStore,
+                                    UserProfileSnapshotStore snapshotStore,
+                                    boolean enabled,
+                                    int topK,
+                                    double minConfidence,
+                                    double minSimilarity,
+                                    RetrievalQueryRewriter queryRewriter) {
+        this.embeddingClient = embeddingClient;
+        this.vectorStore = vectorStore;
+        this.snapshotStore = snapshotStore;
+        this.enabled = enabled;
+        this.topK = topK;
+        this.minConfidence = minConfidence;
+        this.minSimilarity = clampSimilarity(minSimilarity);
+        this.queryRewriter = queryRewriter == null ? RetrievalQueryRewriter.disabled() : queryRewriter;
+    }
 
     @Override
     public int order() {
@@ -51,9 +92,11 @@ public class UserMemoryRetrievalStage implements PipelineStage {
             return ctx;
         }
         // 从历史事实向量数据库
-        return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, ctx.getUserMessage())
+        String retrievalQuery = queryRewriter.queryFor(ctx);
+        return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, retrievalQuery)
             .map(vector -> {
-                List<UserMemoryHit> hits = vectorStore.search(ctx.getUserMemoryKey(), vector, topK, minConfidence);
+                List<UserMemoryHit> hits = vectorStore.search(ctx.getUserMemoryKey(), vector, topK, minConfidence,
+                    minSimilarity);
                 log.debug("User memory retrieval userMemoryKey={} store={} hits={}",
                     ctx.getUserMemoryKey(), vectorStore.getClass().getSimpleName(), hits.size());
                 return injectHits(ctx, hits);
@@ -102,5 +145,9 @@ public class UserMemoryRetrievalStage implements PipelineStage {
             %s
             === End 用户相关长期事实 ===
             """.formatted(body);
+    }
+
+    private double clampSimilarity(double value) {
+        return Math.max(-1, Math.min(1, value));
     }
 }

@@ -1,0 +1,32 @@
+drop table if exists echomind_agent_team_steps;
+
+create table echomind_agent_team_steps (
+    step_id varchar(128) primary key,
+    run_id varchar(128) not null,
+    step_index int not null,
+    client_step_id varchar(128),
+    title varchar(255) not null,
+    description longtext,
+    required_capabilities_json longtext,
+    depends_on_step_ids_json longtext,
+    risk_level varchar(32) not null default 'LOW',
+    risk_reason longtext,
+    acceptance_criteria longtext,
+    assigned_agent_id varchar(128),
+    status varchar(32) not null,
+    input_json longtext,
+    raw_output longtext,
+    previous_outputs_json longtext,
+    revision_instructions longtext,
+    review_status varchar(32),
+    quality_status varchar(32) not null default 'PENDING',
+    sub_review_json longtext,
+    last_review_reason longtext,
+    reflection_json longtext,
+    plan_iteration int not null default 0,
+    retry_count int not null default 0,
+    started_at datetime(6),
+    completed_at datetime(6),
+    created_at datetime(6) not null default current_timestamp(6),
+    updated_at datetime(6) not null default current_timestamp(6)
+);

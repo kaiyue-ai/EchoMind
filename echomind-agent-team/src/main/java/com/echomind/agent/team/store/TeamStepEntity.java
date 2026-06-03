@@ -1,18 +1,13 @@
 package com.echomind.agent.team.store;
 
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import com.echomind.agent.team.state.TeamStepStatus;
 import com.echomind.agent.team.state.TeamRiskLevel;
 import com.echomind.agent.team.state.TeamStepQualityStatus;
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.Id;
-import jakarta.persistence.Index;
-import jakarta.persistence.Lob;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
-import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -21,137 +16,89 @@ import java.time.Instant;
 /**
  * Planner 拆出的子任务卡片。
  */
-@Entity
-@Table(
-    name = "echomind_agent_team_steps",
-    indexes = {
-        @Index(name = "idx_team_step_run", columnList = "run_id"),
-        @Index(name = "idx_team_step_status", columnList = "status"),
-        @Index(name = "idx_team_step_agent", columnList = "assigned_agent_id")
-    }
-)
+@TableName("echomind_agent_team_steps")
 @Getter
 @Setter
 public class TeamStepEntity {
 
-    @Id
-    @Column(name = "step_id", length = 128)
+    @TableId(value = "step_id", type = IdType.INPUT)
     private String stepId;
 
-    @Column(name = "run_id", nullable = false, length = 128)
+    @TableField("run_id")
     private String runId;
 
-    @Column(name = "step_index", nullable = false)
+    @TableField("step_index")
     private int stepIndex;
 
-    @Column(name = "client_step_id", length = 128)
+    @TableField("client_step_id")
     private String clientStepId;
 
-    @Column(nullable = false, length = 255)
     private String title;
 
-    @Lob
-    @Column(columnDefinition = "LONGTEXT")
     private String description;
 
-    @Lob
-    @Column(name = "required_capabilities_json", columnDefinition = "LONGTEXT")
+    @TableField("required_capabilities_json")
     private String requiredCapabilitiesJson;
 
-    @Lob
-    @Column(name = "depends_on_step_ids_json", columnDefinition = "LONGTEXT")
+    @TableField("depends_on_step_ids_json")
     private String dependsOnStepIdsJson;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "risk_level", nullable = false, length = 32)
+    @TableField("risk_level")
     private TeamRiskLevel riskLevel = TeamRiskLevel.LOW;
 
-    @Lob
-    @Column(name = "risk_reason", columnDefinition = "LONGTEXT")
+    @TableField("risk_reason")
     private String riskReason;
 
-    @Lob
-    @Column(name = "acceptance_criteria", columnDefinition = "LONGTEXT")
+    @TableField("acceptance_criteria")
     private String acceptanceCriteria;
 
-    @Column(name = "assigned_agent_id", length = 128)
+    @TableField("assigned_agent_id")
     private String assignedAgentId;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 32)
-    private TeamStepStatus status;
+    private TeamStepStatus status = TeamStepStatus.PENDING;
 
-    @Lob
-    @Column(name = "input_json", columnDefinition = "LONGTEXT")
+    @TableField("input_json")
     private String inputJson;
 
-    @Lob
-    @Column(name = "raw_output", columnDefinition = "LONGTEXT")
+    @TableField("raw_output")
     private String rawOutput;
 
-    @Lob
-    @Column(name = "previous_outputs_json", columnDefinition = "LONGTEXT")
+    @TableField("previous_outputs_json")
     private String previousOutputsJson;
 
-    @Lob
-    @Column(name = "revision_instructions", columnDefinition = "LONGTEXT")
+    @TableField("revision_instructions")
     private String revisionInstructions;
 
-    @Column(name = "review_status", length = 32)
+    @TableField("review_status")
     private String reviewStatus;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "quality_status", nullable = false, length = 32)
+    @TableField("quality_status")
     private TeamStepQualityStatus qualityStatus = TeamStepQualityStatus.PENDING;
 
-    @Lob
-    @Column(name = "sub_review_json", columnDefinition = "LONGTEXT")
+    @TableField("sub_review_json")
     private String subReviewJson;
 
-    @Lob
-    @Column(name = "last_review_reason", columnDefinition = "LONGTEXT")
+    @TableField("last_review_reason")
     private String lastReviewReason;
 
-    @Lob
-    @Column(name = "reflection_json", columnDefinition = "LONGTEXT")
+    @TableField("reflection_json")
     private String reflectionJson;
 
-    @Column(name = "plan_iteration", nullable = false)
+    @TableField("plan_iteration")
     private int planIteration;
 
-    @Column(name = "retry_count", nullable = false)
-    private int retryCount;
+    @TableField("retry_count")
+    private int retryCount;// 重试的次数
 
-    @Column(name = "started_at")
+    @TableField("started_at")
     private Instant startedAt;
 
-    @Column(name = "completed_at")
+    @TableField("completed_at")
     private Instant completedAt;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private Instant createdAt;
 
-    @Column(name = "updated_at", nullable = false)
+    @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private Instant updatedAt;
-
-    @PrePersist
-    void prePersist() {
-        Instant now = Instant.now();
-        createdAt = now;
-        updatedAt = now;
-        if (status == null) {
-            status = TeamStepStatus.PENDING;
-        }
-        if (riskLevel == null) {
-            riskLevel = TeamRiskLevel.LOW;
-        }
-        if (qualityStatus == null) {
-            qualityStatus = TeamStepQualityStatus.PENDING;
-        }
-    }
-
-    @PreUpdate
-    void preUpdate() {
-        updatedAt = Instant.now();
-    }
 }

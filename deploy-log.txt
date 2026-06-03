@@ -1,0 +1,13 @@
+============================================================
+Step 1: SSH Connect + Check Old Deploy
+============================================================
+FATAL ERROR: [WinError 10060] 由于连接方在一段时间后没有正确答复或连接的主机没有反应，连接尝试失败。
+Traceback (most recent call last):
+  File "D:\claudeWorkSpace\ai-agent\scripts\remote-deploy-v2.py", line 58, in <module>
+    c = ssh_connect()
+  File "D:\claudeWorkSpace\ai-agent\scripts\remote-deploy-v2.py", line 20, in ssh_connect
+    c.connect(REMOTE_HOST, port=REMOTE_PORT, username=REMOTE_USER, password=REMOTE_PASS, timeout=30, banner_timeout=30, auth_timeout=30)
+  File "C:\Users\Jimmy\AppData\Local\Programs\Python\Python310\lib\site-packages\paramiko\client.py", line 364, in connect
+    sock.connect(addr)
+TimeoutError: [WinError 10060] 由于连接方在一段时间后没有正确答复或连接的主机没有反应，连接尝试失败。
+

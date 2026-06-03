@@ -168,9 +168,6 @@
         <el-form-item label="每月 Token 限额">
           <el-input-number v-model="quotaForm.monthlyLimitTokens" :min="0" :step="10000" controls-position="right" />
         </el-form-item>
-        <el-form-item label="告警阈值百分比">
-          <el-slider v-model="quotaForm.warningThresholdPercent" :min="1" :max="100" show-input />
-        </el-form-item>
         <el-form-item label="配额状态">
           <el-select v-model="quotaForm.status">
             <el-option label="启用" value="ACTIVE" />
@@ -211,7 +208,6 @@ const savingQuota = ref(false)
 const quotaForm = ref({
   dailyLimitTokens: 0,
   monthlyLimitTokens: 0,
-  warningThresholdPercent: 80,
   status: 'ACTIVE'
 })
 
@@ -285,7 +281,6 @@ function quotaTone(userId) {
   const quota = quotaFor(userId)
   if (!quota || quota.status === 'DISABLED') return 'neutral'
   if (quota.dailyExceeded || quota.monthlyExceeded) return 'danger'
-  if (quota.dailyWarning || quota.monthlyWarning) return 'warning'
   return 'success'
 }
 
@@ -294,7 +289,6 @@ function quotaLabel(userId) {
   if (!quota) return '未配置'
   if (quota.status === 'DISABLED') return '停用'
   if (quota.dailyExceeded || quota.monthlyExceeded) return '超限'
-  if (quota.dailyWarning || quota.monthlyWarning) return '接近'
   return '正常'
 }
 
@@ -307,7 +301,6 @@ function openQuotaEditor(row) {
   quotaForm.value = {
     dailyLimitTokens: quota?.dailyLimitTokens || 0,
     monthlyLimitTokens: quota?.monthlyLimitTokens || 0,
-    warningThresholdPercent: quota?.warningThresholdPercent || 80,
     status: quota?.status || 'ACTIVE'
   }
   quotaDialogVisible.value = true
@@ -320,7 +313,6 @@ async function saveQuota() {
     const updated = await api.quotas.update(editingQuota.value.userId, {
       dailyLimitTokens: quotaForm.value.dailyLimitTokens || null,
       monthlyLimitTokens: quotaForm.value.monthlyLimitTokens || null,
-      warningThresholdPercent: quotaForm.value.warningThresholdPercent,
       status: quotaForm.value.status
     })
     const index = quotas.value.findIndex(quota => quota.userId === updated.userId)

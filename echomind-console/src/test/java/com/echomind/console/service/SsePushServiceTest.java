@@ -38,6 +38,8 @@ class SsePushServiceTest {
         service.registerRequest("req-1", "user-a");
         service.onChatStreamEvent(ChatStreamEvent.meta("req-1", "session-a", "trace-a"));
         service.onChatStreamEvent(ChatStreamEvent.token("req-1", "你"));
+        service.onChatStreamEvent(ChatStreamEvent.toolStart("req-1", "calculator"));
+        service.onChatStreamEvent(ChatStreamEvent.toolEnd("req-1", "calculator", 12));
 
         assertThatCode(() -> service.createEmitter("req-1", "user-a"))
             .doesNotThrowAnyException();

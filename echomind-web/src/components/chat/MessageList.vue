@@ -41,6 +41,9 @@
           <div v-if="message.skillResults?.length" class="skill-result-line">
             Skills: {{ message.skillResults.join(', ') }}
           </div>
+          <div v-if="message.toolStatus" class="tool-status-line">
+            {{ message.toolStatus }}
+          </div>
         </div>
       </article>
     </div>

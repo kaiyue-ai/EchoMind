@@ -15,7 +15,13 @@ public class TeamRiskPolicy {
 
     private static final List<String> HIGH_RISK_KEYWORDS = List.of(
         "风险", "安全", "应急", "医疗", "保险", "天气", "合规", "预算", "费用", "人员协调",
-        "risk", "safety", "emergency", "medical", "insurance", "weather", "budget", "compliance"
+        "risk", "safety", "emergency", "medical", "insurance", "weather", "budget", "compliance",
+         "紧急", "事故", "伤亡", "中毒", "食物中毒", "过敏",
+    "法律", "合同", "纠纷", "投诉", "取消", "退款",
+    "交通", "大巴", "事故", "超载", "疲劳驾驶",
+    "场地安全", "消防", "逃生", "踩踏",
+    "天气预警", "暴雨", "台风", "高温", "严寒", "雷暴",
+    "取消险", "延误", "退款政策", "违约", "罚款"
     );
 
     public TeamRiskDecision decide(PlannedStep step) {

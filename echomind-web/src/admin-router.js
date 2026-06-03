@@ -41,6 +41,12 @@ const routes = [
     meta: { title: '用户 Token', subtitle: '按客户端用户和模型汇总 Token 消费' }
   },
   {
+    path: '/provider-budgets',
+    name: 'AdminProviderBudgets',
+    component: lazyView(() => import('./views/ProviderTokenBudgetView.vue'), 'ProviderTokenBudgetView'),
+    meta: { title: 'Provider 预算', subtitle: '按模型提供商配置平台级 Token 总预算和预警阈值' }
+  },
+  {
     path: '/client-users',
     name: 'AdminClientUsers',
     component: lazyView(() => import('./views/ClientUserManagementView.vue'), 'ClientUserManagementView'),

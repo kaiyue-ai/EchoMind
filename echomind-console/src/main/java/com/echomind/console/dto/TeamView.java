@@ -9,6 +9,7 @@ import java.util.List;
  */
 public record TeamView(
     String teamId,
+    String ownerUserId,
     String name,
     List<String> roles,
     List<TeamMemberView> members
@@ -19,6 +20,7 @@ public record TeamView(
             .toList();
         return new TeamView(
             team.teamId(),
+            team.ownerUserId(),
             team.name(),
             members.stream().map(TeamMemberView::role).distinct().toList(),
             members

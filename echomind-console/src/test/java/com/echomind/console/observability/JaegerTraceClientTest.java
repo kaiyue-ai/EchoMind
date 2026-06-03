@@ -51,7 +51,17 @@ class JaegerTraceClientTest {
                             "startTime": 1000,
                             "duration": 200,
                             "processID": "p1",
-                            "tags": [],
+                            "tags": [
+                              {"key":"echomind.user_id","type":"string","value":"user-a"},
+                              {"key":"echomind.username","type":"string","value":"alice"},
+                              {"key":"echomind.agent_id","type":"string","value":"agent-a"},
+                              {"key":"echomind.session_id","type":"string","value":"session-a"},
+                              {"key":"echomind.model_id","type":"string","value":"deepseek:deepseek-v4-flash"},
+                              {"key":"echomind.prompt_tokens","type":"int64","value":12},
+                              {"key":"echomind.completion_tokens","type":"int64","value":4},
+                              {"key":"echomind.total_tokens","type":"int64","value":16},
+                              {"key":"echomind.usage_source","type":"string","value":"PROVIDER"}
+                            ],
                             "logs": []
                           },
                           {
@@ -88,6 +98,10 @@ class JaegerTraceClientTest {
             assertThat(response.trace().spans()).hasSize(3);
             assertThat(response.trace().durationMicros()).isEqualTo(400);
             assertThat(response.trace().externalUrl()).isEqualTo("http://jaeger.example/trace/0123456789abcdef0123456789abcdef");
+            assertThat(response.trace().fields().userId()).isEqualTo("user-a");
+            assertThat(response.trace().fields().modelId()).isEqualTo("deepseek:deepseek-v4-flash");
+            assertThat(response.trace().fields().totalTokens()).isEqualTo(16);
+            assertThat(response.trace().spans().get(1).fields().promptTokens()).isEqualTo(12);
             assertThat(response.trace().spans().get(2).parentSpanId()).isEqualTo("aaaa");
             assertThat(server.takeRequest().getPath()).isEqualTo("/api/traces/0123456789abcdef0123456789abcdef");
         }
@@ -97,9 +111,7 @@ class JaegerTraceClientTest {
     void searchDefaultsToBusinessTraceScope() throws IOException, InterruptedException {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(json(traceSearchResponse("11111111111111111111111111111111", "echomind.chat.sync", 1_000)));
-            server.enqueue(json(emptyTraceSearchResponse()));
-            server.enqueue(json(emptyTraceSearchResponse()));
-            server.enqueue(json(emptyTraceSearchResponse()));
+            enqueueEmptyBusinessResponses(server, 1);
 
             JaegerTraceClient client = new JaegerTraceClient(enabledProperties(server), new ObjectMapper());
 
@@ -109,9 +121,8 @@ class JaegerTraceClientTest {
             assertThat(response.traces().get(0).operationName()).isEqualTo("echomind.chat.sync");
             assertThat(response.traces().get(0).spanCount()).isEqualTo(2);
             assertThat(server.takeRequest().getPath()).contains("operation=echomind.chat.sync");
-            assertThat(server.takeRequest().getPath()).contains("operation=echomind.chat.stream");
             assertThat(server.takeRequest().getPath()).contains("operation=echomind.chat.submit");
-            assertThat(server.takeRequest().getPath()).contains("operation=echomind.chat.consume");
+            assertThat(server.takeRequest().getPath()).contains("operation=echomind.chat.stream.consume");
         }
     }
 
@@ -134,9 +145,7 @@ class JaegerTraceClientTest {
     void searchAddsUserIdTagsWhenProvided() throws IOException, InterruptedException {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(json(traceSearchResponse("33333333333333333333333333333333", "echomind.chat.sync", 3_000)));
-            server.enqueue(json(emptyTraceSearchResponse()));
-            server.enqueue(json(emptyTraceSearchResponse()));
-            server.enqueue(json(emptyTraceSearchResponse()));
+            enqueueEmptyBusinessResponses(server, 1);
 
             JaegerTraceClient client = new JaegerTraceClient(enabledProperties(server), new ObjectMapper());
 
@@ -177,6 +186,12 @@ class JaegerTraceClientTest {
         return new MockResponse()
             .setHeader("Content-Type", "application/json")
             .setBody(body);
+    }
+
+    private void enqueueEmptyBusinessResponses(MockWebServer server, int alreadyQueued) {
+        for (int i = alreadyQueued; i < 11; i++) {
+            server.enqueue(json(emptyTraceSearchResponse()));
+        }
     }
 
     private String emptyTraceSearchResponse() {

@@ -2,12 +2,7 @@ package com.echomind.skill.api;
 
 import java.util.concurrent.CompletableFuture;
 
-/**
- * EchoMind Skill 插件的最小契约。
- *
- * <p>实现类通常打包成独立 JAR，由平台通过隔离 ClassLoader 加载。插件侧只应依赖
- * {@code echomind-skill-api}，避免耦合平台内部模块。</p>
- */
+// skill的接口
 public interface Skill {
 
     /** 返回技能身份、参数 Schema、依赖和标签。 */

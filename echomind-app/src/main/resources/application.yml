@@ -82,10 +82,10 @@ echomind:
       concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_CONSUMERS:20}
       max-concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_MAX_CONSUMERS:20}
       prefetch: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_PREFETCH:1}
-    chat-response:
-      concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_CONSUMERS:4}
-      max-concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_MAX_CONSUMERS:4}
-      prefetch: ${ECHOMIND_RABBITMQ_CHAT_RESPONSE_PREFETCH:10}
+    chat-stream-event:
+      concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_STREAM_EVENT_CONSUMERS:${ECHOMIND_RABBITMQ_CHAT_RESPONSE_CONSUMERS:4}}
+      max-concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_STREAM_EVENT_MAX_CONSUMERS:${ECHOMIND_RABBITMQ_CHAT_RESPONSE_MAX_CONSUMERS:4}}
+      prefetch: ${ECHOMIND_RABBITMQ_CHAT_STREAM_EVENT_PREFETCH:${ECHOMIND_RABBITMQ_CHAT_RESPONSE_PREFETCH:50}}
   observability:
     exporter:
       traces-exporter: ${OTEL_TRACES_EXPORTER:none}
@@ -184,12 +184,9 @@ echomind:
     summary-max-chars: 3000
     summary-refresh-interval: 6
     knowledge-top-k: ${ECHOMIND_MEMORY_KNOWLEDGE_TOP_K:4}
-    knowledge-chunk-size: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_SIZE:1000}
-    knowledge-chunk-overlap: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_OVERLAP:150}
+    knowledge-chunk-size: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_SIZE:500}
+    knowledge-chunk-overlap-ratio: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_OVERLAP_RATIO:0.15}
     knowledge-min-vector-similarity: ${ECHOMIND_MEMORY_KNOWLEDGE_MIN_VECTOR_SIMILARITY:0.25}
-    knowledge-vector-weight: ${ECHOMIND_MEMORY_KNOWLEDGE_VECTOR_WEIGHT:0.75}
-    knowledge-keyword-weight: ${ECHOMIND_MEMORY_KNOWLEDGE_KEYWORD_WEIGHT:0.25}
-    knowledge-keyword-candidate-limit: ${ECHOMIND_MEMORY_KNOWLEDGE_KEYWORD_CANDIDATE_LIMIT:40}
     knowledge-ocr-enabled: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_ENABLED:true}
     knowledge-ocr-language: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_LANGUAGE:chi_sim+eng}
     knowledge-ocr-dpi: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_DPI:200}
@@ -205,6 +202,8 @@ echomind:
     queue-name: ${USER_MEMORY_QUEUE_NAME:echomind.user-memory.requests}
     top-k: ${USER_MEMORY_TOP_K:5}
     min-confidence: ${USER_MEMORY_MIN_CONFIDENCE:0.3}
+    retrieval-min-similarity: ${USER_MEMORY_RETRIEVAL_MIN_SIMILARITY:0.40}
+    merge-min-similarity: ${USER_MEMORY_MERGE_MIN_SIMILARITY:${USER_MEMORY_MIN_SIMILARITY:0.65}}
     profile-key-prefix: ${USER_MEMORY_PROFILE_KEY_PREFIX:echomind:user-profile:snapshot:}
     existing-profile-limit: ${USER_MEMORY_EXISTING_PROFILE_LIMIT:30}
     max-extracted-entries: ${USER_MEMORY_MAX_EXTRACTED_ENTRIES:10}

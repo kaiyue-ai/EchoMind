@@ -97,6 +97,7 @@
             <div class="trace-list-meta">
               <span>{{ formatDuration(trace.durationMicros) }}</span>
               <span>{{ trace.spanCount }} spans</span>
+              <span v-if="hasTokenUsage(trace.fields)">{{ formatTokenTotal(trace.fields) }}</span>
               <span>{{ formatTime(trace.startTimeMicros) }}</span>
             </div>
           </button>
@@ -134,6 +135,26 @@
               <span>开始时间</span>
               <strong>{{ formatTime(selectedTrace.startTimeMicros) }}</strong>
             </div>
+            <div>
+              <span>用户</span>
+              <strong>{{ traceUserLabel(selectedTrace.fields) }}</strong>
+            </div>
+            <div>
+              <span>Agent</span>
+              <strong>{{ fieldValue(selectedTrace.fields?.agentId) }}</strong>
+            </div>
+            <div>
+              <span>会话</span>
+              <strong>{{ fieldValue(selectedTrace.fields?.sessionId) }}</strong>
+            </div>
+            <div>
+              <span>模型</span>
+              <strong>{{ fieldValue(selectedTrace.fields?.modelId) }}</strong>
+            </div>
+            <div class="token-summary-card">
+              <span>Token</span>
+              <strong>{{ formatTokenUsage(selectedTrace.fields) }}</strong>
+            </div>
           </div>
 
           <div class="span-timeline">
@@ -151,6 +172,12 @@
                 <StatusBadge :tone="span.hasError ? 'danger' : 'neutral'">
                   {{ formatDuration(span.durationMicros) }}
                 </StatusBadge>
+              </div>
+              <div v-if="hasTraceFields(span.fields)" class="span-field-chips">
+                <span v-if="span.fields?.modelId">{{ span.fields.modelId }}</span>
+                <span v-if="span.fields?.userId">user {{ span.fields.userId }}</span>
+                <span v-if="span.fields?.agentId">agent {{ span.fields.agentId }}</span>
+                <span v-if="hasTokenUsage(span.fields)">{{ formatTokenTotal(span.fields) }}</span>
               </div>
               <div class="span-bar-track">
                 <div :class="['span-bar', { error: span.hasError }]"></div>
@@ -329,6 +356,49 @@ function formatTime(micros) {
   const value = Number(micros || 0)
   if (!value) return '-'
   return new Date(Math.floor(value / 1000)).toLocaleString()
+}
+
+function traceUserLabel(fields) {
+  const userId = fieldValue(fields?.userId)
+  const username = fieldValue(fields?.username)
+  if (userId === '-' && username === '-') return '-'
+  if (username === '-' || username === userId) return userId
+  return `${username} / ${userId}`
+}
+
+function fieldValue(value) {
+  return value === null || value === undefined || value === '' ? '-' : String(value)
+}
+
+function hasTraceFields(fields) {
+  if (!fields) return false
+  return Boolean(
+    fields.userId ||
+      fields.username ||
+      fields.accountType ||
+      fields.agentId ||
+      fields.sessionId ||
+      fields.modelId ||
+      hasTokenUsage(fields)
+  )
+}
+
+function hasTokenUsage(fields) {
+  return fields?.totalTokens !== null && fields?.totalTokens !== undefined
+}
+
+function formatTokenTotal(fields) {
+  if (!hasTokenUsage(fields)) return '-'
+  return `${formatNumber(fields.totalTokens)} tokens`
+}
+
+function formatTokenUsage(fields) {
+  if (!hasTokenUsage(fields)) return '-'
+  return `${formatNumber(fields.promptTokens || 0)} / ${formatNumber(fields.completionTokens || 0)} / ${formatNumber(fields.totalTokens || 0)}`
+}
+
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString()
 }
 
 function formatSpanMeta(span) {

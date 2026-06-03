@@ -1,11 +1,11 @@
 package com.echomind.console.service;
 
 import com.echomind.console.dto.McpToolCallRequest;
-import com.echomind.agent.tool.ExternalMcpRuntimeService;
-import com.echomind.agent.tool.ExternalMcpServerConfig;
-import com.echomind.agent.tool.ExternalMcpServerStatus;
-import com.echomind.mcp.tool.ToolResult;
-import com.echomind.mcp.tool.ToolSpec;
+import com.echomind.agent.tool.mcp.ExternalMcpRuntimeService;
+import com.echomind.agent.tool.mcp.ExternalMcpServerConfig;
+import com.echomind.agent.tool.mcp.ExternalMcpServerStatus;
+import com.echomind.mcp.ToolResult;
+import com.echomind.mcp.ToolSpec;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;

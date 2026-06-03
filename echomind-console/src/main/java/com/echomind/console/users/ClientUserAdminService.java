@@ -1,10 +1,11 @@
 package com.echomind.console.users;
 
 import com.echomind.console.auth.UserAccountEntity;
-import com.echomind.console.auth.UserAccountRepository;
+import com.echomind.console.auth.UserAccountMapper;
 import com.echomind.console.auth.UserAccountStatus;
-import com.echomind.console.quota.TokenQuotaRepository;
-import com.echomind.console.usage.AiCallUsageRepository;
+import com.echomind.console.quota.TokenQuotaMapper;
+import com.echomind.console.quota.TokenQuotaUsageMapper;
+import com.echomind.console.usage.AiCallUsageMapper;
 import com.echomind.console.usage.UsageDtos.TokenTotals;
 import com.echomind.console.users.ClientUserAdminDtos.ClientUserDeletionStats;
 import com.echomind.console.users.ClientUserAdminDtos.ClientUserListResponse;
@@ -12,8 +13,8 @@ import com.echomind.console.users.ClientUserAdminDtos.ClientUserSummary;
 import com.echomind.console.users.ClientUserAdminDtos.ClientUserView;
 import com.echomind.console.users.ClientUserAdminDtos.DeleteClientUserResponse;
 import com.echomind.console.users.ClientUserAdminDtos.UpdateClientUserStatusRequest;
-import com.echomind.memory.persistence.ChatMessageRepository;
-import com.echomind.memory.persistence.ChatSessionRepository;
+import com.echomind.memory.persistence.mapper.ChatMessageMapper;
+import com.echomind.memory.persistence.mapper.ChatSessionMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,22 +29,22 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ClientUserAdminService {
 
-    private final UserAccountRepository userRepository;
-    private final ChatSessionRepository sessionRepository;
-    private final ChatMessageRepository messageRepository;
-    private final AiCallUsageRepository usageRepository;
-    private final TokenQuotaRepository quotaRepository;
-    private final MemoryEmbeddingCleanupRepository memoryEmbeddingRepository;
+    private final UserAccountMapper userMapper;
+    private final ChatSessionMapper sessionMapper;
+    private final ChatMessageMapper messageMapper;
+    private final AiCallUsageMapper usageMapper;
+    private final TokenQuotaMapper quotaMapper;
+    private final TokenQuotaUsageMapper quotaUsageMapper;
     private final ClientUserRedisCleanupService redisCleanupService;
 
     @Transactional(readOnly = true)
     public ClientUserListResponse list() {
-        Map<String, Long> sessionCounts = countMap(sessionRepository.countByUser());
-        Map<String, Long> messageCounts = countMap(messageRepository.countByUser());
+        Map<String, Long> sessionCounts = countMap(sessionMapper.countByUser());
+        Map<String, Long> messageCounts = countMap(messageMapper.countByUser());
         Map<String, TokenTotals> tokenTotals = new HashMap<>();
         long totalSessions = 0;
         long totalMessages = 0;
-        for (Object[] row : usageRepository.totalsByUser()) {
+        for (Object[] row : usageMapper.totalsByUser()) {
             tokenTotals.put(String.valueOf(row[0]), totals(row, 1));
         }
         for (Long count : sessionCounts.values()) {
@@ -52,7 +53,7 @@ public class ClientUserAdminService {
         for (Long count : messageCounts.values()) {
             totalMessages += count == null ? 0 : count;
         }
-        List<UserAccountEntity> accounts = userRepository.findAll();
+        List<UserAccountEntity> accounts = userMapper.selectAll();
         List<ClientUserView> users = accounts.stream()
             .map(user -> view(
                 user,
@@ -72,7 +73,7 @@ public class ClientUserAdminService {
             accounts.size() - activeUsers,
             totalSessions,
             totalMessages,
-            totals(usageRepository.globalTotals())
+            totals(usageMapper.globalTotals())
         );
         return new ClientUserListResponse(summary, users);
     }
@@ -83,57 +84,44 @@ public class ClientUserAdminService {
         if (status == null) {
             throw new IllegalArgumentException("status is required");
         }
-        UserAccountEntity user = userRepository.findById(userId)
+        UserAccountEntity user = userMapper.selectOptionalById(userId)
             .orElseThrow(() -> new IllegalArgumentException("客户端用户不存在"));
         user.setStatus(status);
-        UserAccountEntity saved = userRepository.save(user);
+        UserAccountEntity saved = userMapper.upsertById(user);
         return view(
             saved,
-            sessionRepository.countByUserId(userId),
-            messageRepository.countByUserId(userId),
-            totals(usageRepository.totalsByUserId(userId))
+            sessionMapper.countByUserId(userId),
+            messageMapper.countByUserId(userId),
+            totals(usageMapper.totalsByUserId(userId))
         );
     }
 
     @Transactional
     public DeleteClientUserResponse delete(String userId) {
-        UserAccountEntity user = userRepository.findById(userId)
+        UserAccountEntity user = userMapper.selectOptionalById(userId)
             .orElseThrow(() -> new IllegalArgumentException("客户端用户不存在"));
-        List<String> sessionIds = sessionRepository.findSessionIdsByUserId(userId);
-        List<Long> messageIds = messageRepository.findIdsByUserId(userId);
-        long sessions = sessionRepository.countByUserId(userId);
-        long messages = messageRepository.countByUserId(userId);
-        long usageRows = usageRepository.countByUserId(userId);
-        long quotaRows = quotaRepository.existsById(userId) ? 1 : 0;
-        long memoryEmbeddings = cleanupMemoryEmbeddings(sessionIds, messageIds);
-        usageRepository.deleteByUserId(userId);
+        List<String> sessionIds = sessionMapper.selectSessionIdsByUserId(userId);
+        long sessions = sessionMapper.countByUserId(userId);
+        long messages = messageMapper.countByUserId(userId);
+        long usageRows = usageMapper.countByUserId(userId);
+        long quotaRows = (quotaMapper.existsById(userId) ? 1 : 0) + quotaUsageMapper.countByUserId(userId);
+        usageMapper.deleteByUserId(userId);
         if (quotaRows > 0) {
-            quotaRepository.deleteById(userId);
+            quotaMapper.deleteById(userId);
+            quotaUsageMapper.deleteByUserId(userId);
         }
-        messageRepository.deleteByUserId(userId);
-        sessionRepository.deleteByUserId(userId);
-        userRepository.delete(user);
+        messageMapper.deleteByUserId(userId);
+        sessionMapper.deleteByUserId(userId);
+        userMapper.deleteEntity(user);
         long redisKeys = redisCleanupService.cleanup(userId, sessionIds);
         ClientUserDeletionStats stats = new ClientUserDeletionStats(
             sessions,
             messages,
             usageRows,
             quotaRows,
-            redisKeys,
-            memoryEmbeddings
+            redisKeys
         );
         return new DeleteClientUserResponse(user.getUserId(), user.getUsername(), stats);
-    }
-
-    private long cleanupMemoryEmbeddings(List<String> sessionIds, List<Long> messageIds) {
-        long deleted = 0;
-        if (sessionIds != null && !sessionIds.isEmpty()) {
-            deleted += memoryEmbeddingRepository.deleteBySessionIds(sessionIds);
-        }
-        if (messageIds != null && !messageIds.isEmpty()) {
-            deleted += memoryEmbeddingRepository.deleteByMessageIds(messageIds);
-        }
-        return deleted;
     }
 
     private ClientUserView view(UserAccountEntity user, long sessions, long messages, TokenTotals totals) {

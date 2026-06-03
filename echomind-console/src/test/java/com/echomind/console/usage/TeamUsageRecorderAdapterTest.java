@@ -1,0 +1,61 @@
+package com.echomind.console.usage;
+
+import com.echomind.agent.pipeline.PipelineContext;
+import com.echomind.agent.team.runtime.TeamUsageQuotaExceededException;
+import com.echomind.common.model.TokenUsage;
+import com.echomind.console.alerts.AlertService;
+import com.echomind.console.auth.AuthUser;
+import com.echomind.console.quota.TokenQuotaExceededException;
+import com.echomind.console.quota.TokenQuotaService;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+class TeamUsageRecorderAdapterTest {
+
+    @Test
+    void recordsTeamUsageForRunCreator() {
+        AiCallUsageService usageService = mock(AiCallUsageService.class);
+        TokenQuotaService quotaService = mock(TokenQuotaService.class);
+        AlertService alertService = mock(AlertService.class);
+        TeamUsageRecorderAdapter adapter = new TeamUsageRecorderAdapter(usageService, quotaService, alertService);
+        PipelineContext ctx = new PipelineContext();
+        ctx.setTraceId("trace-a");
+        ctx.setModelId("mock:model");
+        ctx.setTokenUsage(new TokenUsage(7, 3, 10));
+        AiCallUsageEntity usage = new AiCallUsageEntity();
+        usage.setTraceId("trace-a");
+        usage.setAgentId("planner");
+        usage.setSessionId("session-a");
+        when(usageService.recordSuccess(eq("echomind.team.planner"), any(AuthUser.class), eq(ctx), eq(100L)))
+            .thenReturn(usage);
+
+        adapter.record("echomind.team.planner", "user-a", "planner", "session-a", ctx, 100L, false, null);
+
+        verify(usageService).recordSuccess(eq("echomind.team.planner"), eq(new AuthUser("user-a", "user-a", true)),
+            eq(ctx), eq(100L));
+        verifyNoInteractions(alertService);
+    }
+
+    @Test
+    void translatesQuotaExceededToTeamRuntimeException() {
+        AiCallUsageService usageService = mock(AiCallUsageService.class);
+        TokenQuotaService quotaService = mock(TokenQuotaService.class);
+        AlertService alertService = mock(AlertService.class);
+        TeamUsageRecorderAdapter adapter = new TeamUsageRecorderAdapter(usageService, quotaService, alertService);
+        AuthUser owner = new AuthUser("user-a", "user-a", true);
+        TokenQuotaExceededException quotaError = new TokenQuotaExceededException("user-a", "daily", 100, 100);
+        org.mockito.Mockito.doThrow(quotaError).when(quotaService).assertAllowed(owner);
+
+        assertThatThrownBy(() -> adapter.assertAllowed("user-a", "planner", "session-a"))
+            .isInstanceOf(TeamUsageQuotaExceededException.class)
+            .hasMessageContaining("Token quota exceeded");
+        verifyNoInteractions(alertService);
+    }
+}

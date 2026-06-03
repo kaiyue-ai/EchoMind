@@ -33,12 +33,12 @@ class MarketplaceServiceTest {
 
     @Test
     void restoreFromDatabaseHydratesMissingMarketplaceCacheFromStoredJarAndKeepsDisabledState() throws Exception {
-        SkillEntityRepository repository = mock(SkillEntityRepository.class);
+        SkillMapper mapper = mock(SkillMapper.class);
         SkillJarLoader loader = mock(SkillJarLoader.class);
         SkillRegistry registry = mock(SkillRegistry.class);
         Path objectsDir = tempDir.resolve("objects");
         MarketplaceService service = new MarketplaceService(
-            repository,
+            mapper,
             loader,
             registry,
             tempDir.resolve("marketplace").toString(),
@@ -48,7 +48,7 @@ class MarketplaceServiceTest {
         Path storedJar = objectsDir.resolve("skills/upload-probe/1.0.0/upload-probe-1.0.0.jar");
         Files.createDirectories(storedJar.getParent());
         Files.writeString(storedJar, "jar-bytes");
-        SkillRepository entity = new SkillRepository();
+        SkillEntity entity = new SkillEntity();
         entity.setName("upload-probe");
         entity.setVersion("1.0.0");
         entity.setState(SkillState.DISABLED);
@@ -57,7 +57,7 @@ class MarketplaceServiceTest {
         Skill skill = new TestSkill("upload-probe", "1.0.0");
         SkillClassLoader classLoader = mock(SkillClassLoader.class);
         Path cachedJar = tempDir.resolve("marketplace/upload-probe-1.0.0.jar");
-        when(repository.findAll()).thenReturn(List.of(entity));
+        when(mapper.selectAll()).thenReturn(List.of(entity));
         when(registry.listAll()).thenReturn(List.of());
         when(loader.load(eq(cachedJar))).thenReturn(new SkillJarLoader.SkillLoadResult(skill, classLoader, cachedJar));
 
@@ -70,10 +70,10 @@ class MarketplaceServiceTest {
 
     @Test
     void deleteByDatabaseIdUnregistersRuntimeSkillIdAndRemovesStoredJar() throws Exception {
-        SkillEntityRepository repository = mock(SkillEntityRepository.class);
+        SkillMapper mapper = mock(SkillMapper.class);
         SkillRegistry registry = mock(SkillRegistry.class);
         MarketplaceService service = new MarketplaceService(
-            repository,
+            mapper,
             mock(SkillJarLoader.class),
             registry,
             tempDir.resolve("marketplace").toString(),
@@ -81,7 +81,7 @@ class MarketplaceServiceTest {
         );
 
         Path jar = Files.createTempFile(tempDir, "skill-", ".jar");
-        SkillRepository entity = new SkillRepository();
+        SkillEntity entity = new SkillEntity();
         entity.setId("db-id");
         entity.setName("upload-probe");
         entity.setVersion("1.0.0");
@@ -89,7 +89,7 @@ class MarketplaceServiceTest {
         Files.createDirectories(tempDir.resolve("objects/skills/upload-probe/1.0.0"));
         Files.copy(jar, tempDir.resolve("objects/skills/upload-probe/1.0.0/upload-probe-1.0.0.jar"));
 
-        when(repository.findById("db-id")).thenReturn(Optional.of(entity));
+        when(mapper.selectOptionalById("db-id")).thenReturn(Optional.of(entity));
 
         Optional<String> deletedSkillId = service.delete("db-id");
 
@@ -97,15 +97,15 @@ class MarketplaceServiceTest {
         assertThat(Files.exists(tempDir.resolve("objects/skills/upload-probe/1.0.0/upload-probe-1.0.0.jar")))
             .isFalse();
         verify(registry).unregister("upload-probe@1.0.0");
-        verify(repository).deleteById("db-id");
+        verify(mapper).deleteById("db-id");
     }
 
     @Test
-    void deleteBySkillIdFindsRepositoryRecordByNameAndVersion() throws Exception {
-        SkillEntityRepository repository = mock(SkillEntityRepository.class);
+    void deleteBySkillIdSelectsMapperRecordByNameAndVersion() throws Exception {
+        SkillMapper mapper = mock(SkillMapper.class);
         SkillRegistry registry = mock(SkillRegistry.class);
         MarketplaceService service = new MarketplaceService(
-            repository,
+            mapper,
             mock(SkillJarLoader.class),
             registry,
             tempDir.resolve("marketplace").toString(),
@@ -113,20 +113,20 @@ class MarketplaceServiceTest {
         );
 
         Path jar = Files.createTempFile(tempDir, "skill-", ".jar");
-        SkillRepository entity = new SkillRepository();
+        SkillEntity entity = new SkillEntity();
         entity.setId("db-id");
         entity.setName("upload-probe");
         entity.setVersion("1.0.0");
         entity.setJarPath(jar.toString());
 
-        when(repository.findById("upload-probe@1.0.0")).thenReturn(Optional.empty());
-        when(repository.findByNameAndVersion("upload-probe", "1.0.0")).thenReturn(Optional.of(entity));
+        when(mapper.selectOptionalById("upload-probe@1.0.0")).thenReturn(Optional.empty());
+        when(mapper.selectByNameAndVersion("upload-probe", "1.0.0")).thenReturn(Optional.of(entity));
 
         Optional<String> deletedSkillId = service.delete("upload-probe@1.0.0");
 
         assertThat(deletedSkillId).contains("upload-probe@1.0.0");
         verify(registry).unregister("upload-probe@1.0.0");
-        verify(repository).deleteById("db-id");
+        verify(mapper).deleteById("db-id");
     }
 
     private record TestSkill(String name, String version) implements Skill {

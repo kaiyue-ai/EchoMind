@@ -14,10 +14,17 @@ exporters:
     endpoint: jaeger:4317
     tls:
       insecure: true
+  file/traces:
+    path: /var/lib/otel-traces/traces.json
+    format: json
+    rotation:
+      max_megabytes: 64
+      max_days: 7
+      max_backups: 20
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlp/jaeger]
+      exporters: [otlp/jaeger, file/traces]

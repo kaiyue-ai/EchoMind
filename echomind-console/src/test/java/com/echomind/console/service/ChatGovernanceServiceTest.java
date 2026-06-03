@@ -8,8 +8,6 @@ import com.echomind.console.sensitive.SensitiveDataService;
 import com.echomind.console.usage.AiCallUsageService;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -18,6 +16,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class ChatGovernanceServiceTest {
@@ -95,14 +94,12 @@ class ChatGovernanceServiceTest {
         AuthUser user = new AuthUser("user-a", "alice", true);
         PipelineContext ctx = context();
         ctx.setFinalResponse("工具操作失败: 参数不完整");
-        ctx.getAttributes().put("modelUsageNotApplicable", true);
-        when(quotaService.warningSignals(user)).thenReturn(List.of());
-
+        ctx.getAttributes().put(PipelineContext.ATTR_MODEL_USAGE_NOT_APPLICABLE, true);
         assertThat(service.recordSuccessAndWarnings(io.opentelemetry.api.trace.Span.getInvalid(),
             "echomind.chat.sync", user, ctx, System.nanoTime())).isNull();
 
         verify(usageService, never()).recordSuccess(anyString(), any(), any(), anyLong());
-        verify(alertService).emitQuotaWarning(user, "trace-a", "agent-a", "session-a", List.of());
+        verifyNoInteractions(alertService);
     }
 
     private PipelineContext context() {

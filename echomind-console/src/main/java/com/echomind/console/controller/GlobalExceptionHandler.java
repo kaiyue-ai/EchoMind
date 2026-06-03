@@ -1,6 +1,7 @@
 package com.echomind.console.controller;
 
 import com.echomind.common.exception.EchoMindException;
+import com.echomind.console.budget.ProviderTokenBudgetExceededException;
 import com.echomind.console.quota.TokenQuotaExceededException;
 import com.echomind.console.sensitive.SensitiveDataBlockedException;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,18 @@ public class GlobalExceptionHandler {
             .body(Map.of(
                 "error", "Token 配额已超限",
                 "userId", e.userId(),
+                "scope", e.scope(),
+                "usedTokens", e.usedTokens(),
+                "limitTokens", e.limitTokens()
+            ));
+    }
+
+    @ExceptionHandler(ProviderTokenBudgetExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleProviderBudgetExceeded(ProviderTokenBudgetExceededException e) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+            .body(Map.of(
+                "error", "Provider Token 预算已超限",
+                "providerId", e.providerId(),
                 "scope", e.scope(),
                 "usedTokens", e.usedTokens(),
                 "limitTokens", e.limitTokens()

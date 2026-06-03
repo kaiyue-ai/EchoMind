@@ -43,27 +43,6 @@ public class MemoryManager {
         this.summaryRefreshInterval = summaryRefreshInterval;
     }
 
-    /**
-     * 保存消息，兼容旧调用方。
-     *
-     * @param memoryKey 会话 ID
-     * @param message   消息
-     */
-    public void addMessage(String memoryKey, AgentMessage message) {
-        addMessage(memoryKey, null, message);
-    }
-
-    /** 保存消息到 MySQL 并刷新 Redis 近期缓存。只允许异步消费者调用。 */
-    public void addMessage(String memoryKey, String agentId, AgentMessage message) {
-        if (isBlank(memoryKey) || message == null) {
-            return;
-        }
-        chatStore.saveMessage("default", memoryKey, agentId, message);
-        recentCache.append(memoryKey, message);
-        refreshSummaryIfNeeded("default", memoryKey);
-    }
-
-    /** 保存用户会话消息到 MySQL 并刷新 Redis 近期缓存。只允许异步消费者调用。 */
     public void addMessage(String userId, String memoryKey, String agentId, AgentMessage message) {
         if (isBlank(memoryKey) || message == null) {
             return;
@@ -74,69 +53,30 @@ public class MemoryManager {
         refreshSummaryIfNeeded(normalizeUserId(userId), memoryKey);
     }
 
-    /** 读取 Redis 里的近期消息；缓存空时不回源 MySQL。 */
-    public List<AgentMessage> getRecentMessages(String memoryKey) {
+    private List<AgentMessage> getRecentMessages(String memoryKey) {
         return recentCache.recent(memoryKey);
     }
 
-    /**
-     * 完整历史只从 MySQL 读取。
-     *
-     * @param memoryKey 会话 ID
-     * @return 完整消息历史，按时间升序
-     */
-    public List<AgentMessage> getFullContext(String memoryKey) {
-        return chatStore.loadFullHistory(memoryKey);
-    }
-
-    /** 完整历史只从 MySQL 读取，并按用户隔离。 */
     public List<AgentMessage> getFullContext(String userId, String memoryKey) {
         return chatStore.loadFullHistory(normalizeUserId(userId), memoryKey);
     }
 
-    /**
-     * 构造模型提示词上下文。
-     *
-     * <p>上下文只来自 Redis 最近 N 条消息。当前用户消息由管线最后追加，因此这里不会重复加入。</p>
-     *
-     * @param memoryKey 会话 ID
-     * @return 可直接传给模型的历史上下文
-     */
     public List<AgentMessage> getPromptContext(String memoryKey) {
+        return getPromptContext("default", memoryKey);
+    }
+
+    public List<AgentMessage> getPromptContext(String userId, String memoryKey) {
         List<AgentMessage> result = new ArrayList<>();
-        result.addAll(getRecentMessages(memoryKey));
+        result.addAll(getRecentMessages(memoryKey(userId, memoryKey)));
         return result;
     }
 
-    /** 清除指定会话的全部正式历史和近期缓存。 */
-    public void clearSession(String memoryKey) {
-        recentCache.clear(memoryKey);
-        chatStore.deleteSession(memoryKey);
-    }
-
-    /** 清除指定用户会话的全部正式历史和近期缓存。 */
     public void clearSession(String userId, String memoryKey) {
         String cacheKey = memoryKey(userId, memoryKey);
         recentCache.clear(cacheKey);
         chatStore.deleteSession(normalizeUserId(userId), memoryKey);
     }
 
-    /** 当前会话近期缓存大小。 */
-    public int shortTermSize(String memoryKey) {
-        return recentCache.size(memoryKey);
-    }
-
-    /** 当前近期缓存可见的会话数量。 */
-    public int activeSessionCount() {
-        return recentCache.sessionIds().size();
-    }
-
-    /** 会话列表从 MySQL 读取，确保重启后仍然完整。 */
-    public List<SessionSummary> listSessions() {
-        return chatStore.listSessions();
-    }
-
-    /** 会话列表从 MySQL 读取，并按用户隔离。 */
     public List<SessionSummary> listSessions(String userId) {
         return chatStore.listSessions(normalizeUserId(userId));
     }

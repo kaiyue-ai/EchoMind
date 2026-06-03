@@ -9,9 +9,10 @@ import com.echomind.console.sensitive.SensitiveDtos.SensitiveRuleView;
 import com.echomind.console.sensitive.SensitiveDtos.UpdateSensitiveRulesRequest;
 import io.opentelemetry.api.trace.Span;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.regex.Matcher;
@@ -24,9 +25,10 @@ public class SensitiveDataService {
 
     private static final int SAMPLE_LIMIT = 1000;
 
-    private final SensitiveRuleRepository ruleRepository;
-    private final SensitiveEventRepository eventRepository;
+    private final SensitiveRuleMapper ruleMapper;
+    private final SensitiveEventMapper eventMapper;
     private final AlertService alertService;
+    private final SensitiveRuleCache ruleCache;
 
     @Transactional
     public GovernedText inspectRequest(AuthUser user, String traceId, String agentId, String sessionId, String text) {
@@ -40,8 +42,7 @@ public class SensitiveDataService {
 
     @Transactional
     public SensitiveRuleListResponse listRules() {
-        ensureDefaultRules();
-        return new SensitiveRuleListResponse(ruleRepository.findAll().stream()
+        return new SensitiveRuleListResponse(ruleCache.allRules(this::loadAllRulesWithDefaults).stream()
             .map(this::view)
             .toList());
     }
@@ -57,7 +58,7 @@ public class SensitiveDataService {
                 validatePattern(view.pattern());
                 SensitiveRuleEntity entity = view.ruleId() == null || view.ruleId().isBlank()
                     ? new SensitiveRuleEntity()
-                    : ruleRepository.findById(view.ruleId()).orElseGet(SensitiveRuleEntity::new);
+                    : ruleMapper.selectOptionalById(view.ruleId()).orElseGet(SensitiveRuleEntity::new);
                 entity.setRuleId(blankToNull(view.ruleId()));
                 entity.setRuleName(required(view.ruleName(), "规则名称不能为空"));
                 entity.setPattern(required(view.pattern(), "匹配表达式不能为空"));
@@ -65,16 +66,20 @@ public class SensitiveDataService {
                 entity.setAction(view.action() == null ? SensitiveAction.MASK : view.action());
                 entity.setEnabled(view.enabled());
                 entity.setBuiltIn(view.builtIn());
-                ruleRepository.save(entity);
+                ruleMapper.upsertById(entity);
             }
         }
-        return listRules();
+        List<SensitiveRuleEntity> rules = ruleMapper.selectAll();
+        invalidateRulesAfterCommit();
+        return new SensitiveRuleListResponse(rules.stream()
+            .map(this::view)
+            .toList());
     }
 
     @Transactional(readOnly = true)
     public SensitiveEventListResponse listEvents(Integer limit) {
         int safeLimit = Math.max(1, Math.min(500, limit == null ? 100 : limit));
-        return new SensitiveEventListResponse(eventRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, safeLimit))
+        return new SensitiveEventListResponse(eventMapper.selectLatestOrderByCreatedAtDesc(safeLimit)
             .stream()
             .map(this::eventView)
             .toList());
@@ -82,10 +87,9 @@ public class SensitiveDataService {
 
     private GovernedText inspect(SensitiveDirection direction, AuthUser user, String traceId, String agentId,
                                  String sessionId, String text) {
-        ensureDefaultRules();
         String current = text == null ? "" : text;
         boolean touched = false;
-        for (SensitiveRuleEntity rule : ruleRepository.findByEnabledTrueOrderByRuleNameAsc()) {
+        for (SensitiveRuleEntity rule : ruleCache.enabledRules(this::loadEnabledRulesWithDefaults)) {
             Pattern pattern = compile(rule.getPattern());
             Matcher matcher = pattern.matcher(current);
             int count = 0;
@@ -108,6 +112,16 @@ public class SensitiveDataService {
         return new GovernedText(current, touched);
     }
 
+    private List<SensitiveRuleEntity> loadAllRulesWithDefaults() {
+        ensureDefaultRules();
+        return ruleMapper.selectAll();
+    }
+
+    private List<SensitiveRuleEntity> loadEnabledRulesWithDefaults() {
+        ensureDefaultRules();
+        return ruleMapper.selectEnabledOrderByRuleNameAsc();
+    }
+
     private SensitiveEventEntity recordEvent(SensitiveDirection direction, AuthUser user, String traceId, String agentId,
                                              String sessionId, SensitiveRuleEntity rule, int count, String sample) {
         AuthUser owner = user == null ? AuthUser.DEFAULT : user;
@@ -123,14 +137,28 @@ public class SensitiveDataService {
         event.setAction(rule.getAction());
         event.setMatchCount(count);
         event.setSample(truncate(sample, SAMPLE_LIMIT));
-        return eventRepository.save(event);
+        return eventMapper.upsertById(event);
     }
 
     private void ensureDefaultRules() {
-        if (ruleRepository.count() > 0) {
+        if (ruleMapper.selectCountAll() > 0) {
             return;
         }
-        defaultRules().forEach(ruleRepository::save);
+        defaultRules().forEach(ruleMapper::upsertById);
+        invalidateRulesAfterCommit();
+    }
+
+    private void invalidateRulesAfterCommit() {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            ruleCache.invalidateRules();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                ruleCache.invalidateRules();
+            }
+        });
     }
 
     private List<SensitiveRuleEntity> defaultRules() {

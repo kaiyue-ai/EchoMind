@@ -1,11 +1,10 @@
 package com.echomind.agent.team.store;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
-import jakarta.persistence.Table;
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -14,34 +13,27 @@ import java.time.Instant;
 /**
  * Agent Team 定义。团队配置是 MySQL 事实来源。
  */
-@Entity
-@Table(name = "echomind_agent_teams")
+@TableName("echomind_agent_teams")
 @Getter
 @Setter
 public class TeamEntity {
 
-    @Id
-    @Column(name = "team_id", length = 128)
+    @TableId(value = "team_id", type = IdType.INPUT)
+    // 团队id
     private String teamId;
 
-    @Column(nullable = false, length = 255)
+    @TableField("owner_user_id")
+    // 团队所属用户
+    private String ownerUserId = "default";
+
+    // 团队名称
     private String name;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
+    // 创建时间
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private Instant createdAt;
 
-    @Column(name = "updated_at", nullable = false)
+    // 更新时间
+    @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private Instant updatedAt;
-
-    @PrePersist
-    void prePersist() {
-        Instant now = Instant.now();
-        createdAt = now;
-        updatedAt = now;
-    }
-
-    @PreUpdate
-    void preUpdate() {
-        updatedAt = Instant.now();
-    }
 }

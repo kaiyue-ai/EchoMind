@@ -202,6 +202,7 @@ function sendMessage() {
   const streamId = ++streamSerial
   let firstToken = true
   let pendingLeadingToken = ''
+  let activeToolName = ''
   try {
     activeStream.value = api.chat.stream(
       selectedAgent.value,
@@ -242,11 +243,31 @@ function sendMessage() {
           sessionId.value = meta.sessionId
           router.replace({ path: '/chat', query: { sessionId: meta.sessionId } })
         }
+      },
+      (toolEvent) => {
+        if (!isActiveStream(streamId)) return
+        if (toolEvent.type === 'start') {
+          activeToolName = toolEvent.toolName || '工具'
+        } else if (toolEvent.type === 'end' && (!toolEvent.toolName || toolEvent.toolName === activeToolName)) {
+          activeToolName = ''
+        }
+        updateToolStatus(activeToolName)
       }
     )
   } catch (error) {
     handleStreamError(error, streamId)
   }
+}
+
+function updateToolStatus(toolName) {
+  const idx = thinkingMsgIndex.value
+  if (idx < 0 || idx >= messages.value.length || messages.value[idx]?.role !== 'assistant') return
+  const status = toolName ? `正在调用 ${toolName}...` : ''
+  messages.value[idx] = {
+    ...messages.value[idx],
+    toolStatus: status
+  }
+  nextTick(() => messageListRef.value?.followIfNearBottom('auto'))
 }
 
 function finishStream(result, streamId = streamSerial) {

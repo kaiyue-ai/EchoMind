@@ -41,7 +41,7 @@ public class TravelPlanningSkill implements Skill {
             ),
             List.of(),
             "EchoMind",
-            List.of("travel", "planning", "route", "budget", "packing", "visa", "direct-result", "旅行", "行程", "预算"),
+            List.of("travel", "planning", "route", "budget", "packing", "visa", "旅行", "行程", "预算"),
             List.of("旅行规划", "行程规划", "旅游路线", "多城市路线", "预算优化", "打包清单", "签证时间表", "自由行", "travel planning"),
             Map.of(
                 "travel", List.of("旅行", "旅游", "自由行", "出游", "trip"),

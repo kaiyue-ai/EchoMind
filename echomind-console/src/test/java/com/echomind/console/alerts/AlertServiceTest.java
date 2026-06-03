@@ -3,7 +3,7 @@ package com.echomind.console.alerts;
 import com.echomind.console.sensitive.SensitiveAction;
 import com.echomind.console.sensitive.SensitiveDirection;
 import com.echomind.console.sensitive.SensitiveEventEntity;
-import com.echomind.console.usage.AiCallUsageRepository;
+import com.echomind.console.usage.AiCallUsageMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -20,92 +20,93 @@ class AlertServiceTest {
 
     @Test
     void sendsFeishuAlertWhenRuleIsActiveAndNotSilenced() {
-        AlertRuleRepository ruleRepository = mock(AlertRuleRepository.class);
-        AlertEventRepository eventRepository = mock(AlertEventRepository.class);
+        AlertRuleMapper ruleMapper = mock(AlertRuleMapper.class);
+        AlertEventMapper eventMapper = mock(AlertEventMapper.class);
         FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
         AlertRuleEntity rule = activeRule();
-        when(ruleRepository.findFirstByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
-        when(eventRepository.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+        when(ruleMapper.selectOneByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
+        when(eventMapper.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
             .thenReturn(false);
         when(feishu.send(any())).thenReturn(new FeishuWebhookClient.SendResult(AlertStatus.SENT, null));
-        when(eventRepository.save(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        AlertService service = new AlertService(ruleRepository, eventRepository, mock(AiCallUsageRepository.class), feishu);
+        when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleMapper, eventMapper, mock(AiCallUsageMapper.class), feishu);
 
         service.emitSensitiveEvent(sensitiveEvent());
 
         verify(feishu).send(any(AlertEventEntity.class));
-        verify(eventRepository).save(any(AlertEventEntity.class));
+        verify(eventMapper).upsertById(any(AlertEventEntity.class));
     }
 
     @Test
     void createsSilencedEventWithoutSendingWebhookInsideQuietWindow() {
-        AlertRuleRepository ruleRepository = mock(AlertRuleRepository.class);
-        AlertEventRepository eventRepository = mock(AlertEventRepository.class);
+        AlertRuleMapper ruleMapper = mock(AlertRuleMapper.class);
+        AlertEventMapper eventMapper = mock(AlertEventMapper.class);
         FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
         AlertRuleEntity rule = activeRule();
-        when(ruleRepository.findFirstByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
-        when(eventRepository.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+        when(ruleMapper.selectOneByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
+        when(eventMapper.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
             .thenReturn(true);
-        when(eventRepository.save(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        AlertService service = new AlertService(ruleRepository, eventRepository, mock(AiCallUsageRepository.class), feishu);
+        when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleMapper, eventMapper, mock(AiCallUsageMapper.class), feishu);
 
         service.emitSensitiveEvent(sensitiveEvent());
 
         verify(feishu, never()).send(any());
-        verify(eventRepository).save(org.mockito.ArgumentMatchers.argThat(event -> event.getStatus() == AlertStatus.SILENCED));
+        verify(eventMapper).upsertById(
+            org.mockito.ArgumentMatchers.argThat(event -> event.getStatus() == AlertStatus.SILENCED));
     }
 
     @Test
     void sendsEscalatedAlertWhenQuietWindowSuppressionReachesThreshold() {
-        AlertRuleRepository ruleRepository = mock(AlertRuleRepository.class);
-        AlertEventRepository eventRepository = mock(AlertEventRepository.class);
+        AlertRuleMapper ruleMapper = mock(AlertRuleMapper.class);
+        AlertEventMapper eventMapper = mock(AlertEventMapper.class);
         FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
         AlertRuleEntity rule = activeRule();
         rule.setEscalationThreshold(3);
-        when(ruleRepository.findFirstByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
-        when(eventRepository.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+        when(ruleMapper.selectOneByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
+        when(eventMapper.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
             .thenReturn(true);
-        when(eventRepository.countByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+        when(eventMapper.countByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
             .thenReturn(2L);
-        when(eventRepository.existsByAlertTypeAndEscalatedTrueAndCreatedAtGreaterThanEqual(any(), any()))
+        when(eventMapper.existsByAlertTypeAndEscalatedTrueAndCreatedAtGreaterThanEqual(any(), any()))
             .thenReturn(false);
         when(feishu.send(any())).thenReturn(new FeishuWebhookClient.SendResult(AlertStatus.SENT, null, "ok"));
-        when(eventRepository.save(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        AlertService service = new AlertService(ruleRepository, eventRepository, mock(AiCallUsageRepository.class), feishu);
+        when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleMapper, eventMapper, mock(AiCallUsageMapper.class), feishu);
 
         service.emitSensitiveEvent(sensitiveEvent());
 
-        verify(eventRepository).save(argThat(event ->
+        verify(eventMapper).upsertById(argThat(event ->
             event.getStatus() == AlertStatus.SILENCED && event.getSuppressedCount() == 3));
         verify(feishu).send(argThat(event ->
             event.isEscalated()
                 && event.getSeverity() == AlertSeverity.CRITICAL
                 && event.getSuppressedCount() == 3));
-        verify(eventRepository).save(argThat(event ->
+        verify(eventMapper).upsertById(argThat(event ->
             event.isEscalated() && event.getStatus() == AlertStatus.SENT));
     }
 
     @Test
     void doesNotSendDuplicateEscalationInsideSameQuietWindow() {
-        AlertRuleRepository ruleRepository = mock(AlertRuleRepository.class);
-        AlertEventRepository eventRepository = mock(AlertEventRepository.class);
+        AlertRuleMapper ruleMapper = mock(AlertRuleMapper.class);
+        AlertEventMapper eventMapper = mock(AlertEventMapper.class);
         FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
         AlertRuleEntity rule = activeRule();
         rule.setEscalationThreshold(3);
-        when(ruleRepository.findFirstByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
-        when(eventRepository.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+        when(ruleMapper.selectOneByAlertType(any(AlertType.class))).thenReturn(Optional.of(rule));
+        when(eventMapper.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
             .thenReturn(true);
-        when(eventRepository.countByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+        when(eventMapper.countByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
             .thenReturn(5L);
-        when(eventRepository.existsByAlertTypeAndEscalatedTrueAndCreatedAtGreaterThanEqual(any(), any()))
+        when(eventMapper.existsByAlertTypeAndEscalatedTrueAndCreatedAtGreaterThanEqual(any(), any()))
             .thenReturn(true);
-        when(eventRepository.save(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        AlertService service = new AlertService(ruleRepository, eventRepository, mock(AiCallUsageRepository.class), feishu);
+        when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleMapper, eventMapper, mock(AiCallUsageMapper.class), feishu);
 
         service.emitSensitiveEvent(sensitiveEvent());
 
         verify(feishu, never()).send(any());
-        verify(eventRepository).save(argThat(event ->
+        verify(eventMapper).upsertById(argThat(event ->
             event.getStatus() == AlertStatus.SILENCED && event.getSuppressedCount() == 6));
     }
 

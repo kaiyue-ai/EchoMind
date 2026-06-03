@@ -50,7 +50,7 @@ public class AgentOrchestrator {
         return execute(userId, agentId, sessionId, userMessage, modelId, attachments, true);
     }
 
-    /** 执行一次完整对话，同时保留治理前原文供工具参数抽取使用。 */
+    /** 执行一次完整对话，同时保留治理前原文供模型工具调用和审计使用。 */
     public PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
                                    List<MessageAttachment> attachments, String rawUserMessage) {
         return execute(userId, agentId, sessionId, userMessage, modelId, attachments, true, rawUserMessage);
@@ -58,7 +58,20 @@ public class AgentOrchestrator {
 
     /** 执行内部任务，不读取或写入普通聊天记忆。 */
     public PipelineContext executeInternal(String agentId, String sessionId, String userMessage) {
-        return execute(agentId, sessionId, userMessage, null, List.of(), false);
+        return executeInternal("default", agentId, sessionId, userMessage, true);
+    }
+
+    /** 执行内部任务，并可按调用方控制是否暴露 Agent 工具。 */
+    public PipelineContext executeInternal(String agentId, String sessionId, String userMessage,
+                                           boolean toolExposureEnabled) {
+        return executeInternal("default", agentId, sessionId, userMessage, toolExposureEnabled);
+    }
+
+    /** 执行内部任务，可指定用量归属用户，但仍不写普通聊天记忆。 */
+    public PipelineContext executeInternal(String userId, String agentId, String sessionId, String userMessage,
+                                           boolean toolExposureEnabled) {
+        return execute(userId, agentId, sessionId, userMessage, null, List.of(), false, toolExposureEnabled,
+            null);
     }
 
     private Agent resolveAgent(String agentId) {
@@ -93,50 +106,89 @@ public class AgentOrchestrator {
         if (attachments != null) {
             ctx.getAttachments().addAll(attachments);
         }
-        ctx.getAttributes().put("agentSkillIds", agent.getSkillIds());
+        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, agent.getSkillIds());
         if (rawUserMessage != null && !rawUserMessage.isBlank()) {
-            ctx.getAttributes().put("rawUserMessage", rawUserMessage);
+            ctx.getAttributes().put(PipelineContext.ATTR_RAW_USER_MESSAGE, rawUserMessage);
         }
         return ctx;
     }
 
     private PipelineContext execute(String agentId, String sessionId, String userMessage, String modelId,
                                     List<MessageAttachment> attachments, boolean memoryPersistenceEnabled) {
-        return execute("default", agentId, sessionId, userMessage, modelId, attachments, memoryPersistenceEnabled);
+        return execute("default", agentId, sessionId, userMessage, modelId, attachments, memoryPersistenceEnabled,
+            true, null);
     }
 
     private PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
                                     List<MessageAttachment> attachments, boolean memoryPersistenceEnabled) {
-        return execute(userId, agentId, sessionId, userMessage, modelId, attachments, memoryPersistenceEnabled, null);
+        return execute(userId, agentId, sessionId, userMessage, modelId, attachments, memoryPersistenceEnabled, true,
+            null);
     }
 
     private PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
                                     List<MessageAttachment> attachments, boolean memoryPersistenceEnabled,
                                     String rawUserMessage) {
+        return execute(userId, agentId, sessionId, userMessage, modelId, attachments, memoryPersistenceEnabled, true,
+            rawUserMessage);
+    }
+
+    /**
+     * 执行 Agent 对话的核心方法
+     *
+     * @param userId 用户ID
+     * @param agentId Agent ID
+     * @param sessionId 会话ID
+     * @param userMessage 用户消息
+     * @param modelId 模型ID
+     * @param attachments 消息附件
+     * @param memoryPersistenceEnabled 是否启用记忆持久化
+     * @param toolExposureEnabled 是否启用工具暴露
+     * @param rawUserMessage 原始用户消息（未处理）
+     * @return PipelineContext 包含执行结果的上下文
+     */
+    private PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
+                                    List<MessageAttachment> attachments, boolean memoryPersistenceEnabled,
+                                    boolean toolExposureEnabled, String rawUserMessage) {
+        // 1. 解析并获取 Agent 实例
         Agent agent = resolveAgent(agentId);
         if (agent == null) {
+            // 如果没有配置 Agent，返回失败上下文
             PipelineContext ctx = new PipelineContext();
             ctx.setUserId(normalizeUserId(userId));
             ctx.setTraceId(EchoMindTrace.currentTraceId());
             ctx.markFailed("No agents configured");
             return ctx;
         }
+
+        // 2. 构建执行上下文
         PipelineContext ctx = buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments,
             rawUserMessage);
+        // 设置记忆持久化标志
         ctx.setMemoryPersistenceEnabled(memoryPersistenceEnabled);
 
+        // 3. 如果禁用工具暴露，设置属性标记
+        if (!toolExposureEnabled) {
+            ctx.getAttributes().put(PipelineContext.ATTR_TOOL_EXPOSURE_DISABLED, true);
+        }
+
+        // 4. 记录日志（截断消息到50字符）
         log.info("[Orchestrator] Agent={} model={} session={} msg={}", agent.getAgentId(),
             ctx.getModelId(), ctx.getSessionId(),
             userMessage.substring(0, Math.min(50, userMessage.length())));
 
+        // 5. 创建追踪 Span，执行 Agent 对话
         Span span = orchestrationSpan("echomind.agent.orchestrate", ctx);
         try (Scope ignored = span.makeCurrent()) {
+            // 设置追踪ID到上下文
             ctx.setTraceId(EchoMindTrace.traceId(span));
+            // 调用 Agent 的 chat 方法执行对话
             return agent.chat(ctx);
         } catch (RuntimeException e) {
+            // 记录异常到追踪
             EchoMindTrace.recordException(span, e);
             throw e;
         } finally {
+            // 结束追踪 Span
             span.end();
         }
     }

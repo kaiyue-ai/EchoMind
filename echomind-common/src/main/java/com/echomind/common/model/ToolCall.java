@@ -23,7 +23,7 @@ import java.util.Map;
  * 此模型与 MCP 2024-11-05 规范中的 {@code tools/call} 请求/响应结构对齐，
  * 同时作为 EchoMind 内部通用工具调用的标准承载对象。
  *
- * @see com.echomind.mcp.client.StdioMCPClient MCP 客户端在远程工具调用时使用此模型
+ * @see com.echomind.mcp.client.SpringAiMcpClient MCP 客户端在远程工具调用时使用此模型
  * @see com.echomind.skill.api.SkillResult SPI 层的技能执行结果
  * @see AgentMessage#tool(String, String) 将 ToolCall 结果转换为对话消息
  */

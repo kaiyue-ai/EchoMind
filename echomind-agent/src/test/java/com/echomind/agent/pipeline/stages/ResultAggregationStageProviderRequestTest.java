@@ -1,11 +1,11 @@
 package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
-import com.echomind.agent.pipeline.MemorySignalParser;
-import com.echomind.agent.pipeline.PromptBudget;
-import com.echomind.agent.tool.Tool;
-import com.echomind.agent.tool.ToolRouter;
-import com.echomind.agent.tool.ToolResult;
+import com.echomind.agent.pipeline.composing.PromptBudget;
+import com.echomind.agent.pipeline.planning.MemoryDecisionParser;
+import com.echomind.agent.tool.core.Tool;
+import com.echomind.agent.tool.core.ToolResult;
+import com.echomind.agent.tool.router.ToolRouter;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.TokenUsage;
@@ -91,7 +91,7 @@ class ResultAggregationStageProviderRequestTest {
             "test.png",
             123L
         ));
-        ctx.getAttributes().put("agentSkillIds", List.of("web-search"));
+        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("open_web_search"));
 
         stage.process(ctx);
 
@@ -101,9 +101,32 @@ class ResultAggregationStageProviderRequestTest {
         assertThat(request).isNotNull();
         assertThat(request.attachments()).hasSize(1);
         assertThat(request.tools()).hasSize(1);
-        assertThat(request.tools().get(0).name()).isEqualTo("web_search");
-        assertThat(request.requiredToolName()).isEqualTo("web_search");
+        assertThat(request.tools().get(0).name()).isEqualTo("open_web_search");
+        assertThat(request.requiredToolName()).isNull();
         assertThat(request.toolInputMessage()).isEqualTo("帮我看图并搜索这张图里是什么");
+    }
+
+    @Test
+    void toolOutputIsNeverMarkedAsDirectResult() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new WeatherTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("重庆天气");
+
+        stage.process(ctx);
+
+        String toolOutput = captured.get().tools().get(0).call("{}");
+        assertThat(captured.get().requiredToolName()).isNull();
+        assertThat(toolOutput).isEqualTo("ok");
     }
 
     @Test
@@ -121,15 +144,49 @@ class ResultAggregationStageProviderRequestTest {
         ctx.setModelId("mock:tool-model");
         ctx.setResolvedModel(model);
         ctx.setUserMessage("查询[LOCATION]到上海的火车票");
-        ctx.getAttributes().put("rawUserMessage", "查询重庆到上海的火车票");
-        ctx.getAttributes().put("agentSkillIds", List.of("12306"));
+        ctx.getAttributes().put(PipelineContext.ATTR_RAW_USER_MESSAGE, "查询重庆到上海的火车票");
+        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("12306"));
 
         stage.process(ctx);
 
         ProviderRequest request = captured.get();
-        assertThat(request.requiredToolName()).isEqualTo("tool_12306");
+        assertThat(request.requiredToolName()).isNull();
         assertThat(request.userMessage()).contains("查询[LOCATION]到上海的火车票");
         assertThat(request.toolInputMessage()).isEqualTo("查询重庆到上海的火车票");
+    }
+
+    @Test
+    void processKeepsRailwayToolAvailableForShortDateFollowUp() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new RailwayTool());
+        toolRouter.register(new DateTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("查后天的");
+        ctx.getMessages().add(AgentMessage.user("查询重庆到临沂的火车票"));
+        ctx.getMessages().add(AgentMessage.assistant("需要我帮你查其他日期吗？"));
+        ctx.getMessages().add(AgentMessage.user("查后天的"));
+        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("12306", "date-query"));
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.tools()).extracting(tool -> tool.name())
+            .containsExactlyInAnyOrder("tool_12306", "date_query");
+        assertThat(request.userMessage()).contains("短句追问");
+        assertThat(request.userMessage()).contains("继续完成原业务任务");
+        assertThat(request.userMessage()).contains("不要再次叠加相同偏移");
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(ctx.getAttributes())
+            .containsEntry(PipelineContext.ATTR_CONTEXT_MATCHED_TOOLS, List.of("12306"));
     }
 
     @Test
@@ -153,30 +210,30 @@ class ResultAggregationStageProviderRequestTest {
     }
 
     @Test
-    void processStripsHiddenMemorySignalAndStoresItOnContext() {
+    void processStripsHiddenMemoryDecisionAndStoresItOnContext() {
         ModelProviderRegistry registry = new ModelProviderRegistry();
         AtomicReference<ProviderRequest> captured = new AtomicReference<>();
-        ModelSpec model = model("mock", "memory-signal-model", ModelCapability.TEXT);
+        ModelSpec model = model("mock", "memory-decision-model", ModelCapability.TEXT);
         registry.registerProvider(new CapturingProvider(
             "mock",
             captured,
             null,
-            "已记住。<ECHOMIND_MEMORY_SIGNAL>{\"important\":true,\"confidence\":0.93,\"reason\":\"用户偏好\"}</ECHOMIND_MEMORY_SIGNAL>"
+            "已记住。<ECHOMIND_MEMORY_DECISION>{\"rememberFacts\":true,\"refreshProfile\":true,\"reason\":\"用户偏好\"}</ECHOMIND_MEMORY_DECISION>"
         ), List.of(model));
         ResultAggregationStage stage = stage(registry, new ToolRouter());
 
         PipelineContext ctx = new PipelineContext();
         ctx.setSessionId("session-1");
-        ctx.setModelId("mock:memory-signal-model");
+        ctx.setModelId("mock:memory-decision-model");
         ctx.setResolvedModel(model);
         ctx.setUserMessage("以后注释用中文");
 
         stage.process(ctx);
 
-        assertThat(captured.get().systemPrompt()).contains(MemorySignalParser.START_MARKER);
+        assertThat(captured.get().systemPrompt()).contains(MemoryDecisionParser.START_MARKER);
         assertThat(ctx.getFinalResponse()).isEqualTo("已记住。");
-        assertThat(ctx.getMemorySignal().important()).isTrue();
-        assertThat(ctx.getMemorySignal().confidence()).isEqualTo(0.93);
+        assertThat(ctx.getMemoryDecision().rememberFacts()).isTrue();
+        assertThat(ctx.getMemoryDecision().refreshProfile()).isTrue();
     }
 
     @Test
@@ -221,6 +278,27 @@ class ResultAggregationStageProviderRequestTest {
         assertThat(ctx.hasFailed()).isFalse();
     }
 
+    @Test
+    void streamResponseMarksProviderFailureWithoutEmittingErrorAsToken() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        ModelSpec model = model("mock", "failing-stream", ModelCapability.TEXT);
+        registry.registerProvider(new FailingStreamingProvider(), List.of(model));
+        ResultAggregationStage stage = stage(registry, new ToolRouter());
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:failing-stream");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("你好");
+
+        List<String> chunks = stage.streamResponse(ctx).collectList().block();
+
+        assertThat(chunks).isEmpty();
+        assertThat(ctx.hasFailed()).isTrue();
+        assertThat(ctx.effectiveFailureReason()).isEqualTo("provider 400");
+        assertThat(ctx.getFinalResponse()).isEqualTo("[Error] provider 400");
+    }
+
+    @Test
     private ResultAggregationStage stage(ModelProviderRegistry registry, ToolRouter toolRouter) {
         return new ResultAggregationStage(registry, toolRouter, new PromptBudget(4000, 2000, 800));
     }
@@ -302,11 +380,87 @@ class ResultAggregationStageProviderRequestTest {
         }
     }
 
+    private static class FailingStreamingProvider implements com.echomind.llm.provider.ModelProvider {
+
+        @Override
+        public String providerId() {
+            return "mock";
+        }
+
+        @Override
+        public boolean supports(ModelSpec model) {
+            return "mock".equals(model.providerId());
+        }
+
+        @Override
+        public ProviderResponse chatWithUsage(ProviderRequest request) {
+            return ProviderResponse.failure("provider 400");
+        }
+
+        @Override
+        public Flux<ProviderStreamChunk> streamWithUsage(ProviderRequest request) {
+            return Flux.just(ProviderStreamChunk.failure("provider 400"));
+        }
+    }
+
+    private static class WeatherTool extends StubTool {
+
+        @Override
+        public String name() {
+            return "weather-query";
+        }
+
+        @Override
+        public List<String> tags() {
+            return List.of("weather");
+        }
+
+        @Override
+        public List<String> keywords() {
+            return List.of("天气");
+        }
+    }
+
+    private static class DateTool extends StubTool {
+
+        @Override
+        public String name() {
+            return "date-query";
+        }
+
+        @Override
+        public String description() {
+            return "日期查询";
+        }
+
+        @Override
+        public Map<String, Object> parameterSchema() {
+            return Map.of("type", "object", "properties", Map.of(
+                "offsetDays", Map.of("type", "integer")
+            ));
+        }
+
+        @Override
+        public List<String> tags() {
+            return List.of("date", "time");
+        }
+
+        @Override
+        public List<String> keywords() {
+            return List.of("今天", "明天", "后天", "日期");
+        }
+
+        @Override
+        public String sourceId() {
+            return "date-query@1.0.0";
+        }
+    }
+
     private static class StubTool implements Tool {
 
         @Override
         public String name() {
-            return "web-search";
+            return "open_web_search";
         }
 
         @Override
@@ -335,12 +489,12 @@ class ResultAggregationStageProviderRequestTest {
 
         @Override
         public String sourceType() {
-            return "skill";
+            return "mcp";
         }
 
         @Override
         public String sourceId() {
-            return "web-search@1.0.0";
+            return "mcp:open-websearch";
         }
 
         @Override

@@ -98,7 +98,7 @@ public class Railway12306Skill implements Skill {
             ),
             List.of(),
             "EchoMind",
-            List.of("12306", "train", "railway", "ticket", "station", "price", "transfer", "direct-result", "高铁", "火车", "余票", "票价", "中转", "换乘"),
+            List.of("12306", "train", "railway", "ticket", "station", "price", "transfer", "高铁", "火车", "余票", "票价", "中转", "换乘"),
             List.of("12306", "火车票", "高铁票", "动车", "列车", "余票", "车次", "站点", "经停站", "火车时刻", "铁路", "票价", "价格", "中转", "换乘", "转车"),
             Map.of(
                 "ticket", List.of("余票", "车票", "火车票", "高铁票", "动车票", "票价", "价格"),

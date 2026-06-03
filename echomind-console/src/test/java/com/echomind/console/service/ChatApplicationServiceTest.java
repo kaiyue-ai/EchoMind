@@ -8,11 +8,19 @@ import com.echomind.common.model.ChatRequest;
 import com.echomind.common.model.ChatStreamEvent;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.TokenUsage;
+import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.console.auth.AuthContext;
 import com.echomind.console.auth.AuthUser;
+import com.echomind.console.budget.ProviderTokenBudgetExceededException;
 import com.echomind.console.dto.ChatMessageRequest;
+import com.echomind.console.quota.TokenQuotaExceededException;
 import com.echomind.memory.MemoryManager;
 import com.echomind.skill.storage.ObjectStorageService;
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
+import io.opentelemetry.context.propagation.ContextPropagators;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -20,10 +28,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -79,6 +89,63 @@ class ChatApplicationServiceTest {
 
         verify(orchestrator).execute(eq("user-a"), eq("default"), eq("session-a"), eq("call [PHONE]"),
             eq("mock:model"), any(), eq("call 13800138000"));
+    }
+
+    @Test
+    void executeSyncDoesNotEmitCallErrorForProviderBudgetBlock() {
+        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        ProviderTokenBudgetExceededException budgetError =
+            new ProviderTokenBudgetExceededException("deepseek", "daily", 1000, 1000);
+        when(orchestrator.execute(eq("user-a"), eq("default"), eq("session-budget"), eq("hello"),
+            eq("deepseek:model"), any(), eq("hello"))).thenThrow(budgetError);
+        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
+            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
+
+        AuthUser user = new AuthUser("user-a", "alice", true);
+        AuthContext.set(user);
+        try {
+            assertThatThrownBy(() -> service.executeSync(new ChatMessageRequest("default", "hello",
+                "session-budget", "deepseek:model", List.of())))
+                .isSameAs(budgetError);
+        } finally {
+            AuthContext.clear();
+        }
+
+        verify(governanceService, never()).emitCallError(any(), any(), anyString());
+    }
+
+    @Test
+    void executeSyncDoesNotEmitCallErrorForTokenQuotaSettlementBlock() {
+        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        PipelineContext ctx = new PipelineContext();
+        ctx.setUserId("user-a");
+        ctx.setAgentId("default");
+        ctx.setSessionId("session-quota");
+        ctx.setModelId("mock:model");
+        ctx.setTraceId("trace-quota");
+        ctx.setFinalResponse("ok");
+        ctx.setTokenUsage(new TokenUsage(10, 6, 16));
+        TokenQuotaExceededException quotaError = new TokenQuotaExceededException("user-a", "daily", 116, 100);
+        when(orchestrator.execute(eq("user-a"), eq("default"), eq("session-quota"), eq("hello"),
+            eq("mock:model"), any(), eq("hello"))).thenReturn(ctx);
+        doThrow(quotaError).when(governanceService)
+            .recordSuccessAndWarnings(any(), anyString(), any(), eq(ctx), anyLong());
+        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
+            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
+
+        AuthUser user = new AuthUser("user-a", "alice", true);
+        AuthContext.set(user);
+        try {
+            assertThatThrownBy(() -> service.executeSync(new ChatMessageRequest("default", "hello",
+                "session-quota", "mock:model", List.of())))
+                .isSameAs(quotaError);
+        } finally {
+            AuthContext.clear();
+        }
+
+        verify(governanceService, never()).emitCallError(any(), any(), anyString());
     }
 
     @Test
@@ -193,6 +260,89 @@ class ChatApplicationServiceTest {
     }
 
     @Test
+    void submitAsyncRejectsQuotaBeforeRegisteringOrPublishing() {
+        ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
+        SsePushService ssePushService = mock(SsePushService.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        TokenQuotaExceededException quotaError = new TokenQuotaExceededException("user-a", "daily", 100, 100);
+        when(governanceService.inspectRequest(any(), any(), eq("default"), eq("session-a"), eq("hello")))
+            .thenThrow(quotaError);
+        ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer, mock(MemoryManager.class),
+            mock(ObjectStorageService.class), ssePushService, governanceService);
+
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        try {
+            assertThatThrownBy(() -> service.submitAsync(
+                new ChatMessageRequest("default", "hello", "session-a", null, List.of())))
+                .isSameAs(quotaError);
+        } finally {
+            AuthContext.clear();
+        }
+
+        verifyNoInteractions(ssePushService);
+        verifyNoInteractions(rabbitProducer);
+    }
+
+    @Test
+    void executeQueuedStreamDoesNotRecordErrorUsageForProviderBudgetBlock() {
+        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        ProviderTokenBudgetExceededException budgetError =
+            new ProviderTokenBudgetExceededException("deepseek", "daily", 1000, 1000);
+        when(orchestrator.executeStreamContext(eq("user-a"), eq("default"), eq("session-budget"),
+            eq("hello"), eq("deepseek:model"), eq(List.of()), eq("hello"))).thenReturn(Mono.error(budgetError));
+        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
+            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
+
+        var response = service.executeQueuedStream(
+            new ChatRequest("req-budget", "user-a", "default", "session-budget", "hello", "deepseek:model",
+                "trace-budget", "00-trace-parent", List.of()),
+            event -> {}
+        );
+
+        assertThat(response.status()).isEqualTo("ERROR");
+        assertThat(response.error()).isEqualTo(budgetError.getMessage());
+        verify(governanceService, never()).recordStreamUsage(any(), anyString(), any(), any(), anyLong(), anyBoolean(),
+            anyString());
+        verify(governanceService, never()).emitCallError(any(), any(), anyString());
+    }
+
+    @Test
+    void executeQueuedStreamReturnsQuotaErrorWithoutCallErrorAlert() {
+        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        PipelineContext ctx = new PipelineContext();
+        ctx.setUserId("user-a");
+        ctx.setAgentId("default");
+        ctx.setSessionId("session-quota");
+        ctx.setModelId("mock:model");
+        ctx.setTraceId("trace-quota");
+        ctx.setTokenUsage(new TokenUsage(10, 6, 16));
+        TokenQuotaExceededException quotaError = new TokenQuotaExceededException("user-a", "daily", 116, 100);
+        when(orchestrator.executeStreamContext(eq("user-a"), eq("default"), eq("session-quota"),
+            eq("hello"), eq("mock:model"), eq(List.of()), eq("hello")))
+            .thenReturn(Mono.just(new StreamExecution(ctx, Flux.just("ok"))));
+        doThrow(quotaError).when(governanceService)
+            .recordStreamUsage(any(), eq("echomind.chat.stream.consume"), any(), eq(ctx), anyLong(), eq(false), eq(null));
+        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
+            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
+
+        var response = service.executeQueuedStream(
+            new ChatRequest("req-quota", "user-a", "default", "session-quota", "hello", "mock:model",
+                "trace-quota", "00-trace-parent", List.of()),
+            event -> {}
+        );
+
+        assertThat(response.status()).isEqualTo("ERROR");
+        assertThat(response.error()).isEqualTo(quotaError.getMessage());
+        verify(governanceService).recordStreamUsage(any(), eq("echomind.chat.stream.consume"), any(), eq(ctx),
+            anyLong(), eq(false), eq(null));
+        verify(governanceService, never()).recordStreamUsage(any(), anyString(), any(), any(), anyLong(), eq(true),
+            anyString());
+        verify(governanceService, never()).emitCallError(any(), any(), anyString());
+    }
+
+    @Test
     void executeQueuedStreamPublishesMetaAndTokenEvents() {
         AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
         ChatGovernanceService governanceService = passthroughGovernanceService();
@@ -223,6 +373,61 @@ class ChatApplicationServiceTest {
         assertThat(events.get(2).token()).isEqualTo("好");
         verify(governanceService).recordStreamUsage(any(), eq("echomind.chat.stream.consume"), any(), eq(ctx),
             anyLong(), eq(false), eq(null));
+        verify(governanceService, never()).inspectRequest(any(), any(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void executeQueuedStreamKeepsExtractedTraceCurrentThroughStreamConsumption() {
+        String traceId = "0123456789abcdef0123456789abcdef";
+        String traceparent = "00-" + traceId + "-1111111111111111-01";
+        SdkTracerProvider tracerProvider = SdkTracerProvider.builder().build();
+        OpenTelemetrySdk sdk = OpenTelemetrySdk.builder()
+            .setTracerProvider(tracerProvider)
+            .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
+            .build();
+        EchoMindTrace.setOpenTelemetry(sdk);
+        try {
+            AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+            ChatGovernanceService governanceService = passthroughGovernanceService();
+            AtomicReference<String> streamTraceId = new AtomicReference<>();
+            PipelineContext ctx = new PipelineContext();
+            ctx.setUserId("user-a");
+            ctx.setAgentId("default");
+            ctx.setSessionId("session-a");
+            ctx.setModelId("mock:model");
+            ctx.setTokenUsage(new TokenUsage(1, 2, 3));
+            when(orchestrator.executeStreamContext(eq("user-a"), eq("default"), eq("session-a"), eq("hello"),
+                eq("mock:model"), eq(List.of()), eq("hello"))).thenAnswer(invocation -> {
+                    assertThat(EchoMindTrace.currentTraceId()).isEqualTo(traceId);
+                    ctx.setTraceId(EchoMindTrace.currentTraceId());
+                    return Mono.just(new StreamExecution(ctx, Flux.defer(() -> {
+                        streamTraceId.set(EchoMindTrace.currentTraceId());
+                        return Flux.just("你", "好");
+                    })));
+                });
+            ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class),
+                mock(MemoryManager.class), mock(ObjectStorageService.class), mock(SsePushService.class),
+                governanceService);
+            List<ChatStreamEvent> events = new ArrayList<>();
+
+            var response = service.executeQueuedStream(
+                new ChatRequest("req-1", "user-a", "default", "session-a", "hello", "mock:model", traceId,
+                    traceparent, List.of()),
+                events::add
+            );
+
+            assertThat(streamTraceId).hasValue(traceId);
+            assertThat(events.get(0).traceId()).isEqualTo(traceId);
+            assertThat(events)
+                .allSatisfy(event -> assertThat(event.traceparent()).startsWith("00-" + traceId + "-"));
+            assertThat(response.traceId()).isEqualTo(traceId);
+            assertThat(response.traceparent()).startsWith("00-" + traceId + "-");
+            verify(governanceService).recordStreamUsage(any(), eq("echomind.chat.stream.consume"), any(), eq(ctx),
+                anyLong(), eq(false), eq(null));
+        } finally {
+            EchoMindTrace.setOpenTelemetry(OpenTelemetry.noop());
+            tracerProvider.shutdown();
+        }
     }
 
     @Test
@@ -251,6 +456,37 @@ class ChatApplicationServiceTest {
         verify(orchestrator).executeStreamContext(eq("user-a"), eq("default"), eq("session-a"),
             eq("查询明天重庆到临沂的火车票"), eq("mock:model"), eq(List.of()),
             eq("查询明天重庆到临沂的火车票"));
+    }
+
+    @Test
+    void executeQueuedStreamReturnsErrorWhenStreamContextMarksFailure() {
+        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        PipelineContext ctx = new PipelineContext();
+        ctx.setUserId("user-a");
+        ctx.setAgentId("default");
+        ctx.setSessionId("session-a");
+        ctx.setModelId("mock:model");
+        ctx.setTraceId("trace-a");
+        ctx.markFailed("provider 400");
+        when(orchestrator.executeStreamContext(eq("user-a"), eq("default"), eq("session-a"), eq("hello"),
+            eq("mock:model"), eq(List.of()), eq("hello"))).thenReturn(Mono.just(new StreamExecution(ctx, Flux.empty())));
+        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
+            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
+        List<ChatStreamEvent> events = new ArrayList<>();
+
+        var response = service.executeQueuedStream(
+            new ChatRequest("req-1", "user-a", "default", "session-a", "hello", "mock:model", "trace-a",
+                "00-trace-parent", List.of()),
+            events::add
+        );
+
+        assertThat(response.status()).isEqualTo("ERROR");
+        assertThat(response.error()).isEqualTo("provider 400");
+        assertThat(events).extracting(ChatStreamEvent::type)
+            .containsExactly(ChatStreamEvent.TYPE_META);
+        verify(governanceService).recordStreamUsage(any(), eq("echomind.chat.stream.consume"), any(), eq(ctx),
+            anyLong(), eq(true), eq("provider 400"));
     }
 
     @Test
@@ -332,7 +568,7 @@ class ChatApplicationServiceTest {
     void deleteSessionSkipsAttachmentLookupWhenHistoryIsEmpty() {
         MemoryManager memoryManager = mock(MemoryManager.class);
         ObjectStorageService storageService = mock(ObjectStorageService.class);
-        when(memoryManager.getFullContext(anyString())).thenReturn(List.of());
+        when(memoryManager.getFullContext(anyString(), anyString())).thenReturn(List.of());
         ChatApplicationService service = service(mock(AgentOrchestrator.class), mock(ChatRabbitProducer.class), memoryManager,
             storageService, mock(SsePushService.class), passthroughGovernanceService());
 

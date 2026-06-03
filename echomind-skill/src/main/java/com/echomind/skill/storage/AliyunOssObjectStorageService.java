@@ -84,10 +84,6 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
         return "oss";
     }
 
-    public String endpoint() {
-        return endpoint;
-    }
-
     private String extractKey(String uriOrKey) {
         if (uriOrKey == null || uriOrKey.isBlank()) {
             throw new IllegalArgumentException("对象 URI 不能为空");

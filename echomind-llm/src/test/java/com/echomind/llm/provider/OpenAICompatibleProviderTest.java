@@ -72,15 +72,41 @@ class OpenAICompatibleProviderTest {
     }
 
     @Test
-    void toolCallbacksKeepSchemaRequiredToolAndDirectReturnMetadata() {
+    void streamWithUsageKeepsLeadingSpacesInChunks() {
+        CapturingChatModel chatModel = new CapturingChatModel(prompt -> response("", null));
+        chatModel.streamHandler = prompt -> Flux.just(
+            response("Let", null),
+            response(" me", null),
+            response(" query", null)
+        );
+        OpenAICompatibleProvider provider = new OpenAICompatibleProvider(
+            "aliyun-bailian", "https://dashscope.aliyuncs.com/compatible-mode/v1", "test-key", chatModel);
+
+        List<ProviderStreamChunk> chunks = provider.streamWithUsage(new ProviderRequest(
+                new ModelSpec("aliyun-bailian", "qwen3.7-max", Set.of(ModelCapability.TEXT), true),
+                "你是助手",
+                "你好",
+                List.of(),
+                List.of()
+            ))
+            .collectList()
+            .block();
+
+        assertThat(chunks).isNotNull();
+        assertThat(chunks.stream().filter(ProviderStreamChunk::hasContent).map(ProviderStreamChunk::content).toList())
+            .containsExactly("Let", " me", " query");
+    }
+
+    @Test
+    void toolCallbacksKeepSchemaRequiredToolAndNeverReturnDirect() {
         AtomicReference<String> toolInput = new AtomicReference<>();
         CapturingChatModel chatModel = new CapturingChatModel(prompt -> {
             OpenAiChatOptions options = (OpenAiChatOptions) prompt.getOptions();
             ToolCallback callback = options.getToolCallbacks().get(0);
-            assertThat(options.getToolChoice()).isNotNull();
+            assertThat(options.getToolChoice()).isNull();
             assertThat(callback.getToolDefinition().name()).isEqualTo("web_search");
             assertThat(callback.getToolDefinition().inputSchema()).contains("\"query\"");
-            assertThat(callback.getToolMetadata().returnDirect()).isTrue();
+            assertThat(callback.getToolMetadata().returnDirect()).isFalse();
             String result = callback.call("{\"query\":\"JVM\"}");
             toolInput.set("{\"query\":\"JVM\"}");
             return response(result, TokenUsage.of(8, 1, 9));
@@ -101,14 +127,42 @@ class OpenAICompatibleProviderTest {
                     "properties", Map.of("query", Map.of("type", "string")),
                     "required", List.of("query")
                 ),
-                true,
                 ignored -> "Fetched web page: JVM article"
-            )),
-            "web_search"
+            ))
         ));
 
         assertThat(response.content()).isEqualTo("Fetched web page: JVM article");
         assertThat(toolInput.get()).isEqualTo("{\"query\":\"JVM\"}");
+    }
+
+    @Test
+    void qwenThinkingIsDisabledForToolCallsOnDashScopeCompatibleProvider() {
+        CapturingChatModel chatModel = new CapturingChatModel(prompt -> {
+            OpenAiChatOptions options = (OpenAiChatOptions) prompt.getOptions();
+            assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+            return response(options.getToolCallbacks().get(0).call("{\"query\":\"EchoMind\"}"), null);
+        });
+        OpenAICompatibleProvider provider = new OpenAICompatibleProvider(
+            "aliyun-bailian", "https://dashscope.aliyuncs.com/compatible-mode/v1", "test-key", chatModel);
+
+        ProviderResponse response = provider.chatWithUsage(new ProviderRequest(
+            new ModelSpec("aliyun-bailian", "qwen3.7-max", Set.of(ModelCapability.TEXT, ModelCapability.FUNCTION), true),
+            "你是助手",
+            "搜索 EchoMind",
+            List.of(),
+            List.of(new LlmTool(
+                "web_search",
+                "Search the web",
+                Map.of(
+                    "type", "object",
+                    "properties", Map.of("query", Map.of("type", "string")),
+                    "required", List.of("query")
+                ),
+                ignored -> "EchoMind result"
+            ))
+        ));
+
+        assertThat(response.content()).isEqualTo("EchoMind result");
     }
 
     @Test
@@ -117,7 +171,7 @@ class OpenAICompatibleProviderTest {
         CapturingChatModel chatModel = new CapturingChatModel(prompt -> {
             OpenAiChatOptions options = (OpenAiChatOptions) prompt.getOptions();
             ToolCallback callback = options.getToolCallbacks().get(0);
-            for (int i = 0; i < 9; i++) {
+            for (int i = 0; i < 51; i++) {
                 callback.call("{\"query\":\"EchoMind\"}");
             }
             return response("不会走到这里", null);
@@ -138,7 +192,6 @@ class OpenAICompatibleProviderTest {
                     "properties", Map.of("query", Map.of("type", "string")),
                     "required", List.of("query")
                 ),
-                false,
                 ignored -> {
                     executedCalls.incrementAndGet();
                     return "not found";
@@ -148,7 +201,7 @@ class OpenAICompatibleProviderTest {
 
         assertThat(response.failed()).isTrue();
         assertThat(response.failureReason()).contains("工具调用次数超过上限");
-        assertThat(executedCalls.get()).isEqualTo(8);
+        assertThat(executedCalls.get()).isEqualTo(50);
     }
 
     @Test
@@ -186,5 +239,32 @@ class OpenAICompatibleProviderTest {
 
         assertThat(response.failed()).isTrue();
         assertThat(response.failureReason()).contains("upstream unavailable");
+    }
+
+    @Test
+    void wrapsMissingToolCallbackFailureWithUserFriendlyMessage() {
+        OpenAICompatibleProvider provider = new OpenAICompatibleProvider(
+            "aliyun-bailian", "https://dashscope.aliyuncs.com/compatible-mode/v1", "test-key",
+            new CapturingChatModel(prompt -> {
+                throw new IllegalStateException("Spring AI failed",
+                    new IllegalStateException("No ToolCallback found for tool name: query_train_info"));
+            }));
+
+        ProviderResponse response = provider.chatWithUsage(new ProviderRequest(
+            new ModelSpec("aliyun-bailian", "qwen3.7-max", Set.of(ModelCapability.TEXT, ModelCapability.FUNCTION), true),
+            "你是助手",
+            "查后天的",
+            List.of(),
+            List.of(new LlmTool(
+                "date_query",
+                "Date query",
+                Map.of("type", "object", "properties", Map.of()),
+                ignored -> "2026-05-28"
+            ))
+        ));
+
+        assertThat(response.failed()).isTrue();
+        assertThat(response.failureReason()).contains("模型尝试调用未暴露的工具: query_train_info");
+        assertThat(response.failureReason()).doesNotContain("No ToolCallback found");
     }
 }

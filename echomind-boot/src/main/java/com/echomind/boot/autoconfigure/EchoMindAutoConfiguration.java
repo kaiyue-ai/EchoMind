@@ -7,19 +7,22 @@ import com.echomind.agent.memory.RabbitChatMemoryPersistPublisher;
 import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.pipeline.ExecutionPipeline;
 import com.echomind.agent.pipeline.PipelineStage;
-import com.echomind.agent.pipeline.PromptBudget;
+import com.echomind.agent.pipeline.budget.ProviderTokenBudgetGuard;
+import com.echomind.agent.pipeline.composing.PromptBudget;
+import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.agent.pipeline.stages.*;
 import com.echomind.agent.store.AgentPersistenceService;
-import com.echomind.agent.store.AgentRepository;
-import com.echomind.agent.tool.CapabilityRegistry;
-import com.echomind.agent.tool.ExternalMcpRuntimeService;
-import com.echomind.agent.tool.ExternalMcpServerConfig;
-import com.echomind.agent.tool.SkillCapabilityService;
+import com.echomind.agent.store.AgentMapper;
+import com.echomind.agent.tool.router.CapabilityRegistry;
+import com.echomind.agent.tool.mcp.ExternalMcpRuntimeService;
+import com.echomind.agent.tool.mcp.ExternalMcpServerConfig;
+import com.echomind.agent.tool.skill.SkillCapabilityService;
 import com.echomind.agent.usermemory.NoopUserMemoryPersistPublisher;
 import com.echomind.agent.usermemory.RabbitUserMemoryPersistPublisher;
 import com.echomind.agent.usermemory.UserMemoryPersistPublisher;
 import com.echomind.boot.properties.EchoMindProperties;
 import com.echomind.llm.provider.DeepSeekProvider;
+import com.echomind.llm.provider.ModelProvider;
 import com.echomind.llm.provider.MockModelProvider;
 import com.echomind.llm.provider.OpenAICompatibleProvider;
 import com.echomind.llm.router.*;
@@ -30,31 +33,30 @@ import com.echomind.memory.cache.RedisRecentMemoryCache;
 import com.echomind.memory.embedding.DashScopeEmbeddingClient;
 import com.echomind.memory.embedding.DisabledEmbeddingClient;
 import com.echomind.memory.embedding.EmbeddingClient;
-import com.echomind.memory.embedding.LegacyChatMessageVectorCleaner;
-import com.echomind.memory.persistence.ChatMessageRepository;
-import com.echomind.memory.persistence.ChatSessionRepository;
+
+import com.echomind.memory.persistence.mapper.ChatMessageMapper;
+import com.echomind.memory.persistence.mapper.ChatSessionMapper;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
-import com.echomind.memory.knowledge.AgentKnowledgeChunkRepository;
-import com.echomind.memory.knowledge.AgentKnowledgeDocumentRepository;
+import com.echomind.memory.knowledge.mapper.AgentKnowledgeDocumentMapper;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
-import com.echomind.memory.usermemory.NoopUserMemoryStore;
+import com.echomind.memory.usermemory.impl.NoopUserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserMemoryStore;
-import com.echomind.memory.usermemory.UserMemoryVectorStore;
-import com.echomind.memory.usermemory.RedisUserProfileSnapshotStore;
+import com.echomind.memory.milvus.MilvusClientFactory;
+import com.echomind.memory.usermemory.impl.MilvusUserMemoryStore;
+import com.echomind.memory.usermemory.impl.RedisUserProfileSnapshotStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
 import com.echomind.common.messaging.ChatMemoryShardSupport;
 import com.echomind.skill.loader.SkillDirectoryWatcher;
 import com.echomind.skill.loader.SkillJarLoader;
 import com.echomind.skill.marketplace.MarketplaceService;
-import com.echomind.skill.marketplace.SkillEntityRepository;
+import com.echomind.skill.marketplace.SkillMapper;
 import com.echomind.skill.registry.SkillRegistry;
 import com.echomind.skill.storage.AliyunOssObjectStorageService;
 import com.echomind.skill.storage.LocalObjectStorageService;
 import com.echomind.skill.storage.ObjectStorageService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.amqp.core.Binding;
@@ -66,6 +68,7 @@ import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -241,10 +244,10 @@ public class EchoMindAutoConfiguration {
     }
 
     @Bean
-    public PersistentChatMemoryStore persistentChatMemoryStore(ChatSessionRepository sessionRepository,
-                                                               ChatMessageRepository messageRepository,
+    public PersistentChatMemoryStore persistentChatMemoryStore(ChatSessionMapper sessionMapper,
+                                                               ChatMessageMapper messageMapper,
                                                                ObjectMapper mapper) {
-        return new PersistentChatMemoryStore(sessionRepository, messageRepository, mapper);
+        return new PersistentChatMemoryStore(sessionMapper, messageMapper, mapper);
     }
 
     @Bean
@@ -291,29 +294,28 @@ public class EchoMindAutoConfiguration {
         );
     }
 
+    @Bean(destroyMethod = "close")
+    public MilvusClientFactory milvusClientFactory(EchoMindProperties props) {
+        return new MilvusClientFactory(
+            props.getMemory().getMilvusHost(),
+            props.getMemory().getMilvusPort()
+        );
+    }
+
     @Bean
-    public AgentKnowledgeService agentKnowledgeService(AgentKnowledgeDocumentRepository documentRepository,
-                                                       AgentKnowledgeChunkRepository chunkRepository,
+    public AgentKnowledgeService agentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
                                                        EmbeddingClient embeddingClient,
-                                                       ObjectMapper mapper,
                                                        EchoMindProperties props,
-                                                       ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
-        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
+                                                       MilvusClientFactory milvusClientFactory) {
         return new AgentKnowledgeService(
-            documentRepository,
-            chunkRepository,
+            documentMapper,
             embeddingClient,
-            mapper,
-            factory,
+            milvusClientFactory.getClient(),
             props.getMemory().isEmbeddingEnabled(),
-            props.getMemory().getKnowledgeVectorIndexName(),
-            props.getMemory().getKnowledgeVectorKeyPrefix(),
+            props.getMemory().getMilvusKnowledgeCollection(),
             props.getMemory().getKnowledgeChunkSize(),
-            props.getMemory().getKnowledgeChunkOverlap(),
+            props.getMemory().getKnowledgeChunkOverlapRatio(),
             props.getMemory().getKnowledgeMinVectorSimilarity(),
-            props.getMemory().getKnowledgeVectorWeight(),
-            props.getMemory().getKnowledgeKeywordWeight(),
-            props.getMemory().getKnowledgeKeywordCandidateLimit(),
             props.getMemory().isKnowledgeOcrEnabled(),
             props.getMemory().getKnowledgeOcrLanguage(),
             props.getMemory().getKnowledgeOcrDpi(),
@@ -333,17 +335,42 @@ public class EchoMindAutoConfiguration {
     }
 
     @Bean
-    public UserMemoryStore userMemoryStore(EchoMindProperties props,
-                                           ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
-        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
-        if (factory == null) {
-            log.warn("RedisConnectionFactory unavailable; user memory retrieval disabled in main pipeline");
-            return new NoopUserMemoryStore();
+    @DependsOn("llmInitializer")
+    public RetrievalQueryRewriter retrievalQueryRewriter(EchoMindProperties props,
+                                                         ModelProviderRegistry registry,
+                                                         ObjectMapper mapper) {
+        var memory = props.getMemory();
+        if (!memory.isRetrievalQueryRewriteEnabled()) {
+            return RetrievalQueryRewriter.disabled();
         }
-        return new UserMemoryVectorStore(
-            factory,
-            props.getUserMemory().getVectorIndexName(),
-            props.getUserMemory().getVectorKeyPrefix()
+        String modelId = memory.getRetrievalQueryRewriteModelId();
+        String[] parts = modelId == null ? new String[0] : modelId.split(":", 2);
+        if (parts.length != 2) {
+            log.warn("Retrieval query rewrite disabled: invalid model id {}", modelId);
+            return RetrievalQueryRewriter.disabled();
+        }
+        Optional<ModelSpec> model = registry.find(parts[0], parts[1]);
+        Optional<ModelProvider> provider = registry.getProvider(parts[0]);
+        if (model.isEmpty() || provider.isEmpty()) {
+            log.warn("Retrieval query rewrite disabled: model/provider unavailable {}", modelId);
+            return RetrievalQueryRewriter.disabled();
+        }
+        return new RetrievalQueryRewriter(
+            model.get(),
+            provider.get(),
+            true,
+            memory.getRetrievalQueryRewriteTimeoutMs(),
+            memory.getRetrievalQueryRewriteMaxChars(),
+            mapper
+        );
+    }
+
+    @Bean
+    public UserMemoryStore userMemoryStore(EchoMindProperties props,
+                                           MilvusClientFactory milvusClientFactory) {
+        return new MilvusUserMemoryStore(
+            milvusClientFactory.getClient(),
+            props.getMemory().getMilvusUserMemoryCollection()
         );
     }
 
@@ -359,21 +386,6 @@ public class EchoMindAutoConfiguration {
             factory,
             props.getUserMemory().getProfileKeyPrefix()
         );
-    }
-
-    @Bean
-    public Object legacyChatMessageVectorCleaner(EchoMindProperties props,
-                                                 ObjectProvider<RedisConnectionFactory> redisConnectionFactory) {
-        RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
-        if (factory == null) {
-            return new Object();
-        }
-        new LegacyChatMessageVectorCleaner(
-            factory,
-            props.getMemory().getLegacyVectorIndexName(),
-            props.getMemory().getLegacyVectorKeyPrefix()
-        ).clean();
-        return new Object();
     }
 
     @Bean
@@ -490,19 +502,12 @@ public class EchoMindAutoConfiguration {
         return watcher;
     }
 
-    /** 占位给 Spring Data JPA 仓库代理，避免调用方缺 Bean。 */
     @Bean
-    @ConditionalOnMissingBean
-    public SkillEntityRepository skillEntityRepository() {
-        return null; // 将由 Spring Data JPA 自动配置提供
-    }
-
-    @Bean
-    public MarketplaceService marketplaceService(SkillEntityRepository repository,
+    public MarketplaceService marketplaceService(SkillMapper skillMapper,
                                                   SkillJarLoader loader, SkillRegistry registry,
                                                   EchoMindProperties props,
                                                   ObjectStorageService storageService) {
-        return new MarketplaceService(repository, loader, registry,
+        return new MarketplaceService(skillMapper, loader, registry,
             props.getSkill().getMarketplaceDir(), storageService);
     }
 
@@ -546,8 +551,10 @@ public class EchoMindAutoConfiguration {
                                                  ChatMemoryPersistPublisher chatMemoryPersistPublisher,
                                                 CapabilityRegistry capabilityRegistry,
                                                 DynamicModelRouter router, ModelProviderRegistry providerReg,
-                                                ObjectStorageService storageService,
-                                                PromptBudget promptBudget,
+                                                 ObjectStorageService storageService,
+                                                 PromptBudget promptBudget,
+                                                ObjectProvider<ProviderTokenBudgetGuard> providerTokenBudgetGuard,
+                                                RetrievalQueryRewriter retrievalQueryRewriter,
                                                 EchoMindProperties props) {
         List<PipelineStage> stages = List.of(
             new ContextEnrichStage(memory),
@@ -557,10 +564,16 @@ public class EchoMindAutoConfiguration {
                 userProfileSnapshotStore.getIfAvailable(UserProfileSnapshotStore::noop),
                 props.getUserMemory().isEnabled(),
                 props.getUserMemory().getTopK(),
-                props.getUserMemory().getMinConfidence()
+                props.getUserMemory().getMinConfidence(),
+                props.getUserMemory().getRetrievalMinSimilarity(),
+                retrievalQueryRewriter
             ),
-            new KnowledgeRetrievalStage(knowledgeService, embeddingClient, props.getMemory().getKnowledgeTopK()),
+            new KnowledgeRetrievalStage(knowledgeService, embeddingClient, props.getMemory().getKnowledgeTopK(),
+                retrievalQueryRewriter),
             new ModelResolutionStage(router),
+            new ProviderTokenBudgetGuardStage(
+                providerTokenBudgetGuard.getIfAvailable(() -> ProviderTokenBudgetGuard.NOOP)
+            ),
             new MultimodalGuardStage(providerReg),
             new AttachmentPreparationStage(storageService),
             new ResultAggregationStage(providerReg, capabilityRegistry, promptBudget),
@@ -580,7 +593,7 @@ public class EchoMindAutoConfiguration {
     }
 
     /**
-     * 启动并挂载配置里的外部 stdio MCP Server。
+     * 启动并挂载配置里的外部 MCP Server。
      */
     @Bean
     public Object externalMcpInitializer(EchoMindProperties props, ExternalMcpRuntimeService mcpRuntimeService) {
@@ -593,7 +606,12 @@ public class EchoMindAutoConfiguration {
                     server.getId(),
                     server.getTransport(),
                     server.getCommand(),
-                    server.getWorkingDirectory()
+                    server.getWorkingDirectory(),
+                    server.getEnvironment(),
+                    server.getUrl(),
+                    server.getEndpoint(),
+                    server.getHeaders(),
+                    server.getToolMetadata()
                 ));
             } catch (Exception ex) {
                 log.warn("External MCP server {} skipped: {}", server.getId(), ex.getMessage());
@@ -604,8 +622,8 @@ public class EchoMindAutoConfiguration {
 
     /** Agent持久化服务，负责把用户创建的Agent配置写入MySQL。 */
     @Bean
-    public AgentPersistenceService agentPersistenceService(AgentRepository repository) {
-        return new AgentPersistenceService(repository);
+    public AgentPersistenceService agentPersistenceService(AgentMapper agentMapper) {
+        return new AgentPersistenceService(agentMapper);
     }
 
     /**

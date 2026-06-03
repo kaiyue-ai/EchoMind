@@ -2,7 +2,7 @@ package com.echomind.console.dto;
 
 import com.echomind.common.model.SkillState;
 import com.echomind.skill.api.SkillMetadata;
-import com.echomind.skill.marketplace.SkillRepository;
+import com.echomind.skill.marketplace.SkillEntity;
 import com.echomind.skill.registry.SkillRegistration;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,7 +31,7 @@ public record SkillView(
         );
     }
 
-    public static SkillView fromMarketplace(SkillRepository entity) {
+    public static SkillView fromMarketplace(SkillEntity entity) {
         SkillMetadata metadata = new SkillMetadata(
             entity.getName(),
             entity.getVersion(),

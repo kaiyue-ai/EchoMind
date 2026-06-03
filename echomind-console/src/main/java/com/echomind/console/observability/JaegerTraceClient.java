@@ -5,6 +5,7 @@ import com.echomind.console.observability.TraceDtos.TraceConfigResponse;
 import com.echomind.console.observability.TraceDtos.TraceDetail;
 import com.echomind.console.observability.TraceDtos.TraceDetailResponse;
 import com.echomind.console.observability.TraceDtos.TraceExporter;
+import com.echomind.console.observability.TraceDtos.TraceFields;
 import com.echomind.console.observability.TraceDtos.TraceListResponse;
 import com.echomind.console.observability.TraceDtos.TraceLog;
 import com.echomind.console.observability.TraceDtos.TraceProcess;
@@ -36,9 +37,16 @@ public class JaegerTraceClient {
     private static final String TRACE_SCOPE_BUSINESS = "business";
     private static final List<String> BUSINESS_OPERATIONS = List.of(
         "echomind.chat.sync",
-        "echomind.chat.stream",
         "echomind.chat.submit",
-        "echomind.chat.consume"
+        "echomind.chat.stream.consume",
+        "echomind.team.planner",
+        "echomind.team.reviewer",
+        "echomind.team.executor",
+        "echomind.team.sub_reviewer",
+        "echomind.team.merge",
+        "echomind.team.conflict_detector",
+        "echomind.team.arbitration",
+        "echomind.team.repair"
     );
 
     private final ObservabilityProperties properties;
@@ -188,6 +196,7 @@ public class JaegerTraceClient {
         String operationName = displaySpan == null ? "" : displaySpan.operationName();
         String serviceName = displaySpan == null ? backend.serviceName() : displaySpan.serviceName();
         boolean hasError = spans.stream().anyMatch(TraceSpan::hasError);
+        TraceFields fields = traceFields(spans, displaySpan);
         return Optional.of(new TraceDetail(
             traceId,
             operationName,
@@ -196,6 +205,7 @@ public class JaegerTraceClient {
             Math.max(0L, end - start),
             hasError,
             externalTraceUrl(backend.publicUrl(), traceId),
+            fields,
             spans,
             processes
         ));
@@ -210,7 +220,8 @@ public class JaegerTraceClient {
             detail.durationMicros(),
             detail.spans().size(),
             detail.hasError(),
-            detail.externalUrl()
+            detail.externalUrl(),
+            detail.fields()
         );
     }
 
@@ -237,9 +248,75 @@ public class JaegerTraceClient {
             spanNode.path("duration").asLong(0L),
             status,
             hasError,
+            fields(spanTags),
             spanTags,
             logs(spanNode.path("logs"))
         );
+    }
+
+    private TraceFields traceFields(List<TraceSpan> spans, TraceSpan displaySpan) {
+        TraceFields displayFields = displaySpan == null ? emptyFields() : displaySpan.fields();
+        TraceFields businessUsage = spans.stream()
+            .filter(span -> isBusinessOperation(span.operationName()))
+            .map(TraceSpan::fields)
+            .filter(fields -> fields != null && fields.totalTokens() != null)
+            .findFirst()
+            .orElse(null);
+        if (businessUsage != null) {
+            return mergeFields(businessUsage, displayFields);
+        }
+        TraceFields firstUsage = spans.stream()
+            .map(TraceSpan::fields)
+            .filter(fields -> fields != null && fields.totalTokens() != null)
+            .findFirst()
+            .orElse(null);
+        if (firstUsage != null) {
+            return mergeFields(firstUsage, displayFields);
+        }
+        return displayFields == null ? emptyFields() : displayFields;
+    }
+
+    private TraceFields fields(Map<String, Object> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return emptyFields();
+        }
+        return new TraceFields(
+            string(tags, "echomind.user_id"),
+            string(tags, "echomind.username"),
+            string(tags, "echomind.account_type"),
+            string(tags, "echomind.agent_id"),
+            string(tags, "echomind.session_id"),
+            firstString(tags, "echomind.model_id", "llm.model"),
+            number(tags, "echomind.prompt_tokens"),
+            number(tags, "echomind.completion_tokens"),
+            number(tags, "echomind.total_tokens"),
+            string(tags, "echomind.usage_source")
+        );
+    }
+
+    private TraceFields mergeFields(TraceFields primary, TraceFields fallback) {
+        if (primary == null) {
+            return fallback == null ? emptyFields() : fallback;
+        }
+        if (fallback == null) {
+            return primary;
+        }
+        return new TraceFields(
+            firstNonBlank(primary.userId(), fallback.userId()),
+            firstNonBlank(primary.username(), fallback.username()),
+            firstNonBlank(primary.accountType(), fallback.accountType()),
+            firstNonBlank(primary.agentId(), fallback.agentId()),
+            firstNonBlank(primary.sessionId(), fallback.sessionId()),
+            firstNonBlank(primary.modelId(), fallback.modelId()),
+            primary.promptTokens() == null ? fallback.promptTokens() : primary.promptTokens(),
+            primary.completionTokens() == null ? fallback.completionTokens() : primary.completionTokens(),
+            primary.totalTokens() == null ? fallback.totalTokens() : primary.totalTokens(),
+            firstNonBlank(primary.usageSource(), fallback.usageSource())
+        );
+    }
+
+    private TraceFields emptyFields() {
+        return new TraceFields(null, null, null, null, null, null, null, null, null, null);
     }
 
     private Map<String, Object> tags(JsonNode nodes) {
@@ -279,6 +356,34 @@ public class JaegerTraceClient {
             return value.asDouble();
         }
         return value.asText("");
+    }
+
+    private String firstString(Map<String, Object> tags, String first, String second) {
+        return firstNonBlank(string(tags, first), string(tags, second));
+    }
+
+    private String string(Map<String, Object> tags, String key) {
+        Object value = tags.get(key);
+        if (value == null) {
+            return "";
+        }
+        String text = String.valueOf(value);
+        return "null".equals(text) ? "" : text;
+    }
+
+    private Long number(Map<String, Object> tags, String key) {
+        Object value = tags.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private JsonNode execute(HttpUrl url) {

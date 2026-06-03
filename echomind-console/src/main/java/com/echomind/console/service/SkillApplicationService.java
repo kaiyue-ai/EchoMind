@@ -1,16 +1,18 @@
 package com.echomind.console.service;
 
-import com.echomind.agent.tool.SkillCapabilityService;
+import com.echomind.agent.tool.skill.SkillCapabilityService;
 import com.echomind.common.model.SkillState;
-import com.echomind.console.dto.SkillRepositoryView;
+import com.echomind.console.dto.SkillEntityView;
 import com.echomind.console.dto.SkillView;
 import com.echomind.skill.marketplace.MarketplaceService;
-import com.echomind.skill.marketplace.SkillRepository;
+import com.echomind.skill.marketplace.SkillEntity;
 import com.echomind.skill.registry.SkillRegistry;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -25,6 +27,7 @@ import java.util.Map;
  * Controller不直接操作这些运行时对象，所有生命周期操作都在这里收口。</p>
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class SkillApplicationService {
 
@@ -47,7 +50,7 @@ public class SkillApplicationService {
     public List<SkillView> listSkills() {
         Map<String, SkillView> merged = new LinkedHashMap<>();
 
-        for (SkillRepository entity : marketplace.listAll()) {
+        for (SkillEntity entity : marketplace.listAll()) {
             String skillId = entity.getName() + "@" + entity.getVersion();
             merged.put(skillId, SkillView.fromMarketplace(entity));
         }
@@ -75,20 +78,78 @@ public class SkillApplicationService {
     }
 
     /** 上传Skill JAR，加载成功后立即启用并同步能力注册表。 */
-    public SkillRepositoryView upload(MultipartFile file) {
+    /**
+     * 上传 Skill JAR 包并启用
+     *
+     * <p>执行流程：
+     * <ol>
+     *   <li>校验上传文件非空</li>
+     *   <li>将 JAR 包保存到临时文件</li>
+     *   <li>调用 Marketplace 上传到技能市场</li>
+     *   <li>在 CapabilityRegistry 中启用该技能</li>
+     *   <li>更新技能状态为 ENABLED</li>
+     *   <li>返回技能实体视图</li>
+     * </ol>
+     * </p>
+     *
+     * @param file Skill JAR 文件
+     * @return 技能实体视图
+     * @throws IllegalArgumentException 文件为空或上传失败时抛出
+     */
+    public SkillEntityView upload(MultipartFile file) {
+        // ============================================
+        // 阶段 1：校验上传文件
+        // ============================================
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Skill JAR不能为空");
         }
+
+        Path tempFile = null;
         try {
-            Path tempFile = Files.createTempFile("skill-", ".jar");
+            // ============================================
+            // 阶段 2：创建临时文件（在 finally 中清理）
+            // ============================================
+            tempFile = Files.createTempFile("skill-", ".jar");
+
+            // ============================================
+            // 阶段 3：保存 JAR 到临时文件
+            // ============================================
             file.transferTo(tempFile.toFile());
-            SkillRepository entity = marketplace.upload(tempFile);
+
+            // ============================================
+            // 阶段 4：上传到技能市场
+            // ============================================
+            SkillEntity entity = marketplace.upload(tempFile);
+
+            // ============================================
+            // 阶段 5：在 CapabilityRegistry 中启用技能
+            // ============================================
             capabilityService.enable(entity.getName() + "@" + entity.getVersion());
+
+            // ============================================
+            // 阶段 6：更新技能状态为 ENABLED
+            // ============================================
             entity = marketplace.updateState(entity.getName() + "@" + entity.getVersion(), SkillState.ENABLED)
                 .orElse(entity);
-            return SkillRepositoryView.from(entity);
+
+            // ============================================
+            // 阶段 7：返回技能实体视图
+            // ============================================
+            return SkillEntityView.from(entity);
         } catch (Exception e) {
-            throw new IllegalArgumentException("Skill上传失败: " + e.getMessage(), e);
+            // 异常处理：包装为 IllegalArgumentException 并抛出
+            throw new IllegalArgumentException("Skill 上传失败：" + e.getMessage(), e);
+        } finally {
+            // ============================================
+            // 阶段 8：清理临时文件（无论成功失败都删除）
+            // ============================================
+            try {
+                if (tempFile != null) {
+                    Files.deleteIfExists(tempFile);
+                }
+            } catch (IOException e) {
+                log.warn("Failed to delete temp file: {}", tempFile, e);
+            }
         }
     }
 

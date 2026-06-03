@@ -25,11 +25,12 @@ public class ModelResolutionStage implements PipelineStage {
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
+        // 创建会话上下文
         SessionContext sessionCtx = SessionContext.create(ctx.getSessionId());
         // 获取对应供应商的对应模型
         if (ctx.getModelId() != null) {
             String[] parts = ctx.getModelId().split(":");
-            if (parts.length == 2) {
+            if (parts.length == 2) { // 一个是供应商,一个是模型名称
                 sessionCtx = sessionCtx.withModel(parts[0], parts[1]);
             }
         }

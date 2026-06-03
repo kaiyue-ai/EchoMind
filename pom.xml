@@ -26,7 +26,6 @@
         <module>echomind-user-memory</module>
         <module>skills/skill-weather</module>
         <module>skills/skill-calculator</module>
-        <module>skills/skill-websearch</module>
         <module>skills/skill-markdown-code</module>
         <module>skills/skill-date-query</module>
         <module>skills/skill-github-intel</module>
@@ -49,10 +48,12 @@
         <exp4j.version>0.4.8</exp4j.version>
         <h2.version>2.3.232</h2.version>
         <mysql.version>8.3.0</mysql.version>
+        <mybatis-plus.version>3.5.7</mybatis-plus.version>
         <lombok.version>1.18.34</lombok.version>
         <knife4j.version>4.5.0</knife4j.version>
         <aliyun-oss.version>3.18.1</aliyun-oss.version>
         <pdfbox.version>2.0.31</pdfbox.version>
+        <milvus-sdk.version>2.6.20</milvus-sdk.version>
         <opentelemetry.instrumentation.version>2.26.0</opentelemetry.instrumentation.version>
 
         <maven-surefire-plugin.version>3.3.1</maven-surefire-plugin.version>
@@ -173,6 +174,16 @@
                 <version>${mysql.version}</version>
             </dependency>
             <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-core</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>com.aliyun.oss</groupId>
                 <artifactId>aliyun-sdk-oss</artifactId>
                 <version>${aliyun-oss.version}</version>
@@ -181,6 +192,11 @@
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${pdfbox.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.milvus</groupId>
+                <artifactId>milvus-sdk-java</artifactId>
+                <version>${milvus-sdk.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

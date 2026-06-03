@@ -4,11 +4,11 @@ import java.util.Locale;
 
 /** 用户画像分类。 */
 public enum UserMemoryCategory {
-    PERSONA,
-    BACKGROUND,
-    PREFERENCE,
-    KNOWLEDGE,
-    INTEREST;
+    PERSONA, // 画像
+    BACKGROUND, // 背景
+    PREFERENCE, // 偏好
+    KNOWLEDGE, // 知识
+    INTEREST; // 关注
 
     public static UserMemoryCategory from(String value) {
         if (value == null || value.isBlank()) {

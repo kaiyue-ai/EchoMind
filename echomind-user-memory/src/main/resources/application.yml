@@ -16,37 +16,43 @@ spring:
     exclude:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
       - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
-      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+
+otel:
+  service:
+    name: ${OTEL_SERVICE_NAME:echomind}
+  traces:
+    exporter: ${OTEL_TRACES_EXPORTER:none}
+  metrics:
+    exporter: ${OTEL_METRICS_EXPORTER:none}
+  logs:
+    exporter: ${OTEL_LOGS_EXPORTER:none}
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}
+  resource:
+    attributes: deployment.environment=${ECHOMIND_ENV:local}
 
 echomind:
   user-memory:
     enabled: ${USER_MEMORY_ENABLED:true}
     queue-name: ${USER_MEMORY_QUEUE_NAME:echomind.user-memory.requests}
-    flush-queue-name: ${USER_MEMORY_FLUSH_QUEUE_NAME:echomind.user-memory.flush.requests}
-    vector-index-name: ${USER_MEMORY_VECTOR_INDEX_NAME:idx:user:memory:vectors}
-    vector-key-prefix: ${USER_MEMORY_VECTOR_KEY_PREFIX:user:memory:vector:}
     profile-key-prefix: ${USER_MEMORY_PROFILE_KEY_PREFIX:echomind:user-profile:snapshot:}
-    buffer-key-prefix: ${USER_MEMORY_BUFFER_KEY_PREFIX:echomind:user-memory:buffer:}
-    buffer-meta-key-prefix: ${USER_MEMORY_BUFFER_META_KEY_PREFIX:echomind:user-memory:buffer-meta:}
-    buffer-lock-key-prefix: ${USER_MEMORY_BUFFER_LOCK_KEY_PREFIX:echomind:user-memory:buffer-lock:}
     existing-profile-limit: ${USER_MEMORY_EXISTING_PROFILE_LIMIT:30}
     max-extracted-entries: ${USER_MEMORY_MAX_EXTRACTED_ENTRIES:10}
-    batch-size: ${USER_MEMORY_BATCH_SIZE:5}
-    buffer-max-chars: ${USER_MEMORY_BUFFER_MAX_CHARS:8000}
-    buffer-idle-flush-seconds: ${USER_MEMORY_BUFFER_IDLE_FLUSH_SECONDS:1800}
-    scan-idle-buffers-seconds: ${USER_MEMORY_SCAN_IDLE_BUFFERS_SECONDS:60}
-    important-signal-confidence-threshold: ${USER_MEMORY_IMPORTANT_SIGNAL_CONFIDENCE_THRESHOLD:0.7}
+    min-confidence: ${USER_MEMORY_MIN_CONFIDENCE:0.3}
+    merge-min-similarity: ${USER_MEMORY_MERGE_MIN_SIMILARITY:${USER_MEMORY_MIN_SIMILARITY:0.65}}
     related-fact-top-k: ${USER_MEMORY_RELATED_FACT_TOP_K:12}
     profile-max-chars: ${USER_MEMORY_PROFILE_MAX_CHARS:2000}
-    buffer-lock-ttl-seconds: ${USER_MEMORY_BUFFER_LOCK_TTL_SECONDS:60}
-    buffer-ttl-days: ${USER_MEMORY_BUFFER_TTL_DAYS:7}
-    extractor-model-id: ${USER_MEMORY_EXTRACTOR_MODEL_ID:}
+    extractor-model-id: ${USER_MEMORY_EXTRACTOR_MODEL_ID:deepseek:deepseek-v4-flash}
+    milvus-host: ${ECHOMIND_MILVUS_HOST:localhost}
+    milvus-port: ${ECHOMIND_MILVUS_PORT:19530}
+    milvus-user-memory-collection: ${ECHOMIND_MILVUS_USER_MEMORY_COLLECTION:echomind_user_memory_v2}
     embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com}
     embedding-api-key: ${ALIYUN_BAILIAN_API_KEY:}
     embedding-model: ${USER_MEMORY_EMBEDDING_MODEL:tongyi-embedding-vision-plus}
     deep-seek-api-key: ${DEEPSEEK_API_KEY:${ANTHROPIC_API_KEY:}}
     deep-seek-base-url: ${DEEPSEEK_BASE_URL:${ANTHROPIC_BASE_URL:https://api.deepseek.com}}
-    deep-seek-model: ${USER_MEMORY_DEEPSEEK_MODEL:deepseek-chat}
+    deep-seek-model: ${USER_MEMORY_DEEPSEEK_MODEL:deepseek-v4-flash}
     open-ai-compatible-provider: ${USER_MEMORY_OPENAI_PROVIDER:aliyun-bailian}
     open-ai-compatible-api-key: ${ALIYUN_BAILIAN_API_KEY:${OPENAI_API_KEY:}}
     open-ai-compatible-base-url: ${ALIYUN_BAILIAN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}

@@ -14,7 +14,7 @@ import lombok.RequiredArgsConstructor;
  */
 @RequiredArgsConstructor
 public class MultimodalGuardStage implements PipelineStage {
-
+    // 模型注册器
     private final ModelProviderRegistry registry;
 
     @Override

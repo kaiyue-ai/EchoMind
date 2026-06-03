@@ -1,9 +1,8 @@
 package com.echomind.usermemory.service;
 
 import com.echomind.common.model.AgentMessage;
-import com.echomind.common.model.MemorySignal;
+import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.model.UserMemoryEvent;
-import com.echomind.common.model.UserMemoryFlushEvent;
 import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryEntry;
@@ -12,27 +11,17 @@ import com.echomind.memory.usermemory.UserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshot;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.usermemory.config.UserMemoryProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.redis.core.HashOperations;
-import org.springframework.data.redis.core.ListOperations;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.data.redis.core.ValueOperations;
+import org.mockito.ArgumentCaptor;
 
-import java.util.ArrayList;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyDouble;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -41,167 +30,126 @@ import static org.mockito.Mockito.when;
 class UserMemoryServiceTest {
 
     @Test
-    void appendsToBufferAndSkipsLlmBeforeBatchIsFull() {
+    void skipsWhenDecisionDisablesBothFactAndProfile() {
         Fixture fixture = fixture();
-        UserMemoryService service = fixture.service();
 
-        for (int i = 1; i <= 4; i++) {
-            service.ingest(event("user-a", "session-" + i, "消息-" + i));
-        }
+        fixture.service().ingest(event(MemoryDecision.NONE));
 
-        verify(fixture.analyzer, never()).analyze(anyString(), anyString(), any(), any());
-        verify(fixture.rabbitTemplate, never()).convertAndSend(anyString(), org.mockito.ArgumentMatchers.<Object>any());
-        assertThat(fixture.buffer).hasSize(4);
+        verify(fixture.analyzer(), never()).analyze(anyString(), anyString(), any(), any(), eq(false), eq(false));
+        verify(fixture.vectorStore(), never()).save(any(UserMemoryEntry.class));
+        verify(fixture.snapshotStore(), never()).save(any(UserProfileSnapshot.class));
     }
 
     @Test
-    void processesFiveTurnsAndWritesFactsAndProfileSnapshot() {
+    void processesOneTurnImmediatelyAndWritesFactsAndProfileSnapshot() {
         Fixture fixture = fixture();
-        when(fixture.embeddingClient.embed(anyString())).thenReturn(Optional.of(new double[] {0.1, 0.2}));
-        when(fixture.vectorStore.search(eq("user:user-a"), any(), eq(12), anyDouble())).thenReturn(List.of(
-            new UserMemoryHit("old-fact", UserMemoryCategory.PREFERENCE, "用户喜欢英文注释", "", 0.8, 0.9)
+        Instant oldFirstObservedAt = Instant.parse("2026-01-01T00:00:00Z");
+        when(fixture.embeddingClient().embed(anyString())).thenReturn(Optional.of(new double[] {0.1, 0.2}));
+        when(fixture.vectorStore().search(eq("user:user-a"), any(), eq(12), eq(0.3), eq(0.65))).thenReturn(List.of(
+            new UserMemoryHit("old-fact", UserMemoryCategory.PREFERENCE, "用户喜欢英文注释", "", 0.8,
+                oldFirstObservedAt, oldFirstObservedAt, oldFirstObservedAt, 0.9)
         ));
-        when(fixture.snapshotStore.get("user-a")).thenReturn(Optional.of(
+        when(fixture.snapshotStore().get("user-a")).thenReturn(Optional.of(
             new UserProfileSnapshot("user-a", "旧画像", 1, null)
         ));
-        when(fixture.analyzer.analyze(eq("user:user-a"), eq("旧画像"), any(), any())).thenReturn(
-            new UserMemoryBatchResult(
-                List.of(new UserMemoryBatchResult.FactToAdd("用户希望注释使用中文", UserMemoryCategory.PREFERENCE, "用户明确要求", 0.9)),
-                List.of(new UserMemoryBatchResult.FactToUpdate("old-fact", "用户现在希望注释使用中文", UserMemoryCategory.PREFERENCE, "用户明确要求", 0.9)),
-                List.of(new UserMemoryBatchResult.FactToDelete("old-fact", "旧偏好被覆盖")),
+        when(fixture.analyzer().analyze(eq("user:user-a"), eq("旧画像"), any(), any(), eq(true), eq(true))).thenReturn(
+            new UserMemoryAnalysisResult(
+                List.of(new UserMemoryAnalysisResult.FactToAdd("用户希望注释使用中文", UserMemoryCategory.PREFERENCE, "用户明确要求", 0.9)),
+                List.of(new UserMemoryAnalysisResult.FactToUpdate("old-fact", "用户现在希望注释使用中文", UserMemoryCategory.PREFERENCE, "用户明确要求", 0.9)),
+                List.of(),
                 "用户维护 EchoMind，偏好中文注释。"
             )
         );
-        UserMemoryService service = fixture.service();
 
-        for (int i = 1; i <= 5; i++) {
-            service.ingest(event("user-a", "session-" + i, "消息-" + i));
-        }
-        service.flush(new UserMemoryFlushEvent("user-a", "turns"));
+        fixture.service().ingest(event(new MemoryDecision(true, true, true, "长期偏好")));
 
-        verify(fixture.analyzer).analyze(eq("user:user-a"), eq("旧画像"), any(), any());
-        verify(fixture.vectorStore).deleteEntry("user:user-a", "old-fact");
-        verify(fixture.vectorStore, org.mockito.Mockito.times(2)).save(any(UserMemoryEntry.class));
-        verify(fixture.snapshotStore).save(org.mockito.ArgumentMatchers.argThat(snapshot ->
+        verify(fixture.vectorStore()).deleteEntry("user:user-a", "old-fact");
+        verify(fixture.vectorStore(), org.mockito.Mockito.times(2)).save(any(UserMemoryEntry.class));
+        verify(fixture.snapshotStore()).save(org.mockito.ArgumentMatchers.argThat(snapshot ->
             snapshot.userId().equals("user-a") && snapshot.content().contains("中文注释")
         ));
-        assertThat(fixture.buffer).isEmpty();
+
+        ArgumentCaptor<UserMemoryEntry> entryCaptor = ArgumentCaptor.forClass(UserMemoryEntry.class);
+        verify(fixture.vectorStore(), org.mockito.Mockito.times(2)).save(entryCaptor.capture());
+        UserMemoryEntry updated = entryCaptor.getAllValues().stream()
+            .filter(entry -> entry.entryId().equals("old-fact"))
+            .findFirst()
+            .orElseThrow();
+        assertThat(updated.firstObservedAt()).isEqualTo(oldFirstObservedAt);
+        assertThat(updated.lastObservedAt()).isAfter(oldFirstObservedAt);
+        assertThat(updated.updatedAt()).isAfter(oldFirstObservedAt);
     }
 
     @Test
-    void keepsBufferWhenLlmAnalysisFails() {
+    void refreshesOnlyProfileWhenFactDecisionIsFalse() {
         Fixture fixture = fixture();
-        when(fixture.embeddingClient.embed(anyString())).thenReturn(Optional.of(new double[] {0.1, 0.2}));
-        when(fixture.analyzer.analyze(eq("user:user-a"), eq(""), any(), any())).thenReturn(
-            UserMemoryBatchResult.failed("")
+        when(fixture.analyzer().analyze(eq("user:user-a"), eq(""), any(), any(), eq(false), eq(true))).thenReturn(
+            new UserMemoryAnalysisResult(List.of(), List.of(), List.of(), "新画像")
         );
-        UserMemoryService service = fixture.service();
 
-        for (int i = 1; i <= 5; i++) {
-            service.ingest(event("user-a", "session-" + i, "消息-" + i));
-        }
-        service.flush(new UserMemoryFlushEvent("user-a", "turns"));
+        fixture.service().ingest(event(new MemoryDecision(false, true, true, "只刷新画像")));
 
-        verify(fixture.vectorStore, never()).save(any(UserMemoryEntry.class));
-        verify(fixture.snapshotStore, never()).save(any(UserProfileSnapshot.class));
-        assertThat(fixture.buffer).hasSize(5);
-    }
-
-    @Test
-    void importantSignalPublishesFlushBeforeBatchIsFull() {
-        Fixture fixture = fixture();
-        UserMemoryService service = fixture.service();
-
-        service.ingest(new UserMemoryEvent("user-a", "session-1", "agent-1",
-            List.of(AgentMessage.user("以后注释用中文")), new MemorySignal(true, 0.92, "长期偏好")));
-
-        verify(fixture.rabbitTemplate).convertAndSend(eq("echomind.user-memory.flush.requests"),
-            org.mockito.ArgumentMatchers.<UserMemoryFlushEvent>argThat(event ->
-                event.userId().equals("user-a") && event.reason().equals("important-signal")));
-    }
-
-    private UserMemoryEvent event(String userId, String sessionId, String content) {
-        return new UserMemoryEvent(userId, sessionId, "agent-1", List.of(
-            AgentMessage.user(content),
-            AgentMessage.assistant("回复-" + content)
+        verify(fixture.vectorStore(), never()).save(any(UserMemoryEntry.class));
+        verify(fixture.snapshotStore()).save(org.mockito.ArgumentMatchers.argThat(snapshot ->
+            snapshot.content().equals("新画像")
         ));
     }
 
-    @SuppressWarnings("unchecked")
+    @Test
+    void analyzesOnlyUserMessagesSoAssistantHallucinationsCannotBecomeEvidence() {
+        Fixture fixture = fixture();
+        when(fixture.embeddingClient().embed(anyString())).thenReturn(Optional.of(new double[] {0.1, 0.2}));
+        when(fixture.vectorStore().search(eq("user:user-a"), any(), eq(12), eq(0.3), eq(0.65))).thenReturn(List.of());
+        when(fixture.analyzer().analyze(eq("user:user-a"), eq(""), any(), any(), eq(true), eq(true))).thenReturn(
+            new UserMemoryAnalysisResult(List.of(), List.of(), List.of(), "")
+        );
+
+        fixture.service().ingest(new UserMemoryEvent("user-a", "session-1", "agent-1", List.of(
+            AgentMessage.user("我叫秦墨舟"),
+            AgentMessage.assistant("你希望被称呼为陌尘")
+        ), new MemoryDecision(true, true, true, "长期事实")));
+
+        ArgumentCaptor<UserMemoryTurn> turnCaptor = ArgumentCaptor.forClass(UserMemoryTurn.class);
+        verify(fixture.analyzer()).analyze(eq("user:user-a"), eq(""), turnCaptor.capture(), any(), eq(true), eq(true));
+        assertThat(turnCaptor.getValue().messages())
+            .extracting(AgentMessage::content)
+            .containsExactly("我叫秦墨舟");
+        verify(fixture.embeddingClient()).embed("我叫秦墨舟");
+    }
+
+    private UserMemoryEvent event(MemoryDecision decision) {
+        return new UserMemoryEvent("user-a", "session-1", "agent-1", List.of(
+            AgentMessage.user("以后注释用中文"),
+            AgentMessage.assistant("好的")
+        ), decision);
+    }
+
     private Fixture fixture() {
-        StringRedisTemplate redis = mock(StringRedisTemplate.class);
-        RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
-        ListOperations<String, String> listOps = mock(ListOperations.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
-        ValueOperations<String, String> valueOps = mock(ValueOperations.class);
-        when(redis.opsForList()).thenReturn(listOps);
-        when(redis.opsForHash()).thenReturn(hashOps);
-        when(redis.opsForValue()).thenReturn(valueOps);
-        when(redis.expire(anyString(), any())).thenReturn(true);
-        when(redis.delete(anyString())).thenReturn(true);
-        when(valueOps.setIfAbsent(anyString(), anyString(), any())).thenReturn(true);
-        when(hashOps.increment(anyString(), any(), anyLong())).thenReturn(1L);
-
-        List<String> buffer = new ArrayList<>();
-        when(listOps.rightPush(anyString(), anyString())).thenAnswer(invocation -> {
-            buffer.add(invocation.getArgument(1));
-            return (long) buffer.size();
-        });
-        when(listOps.size(anyString())).thenAnswer(invocation -> (long) buffer.size());
-        when(listOps.range(anyString(), anyLong(), anyLong())).thenAnswer(invocation -> {
-            long start = invocation.getArgument(1);
-            long end = invocation.getArgument(2);
-            int from = Math.max(0, (int) start);
-            int to = end < 0 ? buffer.size() : Math.min(buffer.size(), (int) end + 1);
-            return from >= to ? List.of() : new ArrayList<>(buffer.subList(from, to));
-        });
-        doAnswer(invocation -> {
-            long start = invocation.getArgument(1);
-            if (start <= 0) {
-                return null;
-            }
-            if (start >= buffer.size()) {
-                buffer.clear();
-                return null;
-            }
-            List<String> remaining = new ArrayList<>(buffer.subList((int) start, buffer.size()));
-            buffer.clear();
-            buffer.addAll(remaining);
-            return null;
-        }).when(listOps).trim(anyString(), anyLong(), anyLong());
-
         UserMemoryStore vectorStore = mock(UserMemoryStore.class);
         UserProfileSnapshotStore snapshotStore = mock(UserProfileSnapshotStore.class);
-        UserMemoryBatchAnalyzer analyzer = mock(UserMemoryBatchAnalyzer.class);
+        UserMemoryAnalyzer analyzer = mock(UserMemoryAnalyzer.class);
         EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
         when(embeddingClient.embed(anyString())).thenReturn(Optional.empty());
         UserMemoryProperties properties = new UserMemoryProperties();
-        properties.setBatchSize(5);
         properties.setRelatedFactTopK(12);
-        ObjectMapper mapper = new ObjectMapper()
-            .findAndRegisterModules()
-            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        properties.setMinConfidence(0.3);
+        properties.setMergeMinSimilarity(0.65);
         UserMemoryService service = new UserMemoryService(
             vectorStore,
             snapshotStore,
             analyzer,
             embeddingClient,
-            properties,
-            redis,
-            mapper,
-            rabbitTemplate
+            properties
         );
-        return new Fixture(service, vectorStore, snapshotStore, analyzer, embeddingClient, rabbitTemplate, buffer);
+        return new Fixture(service, vectorStore, snapshotStore, analyzer, embeddingClient);
     }
 
     private record Fixture(
         UserMemoryService service,
         UserMemoryStore vectorStore,
         UserProfileSnapshotStore snapshotStore,
-        UserMemoryBatchAnalyzer analyzer,
-        EmbeddingClient embeddingClient,
-        RabbitTemplate rabbitTemplate,
-        List<String> buffer
+        UserMemoryAnalyzer analyzer,
+        EmbeddingClient embeddingClient
     ) {
     }
 }

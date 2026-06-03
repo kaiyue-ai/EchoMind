@@ -34,20 +34,20 @@ import java.util.stream.Collectors;
  *   <li>通过{@link SkillJarLoader#load(Path)}加载JAR并实例化Skill</li>
  *   <li>检查数据库中是否已存在同名同版本的Skill（防止重复上传）</li>
  *   <li>复制JAR文件到市场目录（目标文件名格式：{@code skillId@ → skillId-}.jar）</li>
- *   <li>创建{@link SkillRepository}实体并持久化到数据库</li>
+ *   <li>创建{@link SkillEntity}实体并持久化到数据库</li>
  *   <li>在运行时{@link SkillRegistry}中注册Skill</li>
  * </ol>
  *
  * <p>数据存储：</p>
  * <ul>
- *   <li>元数据通过JPA持久化到数据库（H2/MySQL/PostgreSQL）</li>
+ *   <li>元数据通过 MyBatis-Plus 持久化到数据库（H2/MySQL）</li>
  *   <li>JAR文件存储在本地市场目录中</li>
  *   <li>运行时实例保存在{@link SkillRegistry}的内存注册表中</li>
  * </ul>
  *
  * @author EchoMind Team
- * @see SkillEntityRepository
- * @see SkillRepository
+ * @see SkillMapper
+ * @see SkillEntity
  * @see SkillJarLoader
  */
 @Slf4j
@@ -57,7 +57,7 @@ public class MarketplaceService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** Skill市场数据访问层，提供数据库CRUD操作 */
-    private final SkillEntityRepository repository;
+    private final SkillMapper skillMapper;
 
     /** JAR文件加载器，负责从JAR中提取Skill实例 */
     private final SkillJarLoader jarLoader;
@@ -71,27 +71,10 @@ public class MarketplaceService {
     /** Skill JAR 的对象存储服务，优先写 OSS，配置缺失时写本地兜底目录 */
     private final ObjectStorageService storageService;
 
-    /**
-     * 构造市场服务。
-     *
-     * <p>构造时会自动创建市场目录（如果不存在）。</p>
-     *
-     * @param repository         数据访问层
-     * @param jarLoader          JAR加载器
-     * @param registry           运行时注册中心
-     * @param marketplaceDirPath 市场目录的路径字符串
-     * @throws RuntimeException 如果无法创建市场目录
-     */
-    public MarketplaceService(SkillEntityRepository repository, SkillJarLoader jarLoader,
-                              SkillRegistry registry, String marketplaceDirPath) {
-        this(repository, jarLoader, registry, marketplaceDirPath,
-            new com.echomind.skill.storage.LocalObjectStorageService(Paths.get(marketplaceDirPath)));
-    }
-
-    public MarketplaceService(SkillEntityRepository repository, SkillJarLoader jarLoader,
+    public MarketplaceService(SkillMapper skillMapper, SkillJarLoader jarLoader,
                               SkillRegistry registry, String marketplaceDirPath,
                               ObjectStorageService storageService) {
-        this.repository = repository;
+        this.skillMapper = skillMapper;
         this.jarLoader = jarLoader;
         this.registry = registry;
         this.marketplaceDir = Paths.get(marketplaceDirPath);
@@ -104,35 +87,39 @@ public class MarketplaceService {
     }
 
     /**
-     * 上传Skill到市场。
+     * 上传 Skill 到市场。
      *
-     * <p>完整的Skill上传流程：加载 → 去重检查 → 复制JAR → 持久化 → 运行时注册。
-     * 所有步骤在同一个事务上下文中执行，任一步骤失败都会回滚。</p>
+     * <p>流程：加载 → 去重 → 存储 → 注册 → 持久化。</p>
      *
-     * @param jarFile 要上传的JAR文件路径
-     * @return 持久化后的Skill实体，包含自动生成的ID和时间戳
-     * @throws SkillLoadException 如果JAR加载失败、Skill已存在或持久化失败
+     * @param jarFile JAR 文件路径
+     * @return Skill 实体
+     * @throws SkillLoadException 加载失败时抛出
      */
-    public SkillRepository upload(Path jarFile) {
+    public SkillEntity upload(Path jarFile) {
         try {
+            // 步骤 1：加载 JAR，获取 Skill 实例和 ClassLoader
             SkillJarLoader.SkillLoadResult result = jarLoader.load(jarFile);
-            Skill skill = result.skill();
-            var metadata = skill.metadata();
+            Skill skill = result.skill();// 获取skill
+            var metadata = skill.metadata(); // 获取元数据
 
-            Optional<SkillRepository> existing = repository.findByNameAndVersion(
+            // 步骤 2：去重检查,检查数据库中是否已存在同名同版本的Skill
+            Optional<SkillEntity> existing = skillMapper.selectByNameAndVersion(
                 metadata.name(), metadata.version());
             if (existing.isPresent()) {
                 throw new SkillLoadException("Skill already exists: " + metadata.skillId());
             }
 
-            // 先保留一份本地运行时缓存，再把 JAR 写入对象存储作为持久化事实。
+            // 步骤 3：复制到本地缓存
             Path destJar = marketplaceDir.resolve(metadata.skillId().replace("@", "-") + ".jar");
             Files.copy(jarFile, destJar, StandardCopyOption.REPLACE_EXISTING);
+
+            // 步骤 4：上传到 OSS（持久化存储，支持分布式共享）
             String objectKey = "skills/" + metadata.name() + "/" + metadata.version() + "/"
                 + metadata.skillId().replace("@", "-") + ".jar";
             var storedJar = storageService.putObject(objectKey, destJar, "application/java-archive");
 
-            SkillRepository entity = new SkillRepository();
+            // 步骤 5：创建数据库实体
+            SkillEntity entity = new SkillEntity();
             entity.setName(metadata.name());
             entity.setVersion(metadata.version());
             entity.setDescription(metadata.description());
@@ -144,11 +131,12 @@ public class MarketplaceService {
             entity.setAliasesJson(toJson(metadata.aliases()));
             entity.setJarPath(storedJar.uri());
 
-            // 先在运行时注册（内部会设 ENABLED），再同步状态写库
-            registry.register(skill, result.classLoader());
-            entity.setState(SkillState.ENABLED);
+            // 步骤 6：运行时注册（ClassLoader 隔离不同 Skill 的类）
+            registry.register(skill, result.classLoader());// 注册进skill
+            entity.setState(SkillState.ENABLED);// 设置状态为启用
 
-            entity = repository.save(entity);
+            // 步骤 7：持久化到数据库
+            entity = skillMapper.upsertById(entity);
 
             return entity;
         } catch (SkillLoadException e) {
@@ -163,8 +151,8 @@ public class MarketplaceService {
      *
      * @return 所有已上传Skill实体的列表
      */
-    public List<SkillRepository> listAll() {
-        return repository.findAll();
+    public List<SkillEntity> listAll() {
+        return skillMapper.selectAll();
     }
 
     /**
@@ -173,11 +161,11 @@ public class MarketplaceService {
      * @param identifier 数据库ID或{@code name@version}
      * @param state      目标状态
      */
-    public Optional<SkillRepository> updateState(String identifier, SkillState state) {
+    public Optional<SkillEntity> updateState(String identifier, SkillState state) {
         return findByIdOrSkillId(identifier)
             .map(entity -> {
                 entity.setState(state);
-                return repository.save(entity);
+                return skillMapper.upsertById(entity);
             });
     }
 
@@ -195,12 +183,12 @@ public class MarketplaceService {
      * <p>此方法在应用启动时由自动装配调用，确保上传的Skill在重启后仍然可用。</p>
      */
     public void restoreFromDatabase() {
-        List<SkillRepository> allSkills = repository.findAll();
+        List<SkillEntity> allSkills = skillMapper.selectAll();
         Set<String> existingIds = registry.listAll().stream()
             .map(r -> r.getMetadata().skillId())
             .collect(Collectors.toSet());
 
-        for (SkillRepository entity : allSkills) {
+        for (SkillEntity entity : allSkills) {
             String skillId = toSkillId(entity);
             if (existingIds.contains(skillId)) {
                 log.info("Skill {} already registered, skipping restore", skillId);
@@ -227,7 +215,7 @@ public class MarketplaceService {
         if (retiredSkillNames == null || retiredSkillNames.isEmpty()) {
             return;
         }
-        for (SkillRepository entity : repository.findAll()) {
+        for (SkillEntity entity : skillMapper.selectAll()) {
             if (retiredSkillNames.contains(entity.getName())) {
                 delete(toSkillId(entity));
             }
@@ -248,12 +236,12 @@ public class MarketplaceService {
      * @return 被删除Skill的运行时skillId，格式为{@code name@version}
      */
     public Optional<String> delete(String identifier) {
-        Optional<SkillRepository> entity = findByIdOrSkillId(identifier);
+        Optional<SkillEntity> entity = findByIdOrSkillId(identifier);
         if (entity.isPresent()) {
-            SkillRepository skill = entity.get();
+            SkillEntity skill = entity.get();
             String skillId = toSkillId(skill);
             registry.unregister(skillId);
-            repository.deleteById(skill.getId());
+            skillMapper.deleteById(skill.getId());
             try {
                 String jarPath = skill.getJarPath();
                 if (jarPath != null && storageService.supports(jarPath)) {
@@ -273,12 +261,12 @@ public class MarketplaceService {
     /**
      * 根据数据库ID或运行时skillId查找市场记录。
      */
-    public Optional<SkillRepository> findByIdOrSkillId(String identifier) {
+    private Optional<SkillEntity> findByIdOrSkillId(String identifier) {
         if (identifier == null || identifier.isBlank()) {
             return Optional.empty();
         }
 
-        Optional<SkillRepository> byId = repository.findById(identifier);
+        Optional<SkillEntity> byId = skillMapper.selectOptionalById(identifier);
         if (byId.isPresent()) {
             return byId;
         }
@@ -289,14 +277,14 @@ public class MarketplaceService {
         }
         String name = identifier.substring(0, separator);
         String version = identifier.substring(separator + 1);
-        return repository.findByNameAndVersion(name, version);
+        return skillMapper.selectByNameAndVersion(name, version);
     }
 
-    private String toSkillId(SkillRepository skill) {
+    private String toSkillId(SkillEntity skill) {
         return skill.getName() + "@" + skill.getVersion();
     }
 
-    private Path resolveRestoreJar(SkillRepository entity) throws Exception {
+    private Path resolveRestoreJar(SkillEntity entity) throws Exception {
         String skillId = toSkillId(entity);
         Path cachedJar = marketplaceDir.resolve(skillId.replace("@", "-") + ".jar");
         if (Files.exists(cachedJar)) {

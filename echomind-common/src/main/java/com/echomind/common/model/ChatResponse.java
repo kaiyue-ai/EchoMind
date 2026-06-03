@@ -18,7 +18,8 @@ public record ChatResponse(
     String status,
     String error,
     String traceId,
-    TokenUsage tokenUsage
+    TokenUsage tokenUsage,
+    String traceparent
 ) {
     public static ChatResponse success(String requestId, String sessionId, String agentId,
                                         String modelId, String response, List<String> skillResults, String traceId) {
@@ -28,7 +29,14 @@ public record ChatResponse(
     public static ChatResponse success(String requestId, String sessionId, String agentId,
                                         String modelId, String response, List<String> skillResults, String traceId,
                                         TokenUsage tokenUsage) {
-        return new ChatResponse(requestId, sessionId, agentId, modelId, response, skillResults, "OK", null, traceId, tokenUsage);
+        return success(requestId, sessionId, agentId, modelId, response, skillResults, traceId, tokenUsage, null);
+    }
+
+    public static ChatResponse success(String requestId, String sessionId, String agentId,
+                                        String modelId, String response, List<String> skillResults, String traceId,
+                                        TokenUsage tokenUsage, String traceparent) {
+        return new ChatResponse(requestId, sessionId, agentId, modelId, response, skillResults, "OK", null,
+            traceId, tokenUsage, traceparent);
     }
 
     public static ChatResponse success(String requestId, String sessionId, String agentId,
@@ -37,7 +45,11 @@ public record ChatResponse(
     }
 
     public static ChatResponse error(String requestId, String error, String traceId) {
-        return new ChatResponse(requestId, null, null, null, null, null, "ERROR", error, traceId, null);
+        return error(requestId, error, traceId, null);
+    }
+
+    public static ChatResponse error(String requestId, String error, String traceId, String traceparent) {
+        return new ChatResponse(requestId, null, null, null, null, null, "ERROR", error, traceId, null, traceparent);
     }
 
     public static ChatResponse error(String requestId, String error) {

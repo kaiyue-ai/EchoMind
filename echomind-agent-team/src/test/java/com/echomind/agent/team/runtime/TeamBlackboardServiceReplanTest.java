@@ -219,9 +219,14 @@ class TeamBlackboardServiceReplanTest {
             team.setTeamId("team-1");
             team.setOwnerUserId("default");
             team.setName("测试团队");
+            when(teamMapper.selectOptionalById("team-1")).thenReturn(Optional.of(team));
             when(teamMapper.selectOptionalByTeamIdAndOwnerUserId("team-1", "default")).thenReturn(Optional.of(team));
             when(runMapper.selectOptionalById("run-1")).thenReturn(Optional.of(run));
             when(runMapper.existsById("run-1")).thenReturn(true);
+            when(runMapper.tryAcquireExecuteLock("run-1")).thenAnswer(invocation -> {
+                run.setStatus(TeamRunStatus.EXECUTING);
+                return true;
+            });
             when(runMapper.upsertById(any(TeamRunEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
             when(memberMapper.selectByTeamIdOrderBySortOrderAscIdAsc("team-1")).thenReturn(List.of(
                 member("planner", TeamRole.PLANNER, 10),

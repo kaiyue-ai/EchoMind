@@ -1,20 +1,67 @@
 # EchoMind API 接口文档
 
-> Base URL: `http://localhost:8080/api`  
-> Content-Type: `application/json`  
+> Base URL: `http://localhost:8080/api`
+> Content-Type: `application/json`
 > 所有API返回标准JSON格式，错误时附带 `error` 字段
 
 ---
 
 ## 1. 聊天接口 `/api/chat`
 
-### POST `/api/chat` — 发送消息
+### POST `/api/chat` — 提交异步聊天
 ```json
 // 请求
 {
   "agentId": "default",
   "sessionId": "uuid-optional",
-  "message": "北京今天天气怎么样？"
+  "message": "北京今天天气怎么样？",
+  "modelId": "deepseek:deepseek-v4-flash"
+}
+
+// 响应
+{
+  "sessionId": "a1b2c3d4-...",
+  "requestId": "7f8e9d10-...",
+  "traceId": "1f2e3d4c..."
+}
+```
+
+`POST /api/chat` 只负责入队并立即返回。前端或调用方拿到 `requestId` 后，通过
+`GET /api/chat/stream/{requestId}` 订阅 `meta`、`token`、`tool_start`、`tool_end`、`result`
+或 `failure` SSE 事件。
+后端实际链路是 `ChatRabbitProducer -> echomind.chat.requests -> ChatRabbitConsumer`；
+消费者执行流式 Agent 后，再把事件发布到 `echomind.chat.stream-events`，由 `SsePushService`
+消费并转发给 SSE 订阅方。
+
+### GET `/api/chat/stream/{requestId}` — 订阅异步聊天事件
+```text
+event: meta
+data: {"sessionId":"a1b2c3d4-...","traceId":"1f2e3d4c..."}
+
+event: token
+data: {"token":"北京"}
+
+event: tool_start
+data: {"toolName":"calculator"}
+
+event: tool_end
+data: {"toolName":"calculator","durationMs":128}
+
+event: result
+data: {"requestId":"7f8e9d10-...","sessionId":"a1b2c3d4-...","agentId":"default","modelId":"deepseek:deepseek-v4-flash","response":"北京今天..."}
+
+event: failure
+data: {"error":"模型调用失败","traceId":"1f2e3d4c..."}
+```
+
+### POST `/api/chat/sync` — 同步执行聊天
+```json
+// 请求
+{
+  "agentId": "default",
+  "sessionId": "uuid-optional",
+  "message": "北京今天天气怎么样？",
+  "modelId": "deepseek:deepseek-v4-flash"
 }
 
 // 响应
@@ -22,9 +69,28 @@
   "sessionId": "a1b2c3d4-...",
   "agentId": "default",
   "modelId": "deepseek:deepseek-v4-flash",
+  "traceId": "1f2e3d4c...",
   "response": "北京今天晴天，22°C...",
-  "skillResults": ["[weather-query]: Weather for Beijing: Sunny, 22C"]
+  "skillResults": ["[weather-query]: Weather for Beijing: Sunny, 22C"],
+  "tokenUsage": {
+    "promptTokens": 120,
+    "completionTokens": 60,
+    "totalTokens": 180
+  }
 }
+```
+
+### GET `/api/chat/sessions` — 获取会话摘要列表
+```json
+// 响应
+[
+  {
+    "sessionId": "a1b2c3d4-...",
+    "title": "北京天气",
+    "lastMessage": "北京今天晴天...",
+    "updatedAt": "2026-05-06T08:00:02Z"
+  }
+]
 ```
 
 ### GET `/api/chat/{sessionId}/history` — 获取会话历史
@@ -116,7 +182,7 @@
 - Content-Type: `multipart/form-data`
 - 字段: `file` — Skill JAR文件
 ```json
-// 响应: SkillRepository 实体对象
+// 响应: SkillEntity 实体对象
 {
   "id": "uuid",
   "name": "my-skill",
@@ -153,7 +219,7 @@
     "name": "EchoMind Assistant",
     "systemPrompt": "You are a helpful AI assistant...",
     "defaultModelId": "deepseek:deepseek-v4-flash",
-    "skillIds": ["weather-query", "calculator", "web-search"]
+    "skillIds": ["weather-query", "calculator", "date-query"]
   }
 ]
 ```
@@ -189,25 +255,7 @@
 
 ---
 
-## 5. 记忆接口 `/api/memory`
-
-### GET `/api/memory/{sessionId}` — 获取会话记忆
-```json
-// 响应: AgentMessage[]
-[
-  { "role": "user", "content": "...", "timestamp": "..." },
-  { "role": "assistant", "content": "...", "timestamp": "..." }
-]
-```
-
-### DELETE `/api/memory/{sessionId}` — 清除会话记忆
-```json
-{ "status": "cleared", "sessionId": "uuid" }
-```
-
----
-
-## 6. MCP 接口 `/api/mcp`
+## 5. MCP 接口 `/api/mcp`
 
 ### GET `/api/mcp/servers` — 已挂载外部 MCP 服务
 ```json
@@ -217,6 +265,8 @@
     "transport": "stdio",
     "command": ["java", "-jar", "/app/mcp/nowcoder-java-interview-mcp-server-1.0.0.jar"],
     "workingDirectory": "/app/mcp",
+    "url": null,
+    "endpoint": null,
     "running": true,
     "toolCount": 1,
     "tools": [],
@@ -234,6 +284,20 @@
   "transport": "stdio",
   "command": ["java", "-jar", "/app/mcp/demo.jar"],
   "workingDirectory": "/app/mcp"
+}
+```
+
+远程 MCP 可使用 SSE 或 Streamable HTTP：
+
+```json
+{
+  "id": "remote-docs",
+  "transport": "streamable-http",
+  "url": "https://mcp.example.com",
+  "endpoint": "/mcp",
+  "headers": {
+    "Authorization": "Bearer token"
+  }
 }
 ```
 
@@ -290,15 +354,17 @@
 
 ## 7. Agent Team 接口 `/api/teams`
 
-Team 定义仍是全局资源；每一次 Run 按当前登录用户写入 MySQL 黑板，不进入普通聊天会话历史。
+Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进入普通聊天会话历史。
+用户只能列出、执行和删除自己拥有的 Team；旧无 token 请求归 `default` 用户。
 状态推进由 `TaskExecutor` 后台异步执行，前端 Team 看板用 0.25 秒轮询读取 Run/Step/Event。
 
-### GET `/api/teams` — 列出所有团队
+### GET `/api/teams` — 列出当前用户的团队
 ```json
 // 响应
 [
   {
     "teamId": "uuid",
+    "ownerUserId": "user-a",
     "name": "活动策划团队",
     "roles": ["PLANNER", "EXECUTOR", "REVIEWER"],
     "members": [
@@ -314,7 +380,7 @@ Team 定义仍是全局资源；每一次 Run 按当前登录用户写入 MySQL 
 ]
 ```
 
-### POST `/api/teams` — 创建团队
+### POST `/api/teams` — 为当前用户创建团队
 ```json
 // 请求
 {
@@ -419,8 +485,8 @@ Team 定义仍是全局资源；每一次 Run 按当前登录用户写入 MySQL 
 
 Planner 输出 DAG Step：`clientStepId` 是计划内稳定 ID，`dependsOn` 表示依赖关系；后端保存为
 `dependsOnStepIds` 后，只调度依赖已完成的 Step，能并发的 Step 会并发执行。
-Planner 不在计划里硬指定 Agent；执行前 `AgentSelector` 会把候选 Executor、能力标签、当前活跃 Step 负载、
-健康状态和规则评分交给模型自主选择，模型选择失败时才按规则评分兜底。
+Planner 不在计划里硬指定 Agent；执行前 `AgentSelector` 会把候选 Executor、能力标签和能力匹配分交给模型自主选择，
+模型选择失败或返回无效候选时才按能力匹配分与 `sortOrder` 稳定兜底。
 `RiskPolicy` 是唯一风险裁决入口，裁决结果会写入 `RISK_DECIDED` 事件。
 
 Reviewer 决策支持 `CONTINUE`、`RETRY`、`PARTIAL_REPLAN`、`REPLAN`、`ASK_CLARIFICATION`、`FAILED`：
@@ -479,7 +545,6 @@ curl http://localhost:8080/api/skills
 curl http://localhost:8080/api/models
 
 # 查询记忆
-curl http://localhost:8080/api/memory/{sessionId}
 
 # 列出外部MCP工具
 curl http://localhost:8080/api/mcp/tools

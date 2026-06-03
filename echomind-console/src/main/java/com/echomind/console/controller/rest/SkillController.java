@@ -1,6 +1,6 @@
 package com.echomind.console.controller.rest;
 
-import com.echomind.console.dto.SkillRepositoryView;
+import com.echomind.console.dto.SkillEntityView;
 import com.echomind.console.dto.SkillView;
 import com.echomind.console.service.SkillApplicationService;
 import lombok.RequiredArgsConstructor;
@@ -87,7 +87,7 @@ public class SkillController {
      * @return 持久化后的技能仓库实体；若处理失败则返回 500
      */
     @PostMapping("/upload")
-    public ResponseEntity<SkillRepositoryView> upload(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<SkillEntityView> upload(@RequestParam("file") MultipartFile file) {
         return ResponseEntity.ok(skillService.upload(file));
     }
 

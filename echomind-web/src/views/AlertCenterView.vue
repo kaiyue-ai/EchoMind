@@ -84,9 +84,6 @@
               <el-switch
                 v-model="rule.enabled"
                 class="admin-switch"
-                inline-prompt
-                active-text="开"
-                inactive-text="关"
                 aria-label="启用告警规则"
               />
             </label>
@@ -121,9 +118,6 @@
               <el-switch
                 v-model="rule.escalationEnabled"
                 class="admin-switch"
-                inline-prompt
-                active-text="开"
-                inactive-text="关"
                 aria-label="启用升级告警"
               />
             </label>
@@ -232,7 +226,13 @@ const typeFilter = ref('all')
 const statusFilter = ref('all')
 const defaultWebhookConfigured = ref(false)
 
-const alertTypes = ['CALL_ERROR', 'ERROR_RATE', 'TOKEN_QUOTA_EXCEEDED', 'TOKEN_QUOTA_WARNING', 'SENSITIVE_DATA']
+const alertTypes = [
+  'CALL_ERROR',
+  'ERROR_RATE',
+  'PROVIDER_TOKEN_BUDGET_EXCEEDED',
+  'PROVIDER_TOKEN_BUDGET_WARNING',
+  'SENSITIVE_DATA'
+]
 const enabledRuleCount = computed(() => rules.value.filter(rule => rule.enabled).length)
 const criticalEventCount = computed(() => events.value.filter(event => event.severity === 'CRITICAL' || event.status === 'FAILED').length)
 const sentEventCount = computed(() => events.value.filter(event => event.status === 'SENT').length)
@@ -310,8 +310,10 @@ function typeLabel(type) {
   return {
     CALL_ERROR: '调用错误',
     ERROR_RATE: '错误率',
-    TOKEN_QUOTA_EXCEEDED: 'Token 超限',
-    TOKEN_QUOTA_WARNING: 'Token 预警',
+    PROVIDER_TOKEN_BUDGET_EXCEEDED: 'Provider 预算超限',
+    PROVIDER_TOKEN_BUDGET_WARNING: 'Provider 预算预警',
+    TOKEN_QUOTA_EXCEEDED: '用户 Token 超限（历史）',
+    TOKEN_QUOTA_WARNING: '用户 Token 预警（历史）',
     SENSITIVE_DATA: '敏感数据'
   }[type] || type
 }

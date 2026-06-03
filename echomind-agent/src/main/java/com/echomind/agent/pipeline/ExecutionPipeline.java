@@ -18,7 +18,7 @@ import java.util.List;
 @Slf4j
 public class ExecutionPipeline {
 
-    private final List<PipelineStage> stages;
+    private final List<PipelineStage> stages; // 管道阶段
 
     public ExecutionPipeline(List<PipelineStage> stages) {
         this.stages = new ArrayList<>(stages);
@@ -34,8 +34,8 @@ public class ExecutionPipeline {
      * 执行到指定 order 为止。流式接口用它先完成上下文、模型和工具准备。
      */
     public PipelineContext executeUpTo(PipelineContext ctx, int maxOrderInclusive) {
-        PipelineContext current = ctx;
-        for (PipelineStage stage : stages) {
+        PipelineContext current = ctx; // 当前上下文
+        for (PipelineStage stage : stages) { // 遍历每个阶段
             if (stage.order() > maxOrderInclusive) break;
             // 进行自定义埋点
             Span span = EchoMindTrace.startSpan("echomind.pipeline.stage");
@@ -57,6 +57,12 @@ public class ExecutionPipeline {
             } catch (Exception e) {
                 EchoMindTrace.recordException(span, e);
                 log.error("[Pipeline] Stage {} failed: {}", stage.name(), e.getMessage());
+                if (Boolean.TRUE.equals(current.getAttributes().get(PipelineContext.ATTR_PROVIDER_TOKEN_BUDGET_BLOCKED))) {
+                    if (e instanceof RuntimeException runtimeException) {
+                        throw runtimeException;
+                    }
+                    throw new RuntimeException(e);
+                }
                 current.markFailed("Pipeline stage '" + stage.name() + "' failed: " + e.getMessage());
                 return current;
             } finally {

@@ -3,8 +3,6 @@ package com.echomind.agent.team.runtime;
 import com.echomind.agent.Agent;
 import com.echomind.agent.team.model.TeamMember;
 import com.echomind.agent.team.state.TeamRole;
-import com.echomind.agent.team.state.TeamStepStatus;
-import com.echomind.agent.team.store.TeamStepEntity;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -12,25 +10,21 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
- * Selects Executor by capability, current load, and health status.
+ * Selects Executor by the capabilities required by the planned Step.
  */
 public class TeamAgentSelector {
 
     public TeamAgentSelection selectExecutor(List<TeamMember> members,
-                                             Collection<String> requiredCapabilities,
-                                             List<TeamStepEntity> runSteps) {
-        List<TeamAgentSelection> candidates = rankExecutors(members, requiredCapabilities, runSteps);
+                                             Collection<String> requiredCapabilities) {
+        List<TeamAgentSelection> candidates = rankExecutors(members, requiredCapabilities);
         return candidates.isEmpty() ? null : candidates.get(0);
     }
 
     public List<TeamAgentSelection> rankExecutors(List<TeamMember> members,
-                                                  Collection<String> requiredCapabilities,
-                                                  List<TeamStepEntity> runSteps) {
+                                                  Collection<String> requiredCapabilities) {
         List<TeamMember> executors = members.stream()
             .filter(member -> member.role() == TeamRole.EXECUTOR)
             .sorted(Comparator.comparingInt(TeamMember::sortOrder))
@@ -39,17 +33,11 @@ public class TeamAgentSelector {
             return List.of();
         }
         Set<String> required = normalize(requiredCapabilities);
-        Map<String, Long> activeLoads = runSteps == null ? Map.of() : runSteps.stream()
-            .filter(step -> step.getAssignedAgentId() != null)
-            .filter(step -> step.getStatus() == TeamStepStatus.ASSIGNED
-                || step.getStatus() == TeamStepStatus.RUNNING
-                || step.getStatus() == TeamStepStatus.RETRYING)
-            .collect(Collectors.groupingBy(TeamStepEntity::getAssignedAgentId, Collectors.counting()));
 
         return executors.stream()
-            .map(member -> score(member, required, activeLoads.getOrDefault(member.agentId(), 0L)))
+            .map(member -> score(member, required))
             .sorted(Comparator
-                .comparingInt(TeamAgentSelection::totalScore).reversed()
+                .comparingInt(TeamAgentSelection::matchScore).reversed()
                 .thenComparingInt(TeamAgentSelection::sortOrder))
             .toList();
     }
@@ -76,15 +64,9 @@ public class TeamAgentSelector {
         return matches.size() == 1 ? matches.get(0) : null;
     }
 
-    private TeamAgentSelection score(TeamMember member, Set<String> required, long activeLoad) {
-        int capabilityScore = capabilityScore(member, required);
-        int loadScore = Math.max(0, 20 - (int) activeLoad * 5);
-        int healthScore = healthScore(healthStatus(member));
-        int total = capabilityScore + loadScore + healthScore;
-        String reason = "规则评分：能力匹配 " + capabilityScore
-            + "，当前负载 " + activeLoad
-            + "，健康状态 " + healthStatus(member)
-            + "，总分 " + total;
+    private TeamAgentSelection score(TeamMember member, Set<String> required) {
+        int matchScore = matchScore(member, required);
+        String reason = "能力匹配分 " + matchScore + "，按 sortOrder " + member.sortOrder() + " 稳定排序";
         List<String> tags = new ArrayList<>(member.capabilityTags() == null ? List.of() : member.capabilityTags());
         return new TeamAgentSelection(
             memberKey(member),
@@ -92,17 +74,13 @@ public class TeamAgentSelector {
             member.agentName(),
             tags,
             member.sortOrder(),
-            capabilityScore,
-            loadScore,
-            healthScore,
-            total,
-            healthStatus(member),
+            matchScore,
             "RULE_SCORE",
             reason
         );
     }
 
-    private int capabilityScore(TeamMember member, Set<String> required) {
+    private int matchScore(TeamMember member, Set<String> required) {
         if (required == null || required.isEmpty()) {
             return 10;
         }
@@ -125,22 +103,6 @@ public class TeamAgentSelector {
             }
         }
         return score;
-    }
-
-    private int healthScore(String healthStatus) {
-        return "HEALTHY".equals(healthStatus) ? 10 : 0;
-    }
-
-    private String healthStatus(TeamMember member) {
-        return "HEALTHY";
-    }
-
-    private int sortOrder(List<TeamMember> executors, String agentId) {
-        return executors.stream()
-            .filter(member -> member.agentId().equals(agentId))
-            .findFirst()
-            .map(TeamMember::sortOrder)
-            .orElse(Integer.MAX_VALUE);
     }
 
     private String memberKey(TeamMember member) {

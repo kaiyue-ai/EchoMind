@@ -19,12 +19,12 @@ public class TeamRuntimeProperties {
 
     private int maxPlanRetries = 2;
     private int maxResultReplans = 2;
-    private int maxStepRetries = 3;
+    private int maxStepRetries = 2;
     private int maxReviewerFormatRepairs = 3;
     private int maxArbitrations = 2;
     private int maxConcurrentSteps = 3;
-    private int stepTimeoutSeconds = 300;
-    private int runTimeoutSeconds = 1800;
+    private int stepTimeoutSeconds = 180;
+    private int runTimeoutSeconds = 1200;
     private int stepPollIntervalMs = 2000;
 
     public int getMaxPlanRetries() {

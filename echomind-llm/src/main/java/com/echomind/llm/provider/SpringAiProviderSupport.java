@@ -9,6 +9,8 @@ import com.echomind.llm.provider.tool.LlmTool;
 import com.echomind.llm.router.ModelSpec;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
@@ -42,7 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 abstract class SpringAiProviderSupport implements ModelProvider {
 
     /** 单次模型请求最多允许执行的工具次数，防止模型反复调用同一个工具导致请求永不结束。 */
-    private static final int MAX_TOOL_CALLS_PER_REQUEST = 8;
+    private static final int MAX_TOOL_CALLS_PER_REQUEST = 50;
 
     // 这是json序列化工具,用于将java对象转为json字符串,将json字符串解析为javaMap对象
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -81,9 +83,10 @@ abstract class SpringAiProviderSupport implements ModelProvider {
             ChatResponse response = chatModel.call(prompt(request));
             return new ProviderResponse(cleanToolError(content(response)), usage(response));
         } catch (Exception e) {
-            log.warn("{} Spring AI chat call failed: {}", providerId, e.getMessage());
+            String failure = friendlyFailureMessage(e);
+            log.warn("{} Spring AI chat call failed: {}", providerId, failure);
             log.debug("{} Spring AI chat call failure detail", providerId, e);
-            return ProviderResponse.failure(e.getMessage());
+            return ProviderResponse.failure(failure);
         }
     }
 
@@ -100,14 +103,16 @@ abstract class SpringAiProviderSupport implements ModelProvider {
             return chatModel.stream(prompt)
                 .flatMapIterable(this::chunks)
                 .onErrorResume(error -> {
-                    log.warn("{} Spring AI streaming call failed: {}", providerId, error.getMessage());
+                    String failure = friendlyFailureMessage(error);
+                    log.warn("{} Spring AI streaming call failed: {}", providerId, failure);
                     log.debug("{} Spring AI streaming call failure detail", providerId, error);
-                    return Flux.just(ProviderStreamChunk.failure(error.getMessage()));
+                    return Flux.just(ProviderStreamChunk.failure(failure));
                 });
         } catch (Exception e) {
-            log.warn("{} Spring AI streaming setup failed: {}", providerId, e.getMessage());
+            String failure = friendlyFailureMessage(e);
+            log.warn("{} Spring AI streaming setup failed: {}", providerId, failure);
             log.debug("{} Spring AI streaming setup failure detail", providerId, e);
-            return Flux.just(ProviderStreamChunk.failure(e.getMessage()));
+            return Flux.just(ProviderStreamChunk.failure(failure));
         }
     }
 
@@ -280,7 +285,44 @@ abstract class SpringAiProviderSupport implements ModelProvider {
         if (content == null) {
             return "";
         }
-        return content.trim().replaceFirst("^Error:\\s*", "");
+        return content.replaceFirst("^Error:\\s*", "");
+    }
+
+    private static String friendlyFailureMessage(Throwable error) {
+        String missingToolMarker = "No ToolCallback found for tool name:";
+        String missingToolMessage = firstMessageContaining(error, missingToolMarker);
+        if (missingToolMessage != null) {
+            String toolName = missingToolMessage.substring(
+                missingToolMessage.indexOf(missingToolMarker) + missingToolMarker.length()
+            ).trim();
+            return "模型尝试调用未暴露的工具: " + toolName + "。请换一种说法重试，或明确说明要查询的业务对象。";
+        }
+        String message = firstNonBlankMessage(error);
+        return message == null || message.isBlank() ? "模型调用失败" : message;
+    }
+
+    private static String firstMessageContaining(Throwable error, String marker) {
+        Throwable current = error;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && message.contains(marker)) {
+                return message;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private static String firstNonBlankMessage(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && !message.isBlank()) {
+                return message;
+            }
+            current = current.getCause();
+        }
+        return "";
     }
 
     private static final class EchoMindToolCallback implements ToolCallback {
@@ -289,17 +331,19 @@ abstract class SpringAiProviderSupport implements ModelProvider {
         private final ToolCallBudget budget;
         private final ToolDefinition definition;
         private final ToolMetadata metadata;
+        private final Context otelContext;
 
         private EchoMindToolCallback(LlmTool tool, ToolCallBudget budget) {
             this.tool = tool;
             this.budget = budget;
+            this.otelContext = Context.current();
             this.definition = DefaultToolDefinition.builder()
                 .name(tool.name())
                 .description(tool.description() == null ? "" : tool.description())
                 .inputSchema(inputSchema(tool))
                 .build();
             this.metadata = ToolMetadata.builder()
-                .returnDirect(tool.directResult())
+                .returnDirect(false)
                 .build();
         }
 
@@ -315,17 +359,19 @@ abstract class SpringAiProviderSupport implements ModelProvider {
 
         @Override
         public String call(String toolInput) {
-            budget.acquire(tool.name());
-            String argumentsJson = toolInput == null || toolInput.isBlank() ? "{}" : toolInput;
-            String validationError = validateToolArguments(tool, argumentsJson);
-            if (validationError != null) {
-                return "Error: " + validationError;
-            }
-            try {
-                String result = tool.call(argumentsJson);
-                return result == null ? "" : result;
-            } catch (Exception e) {
-                return "Error: " + e.getMessage();
+            try (Scope ignored = otelContext.makeCurrent()) {
+                budget.acquire(tool.name());
+                String argumentsJson = toolInput == null || toolInput.isBlank() ? "{}" : toolInput;
+                String validationError = validateToolArguments(tool, argumentsJson);
+                if (validationError != null) {
+                    return "Error: " + validationError;
+                }
+                try {
+                    String result = tool.call(argumentsJson);
+                    return result == null ? "" : result;
+                } catch (Exception e) {
+                    return "Error: " + e.getMessage();
+                }
             }
         }
 

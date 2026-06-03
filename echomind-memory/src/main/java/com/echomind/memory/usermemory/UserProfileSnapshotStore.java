@@ -2,7 +2,7 @@ package com.echomind.memory.usermemory;
 
 import java.util.Optional;
 
-/** 用户画像快照存储。画像是事实层的压缩结果，不替代 Redis Stack 中的细粒度事实。 */
+/** 用户画像快照存储。画像是事实层的压缩结果，不替代 Milvus 中的细粒度事实。 */
 public interface UserProfileSnapshotStore {
 
     Optional<UserProfileSnapshot> get(String userId);

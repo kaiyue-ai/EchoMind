@@ -27,5 +27,25 @@ class QueryEmbeddingCacheTest {
         assertThat(first).containsSame(vector);
         assertThat(second).containsSame(vector);
         verify(embeddingClient, times(1)).embed("同一轮用户问题");
+        assertThat(attributes).containsEntry(QueryEmbeddingCache.TEXT_ATTRIBUTE_KEY, "同一轮用户问题");
+    }
+
+    @Test
+    void recalculatesWhenEmbeddingTextChanges() {
+        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
+        Map<String, Object> attributes = new ConcurrentHashMap<>();
+        double[] originalVector = new double[] {0.1};
+        double[] rewrittenVector = new double[] {0.9};
+        when(embeddingClient.embed("今天苹果多少钱")).thenReturn(Optional.of(originalVector));
+        when(embeddingClient.embed("今天苹果的价格")).thenReturn(Optional.of(rewrittenVector));
+
+        Optional<double[]> first = QueryEmbeddingCache.getOrEmbed(attributes, embeddingClient, "今天苹果多少钱");
+        Optional<double[]> second = QueryEmbeddingCache.getOrEmbed(attributes, embeddingClient, "今天苹果的价格");
+
+        assertThat(first).containsSame(originalVector);
+        assertThat(second).containsSame(rewrittenVector);
+        assertThat(attributes).containsEntry(QueryEmbeddingCache.TEXT_ATTRIBUTE_KEY, "今天苹果的价格");
+        verify(embeddingClient).embed("今天苹果多少钱");
+        verify(embeddingClient).embed("今天苹果的价格");
     }
 }

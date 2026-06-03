@@ -8,24 +8,29 @@ public final class QueryEmbeddingCache {
 
     // 缓存的向量会写入到 PipelineContext 的属性中
     public static final String ATTRIBUTE_KEY = "queryEmbedding";
+    public static final String TEXT_ATTRIBUTE_KEY = "queryEmbeddingText";
 
     // 私有构造函数
     private QueryEmbeddingCache() {
     }
 
+    // 获取或计算用户问题的向量表示
     public static Optional<double[]> getOrEmbed(Map<String, Object> attributes,
                                                 EmbeddingClient embeddingClient,
                                                 String text) {
         if (attributes == null || embeddingClient == null || text == null || text.isBlank()) {
             return Optional.empty();
         }
-        // ATTRIBUTE_KEY是向量数据库的缓存键,cached则是算出来的向量值
         Object cached = attributes.get(ATTRIBUTE_KEY);
-        if (cached instanceof double[] vector && vector.length > 0) {
+        Object cachedText = attributes.get(TEXT_ATTRIBUTE_KEY);
+        if (cached instanceof double[] vector && vector.length > 0 && text.equals(cachedText)) {
             return Optional.of(vector);
         }
         Optional<double[]> vector = embeddingClient.embed(text);
-        vector.ifPresent(value -> attributes.put(ATTRIBUTE_KEY, value));
+        vector.ifPresent(value -> {
+            attributes.put(ATTRIBUTE_KEY, value);
+            attributes.put(TEXT_ATTRIBUTE_KEY, text);
+        });
         return vector;
     }
 }

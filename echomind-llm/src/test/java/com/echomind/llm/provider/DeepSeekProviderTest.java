@@ -72,13 +72,14 @@ class DeepSeekProviderTest {
     }
 
     @Test
-    void toolCallbacksKeepRequiredToolAndDirectReturnMetadata() {
+    void toolCallbacksUseNonThinkingAliasAndNeverReturnDirect() {
         CapturingChatModel chatModel = new CapturingChatModel(prompt -> {
             DeepSeekChatOptions options = (DeepSeekChatOptions) prompt.getOptions();
+            assertThat(options.getModel()).isEqualTo("deepseek-chat");
             ToolCallback callback = options.getToolCallbacks().get(0);
-            assertThat(options.getToolChoice()).isNotNull();
+            assertThat(options.getToolChoice()).isNull();
             assertThat(callback.getToolDefinition().name()).isEqualTo("tool_12306");
-            assertThat(callback.getToolMetadata().returnDirect()).isTrue();
+            assertThat(callback.getToolMetadata().returnDirect()).isFalse();
             return response(callback.call("{\"from\":\"重庆\",\"to\":\"临沂\"}"), TokenUsage.of(20, 3, 23));
         });
         DeepSeekProvider provider = new DeepSeekProvider("https://api.deepseek.com", "test-key", 4096, chatModel);
@@ -95,10 +96,8 @@ class DeepSeekProviderTest {
                     "from", Map.of("type", "string"),
                     "to", Map.of("type", "string")
                 )),
-                true,
                 ignored -> "12306 余票查询"
-            )),
-            "tool_12306"
+            ))
         ));
 
         assertThat(response.content()).isEqualTo("12306 余票查询");
@@ -139,7 +138,7 @@ class DeepSeekProviderTest {
         chatModel.streamHandler = prompt -> Flux.defer(() -> {
             DeepSeekChatOptions options = (DeepSeekChatOptions) prompt.getOptions();
             ToolCallback callback = options.getToolCallbacks().get(0);
-            for (int i = 0; i < 9; i++) {
+            for (int i = 0; i < 51; i++) {
                 callback.call("{\"query\":\"EchoMind\"}");
             }
             return Flux.just(response("不会走到这里", null));
@@ -159,7 +158,6 @@ class DeepSeekProviderTest {
                         "properties", Map.of("query", Map.of("type", "string")),
                         "required", List.of("query")
                     ),
-                    false,
                     ignored -> {
                         executedCalls.incrementAndGet();
                         return "not found";
@@ -173,6 +171,6 @@ class DeepSeekProviderTest {
         assertThat(chunks).hasSize(1);
         assertThat(chunks.get(0).failed()).isTrue();
         assertThat(chunks.get(0).failureReason()).contains("工具调用次数超过上限");
-        assertThat(executedCalls.get()).isEqualTo(8);
+        assertThat(executedCalls.get()).isEqualTo(50);
     }
 }

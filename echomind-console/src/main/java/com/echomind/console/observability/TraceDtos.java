@@ -52,7 +52,8 @@ public final class TraceDtos {
         long durationMicros,
         int spanCount,
         boolean hasError,
-        String externalUrl
+        String externalUrl,
+        TraceFields fields
     ) {
     }
 
@@ -64,6 +65,7 @@ public final class TraceDtos {
         long durationMicros,
         boolean hasError,
         String externalUrl,
+        TraceFields fields,
         List<TraceSpan> spans,
         List<TraceProcess> processes
     ) {
@@ -78,9 +80,40 @@ public final class TraceDtos {
         long durationMicros,
         String status,
         boolean hasError,
+        TraceFields fields,
         Map<String, Object> tags,
         List<TraceLog> logs
     ) {
+    }
+
+    public record TraceFields(
+        String userId,
+        String username,
+        String accountType,
+        String agentId,
+        String sessionId,
+        String modelId,
+        Long promptTokens,
+        Long completionTokens,
+        Long totalTokens,
+        String usageSource
+    ) {
+        public boolean hasAny() {
+            return hasText(userId)
+                || hasText(username)
+                || hasText(accountType)
+                || hasText(agentId)
+                || hasText(sessionId)
+                || hasText(modelId)
+                || promptTokens != null
+                || completionTokens != null
+                || totalTokens != null
+                || hasText(usageSource);
+        }
+
+        private boolean hasText(String value) {
+            return value != null && !value.isBlank();
+        }
     }
 
     public record TraceLog(

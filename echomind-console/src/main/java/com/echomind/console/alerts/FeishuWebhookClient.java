@@ -45,6 +45,7 @@ public class FeishuWebhookClient {
                 级别：%s
                 类型：%s
                 TraceID：%s
+                Provider：%s
                 用户：%s
                 Agent：%s
                 会话：%s
@@ -56,6 +57,7 @@ public class FeishuWebhookClient {
                 event.getSeverity(),
                 event.getAlertType(),
                 value(event.getTraceId()),
+                value(event.getProviderId()),
                 value(event.getUsername()),
                 value(event.getAgentId()),
                 value(event.getSessionId()),

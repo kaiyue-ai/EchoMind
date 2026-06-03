@@ -31,6 +31,14 @@ class AgentRuntimeBootstrapperTest {
         defaultAgent.setModelId("deepseek:deepseek-v4-flash");
         defaultAgent.setSkillIds(List.of("weather-query", "markdown-code", "date-query"));
         props.setAgents(List.of(defaultAgent));
+        props.getRuntime().getAgentBootstrap().setDefaultSkillMergeIds(List.of("markdown-code", "date-query"));
+        props.getRuntime().getAgentBootstrap().setModelMigrations(List.of(
+            prefixMigration("anthropic:claude-", "deepseek:deepseek-v4-flash")
+        ));
+        props.getRuntime().getRetiredSkills().setSkillIds(List.of("qq-mail"));
+        props.getRuntime().getRetiredSkills().setPromptReplacements(List.of(
+            replacement("QQ 邮箱工具", "")
+        ));
 
         AgentPersistenceService persistence = mock(AgentPersistenceService.class);
         when(persistence.loadAll()).thenReturn(List.of(persisted));
@@ -60,6 +68,9 @@ class AgentRuntimeBootstrapperTest {
         defaultAgent.setModelId("deepseek:deepseek-v4-flash");
         defaultAgent.setSkillIds(List.of("weather-query"));
         props.setAgents(List.of(defaultAgent));
+        props.getRuntime().getAgentBootstrap().setModelMigrations(List.of(
+            exactMigration("deepseek:deepseek-chat", "deepseek:deepseek-v4-flash")
+        ));
 
         AgentPersistenceService persistence = mock(AgentPersistenceService.class);
         when(persistence.loadAll()).thenReturn(List.of(persisted));
@@ -125,5 +136,26 @@ class AgentRuntimeBootstrapperTest {
             "fallback".equals(agent.getAgentId())
                 && "mock:mock-model".equals(agent.getModelId())
                 && agent.getSkillIds().equals(List.of("calculator"))));
+    }
+
+    private EchoMindProperties.ModelMigration exactMigration(String from, String to) {
+        EchoMindProperties.ModelMigration migration = new EchoMindProperties.ModelMigration();
+        migration.setFrom(from);
+        migration.setToModelId(to);
+        return migration;
+    }
+
+    private EchoMindProperties.ModelMigration prefixMigration(String fromPrefix, String to) {
+        EchoMindProperties.ModelMigration migration = new EchoMindProperties.ModelMigration();
+        migration.setFromPrefix(fromPrefix);
+        migration.setToModelId(to);
+        return migration;
+    }
+
+    private EchoMindProperties.TextReplacement replacement(String from, String to) {
+        EchoMindProperties.TextReplacement replacement = new EchoMindProperties.TextReplacement();
+        replacement.setFrom(from);
+        replacement.setTo(to);
+        return replacement;
     }
 }

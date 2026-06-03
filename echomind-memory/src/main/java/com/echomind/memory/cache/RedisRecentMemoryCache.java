@@ -1,7 +1,7 @@
 package com.echomind.memory.cache;
 
 import com.echomind.common.model.AgentMessage;
-import com.echomind.memory.redis.RedisKeyScanner;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -63,10 +63,12 @@ public class RedisRecentMemoryCache implements RecentMemoryCache {
     private final int maxMessageChars;
     private final long ttlSeconds;
 
+    // 默认配置
     public RedisRecentMemoryCache(RedisConnectionFactory connectionFactory, int maxMessages, long ttlSeconds) {
         this(connectionFactory, maxMessages, 12000, 1500, ttlSeconds);
     }
 
+    // 自定义配置
     public RedisRecentMemoryCache(RedisConnectionFactory connectionFactory, int maxMessages,
                                   int maxChars, int maxMessageChars, long ttlSeconds) {
         this.redis = new StringRedisTemplate(connectionFactory);
@@ -81,7 +83,7 @@ public class RedisRecentMemoryCache implements RecentMemoryCache {
         this.ttlSeconds = ttlSeconds;
     }
 
-    @Override
+    @Override // 追加消息
     public void append(String sessionId, AgentMessage message) {
         String key = key(sessionId);
         try {
@@ -101,7 +103,7 @@ public class RedisRecentMemoryCache implements RecentMemoryCache {
         }
     }
 
-    @Override
+    @Override // 读取最近消息缓存
     public List<AgentMessage> recent(String sessionId) {
         try {
             // 读路径也显式按窗口读取，避免旧脏数据或配置变化导致一次拉取过多历史。
@@ -121,12 +123,12 @@ public class RedisRecentMemoryCache implements RecentMemoryCache {
         }
     }
 
-    @Override
+    @Override // 清空最近消息缓存
     public void clear(String sessionId) {
         redis.delete(List.of(key(sessionId), charKey(sessionId), totalCharsKey(sessionId)));
     }
 
-    @Override
+    @Override // 列出所有会话 ID
     public Set<String> sessionIds() {
         try {
             Set<String> keys = keyScanner.scan(KEY_PREFIX + "*");
@@ -142,7 +144,7 @@ public class RedisRecentMemoryCache implements RecentMemoryCache {
         }
     }
 
-    @Override
+    @Override // 获取最近消息缓存大小
     public int size(String sessionId) {
         Long size = redis.opsForList().size(key(sessionId));
         return size == null ? 0 : size.intValue();

@@ -7,6 +7,8 @@ import com.echomind.common.model.ChatResponse;
 import com.echomind.common.model.ChatStreamEvent;
 import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.console.auth.AuthUser;
+import com.echomind.console.budget.ProviderTokenBudgetExceededException;
+import com.echomind.console.quota.TokenQuotaExceededException;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +20,7 @@ import java.util.function.Consumer;
 
 /**
  * Executes queued streaming chat requests and publishes token events.
+ * 执行从 RabbitMQ 队列中消费的流式聊天请求 ，并将结果通过事件回调推送给客户端
  */
 @Service
 @RequiredArgsConstructor
@@ -27,66 +30,86 @@ class QueuedChatStreamExecutor {
 
     private final AgentChatExecutor agentChatExecutor;
     private final ChatGovernanceService governanceService;
-
+    // 执行队列流式聊天：将请求ID发送到队列，等待异步处理，将结果推送给指定的用户的的请求
     ChatResponse execute(ChatRequest request, Consumer<ChatStreamEvent> events) {
+        // 1. 进行埋点：标记请求入口，记录链路信息
         Span span = EchoMindTrace.startSpan(OPERATION, EchoMindTrace.extractContext(traceCarrier(request)));
-        long startedNanos = System.nanoTime();
-        PipelineContext usageContext = null;
-        AuthUser authUser = queuedAuthUser(request);
-        tagRequest(span, request);
-        StreamExecution execution;
-        StringBuilder output = new StringBuilder();
-        try {
-            String governedMessage;
-            String rawMessage = request.message();
-            try (Scope ignored = span.makeCurrent()) {
-                governedMessage = governanceService.inspectRequest(span, authUser, request.agentId(),
-                    request.sessionId(), request.message());
-            }
-            execution = agentChatExecutor.executeStream(request.userId(), request.agentId(), request.sessionId(),
-                    governedMessage, request.modelId(), request.attachments(), rawMessage)
-                .block();
-            if (execution == null) {
-                throw new IllegalStateException("stream execution was not created");
-            }
-            usageContext = execution.context();
-            ensureTraceId(usageContext, span);
-            events.accept(ChatStreamEvent.meta(request.requestId(), usageContext.getSessionId(), usageContext.getTraceId()));
-            PipelineContext streamContext = usageContext;
-            execution.tokens()
-                .map(token -> governanceService.inspectResponseText(
-                    authUser,
-                    streamContext.getTraceId(),
-                    streamContext.getAgentId(),
-                    streamContext.getSessionId(),
-                    token
-                ))
-                .doOnNext(token -> {
-                    output.append(token);
-                    events.accept(ChatStreamEvent.token(request.requestId(), token));
-                })
-                .doOnError(error -> EchoMindTrace.recordException(span, error))
-                .blockLast();
-            usageContext.setFinalResponse(output.toString());
-            governanceService.recordStreamUsage(span, OPERATION, authUser, usageContext, startedNanos, false, null);
-            return ChatResponse.success(
-                request.requestId(),
-                usageContext.getSessionId(),
-                usageContext.getAgentId(),
-                usageContext.getModelId(),
-                usageContext.getFinalResponse(),
-                usageContext.getSkillResults(),
-                usageContext.getTraceId(),
-                usageContext.getTokenUsage()
-            );
-        } catch (RuntimeException e) {
-            EchoMindTrace.recordException(span, e);
-            PipelineContext errorCtx = usageContext == null ? new PipelineContext() : usageContext;
-            fillErrorContext(errorCtx, request, span);
+        long startedNanos = System.nanoTime(); // 记录请求开始时间
+        PipelineContext usageContext = null; // 流式聊天上下文
+        AuthUser authUser = queuedAuthUser(request); // 认证用户
+        tagRequest(span, request); // 标记请求
+        StreamExecution execution; // 流式聊天执行
+        StringBuilder output = new StringBuilder(); // 输出缓冲区
+        try (Scope ignored = span.makeCurrent()) {
             try {
-                governanceService.recordStreamUsage(span, OPERATION, authUser, errorCtx, startedNanos, true, e.getMessage());
-            } finally {
-                return ChatResponse.error(request.requestId(), e.getMessage(), errorCtx.getTraceId());
+                String rawMessage = request.message();
+                execution = agentChatExecutor.executeStream(request.userId(), request.agentId(), request.sessionId(),
+                        request.message(), request.modelId(), request.attachments(), rawMessage)
+                    .block();
+                if (execution == null) {
+                    throw new IllegalStateException("stream execution was not created");
+                }
+                usageContext = execution.context();
+                ensureTraceId(usageContext, span);
+                usageContext.setToolProgressSink(event -> {
+                    if (PipelineContext.ToolProgressEvent.TYPE_START.equals(event.type())) {
+                        emit(events, ChatStreamEvent.toolStart(request.requestId(), event.toolName()));
+                    } else if (PipelineContext.ToolProgressEvent.TYPE_END.equals(event.type())) {
+                        emit(events, ChatStreamEvent.toolEnd(request.requestId(), event.toolName(), event.durationMs()));
+                    }
+                });
+                emit(events, ChatStreamEvent.meta(request.requestId(), usageContext.getSessionId(), usageContext.getTraceId()));
+                PipelineContext streamContext = usageContext;
+                execution.tokens()
+                    .map(token -> governanceService.inspectResponseText(
+                        authUser,
+                        streamContext.getTraceId(),
+                        streamContext.getAgentId(),
+                        streamContext.getSessionId(),
+                        token
+                    ))
+                    .doOnNext(token -> {
+                        output.append(token);
+                        emit(events, ChatStreamEvent.token(request.requestId(), token));
+                    })
+                    .doOnError(error -> EchoMindTrace.recordException(span, error))
+                    .blockLast();
+                if (!usageContext.hasFailed()) {
+                    usageContext.setFinalResponse(output.toString());
+                }
+                boolean failed = usageContext.hasFailed();
+                String failureReason = failed ? usageContext.effectiveFailureReason() : null;
+                governanceService.recordStreamUsage(span, OPERATION, authUser, usageContext, startedNanos, failed,
+                    failureReason);
+                if (failed) {
+                    return ChatResponse.error(request.requestId(), failureReason, usageContext.getTraceId(),
+                        currentTraceparent());
+                }
+                return ChatResponse.success(
+                    request.requestId(),
+                    usageContext.getSessionId(),
+                    usageContext.getAgentId(),
+                    usageContext.getModelId(),
+                    usageContext.getFinalResponse(),
+                    usageContext.getSkillResults(),
+                    usageContext.getTraceId(),
+                    usageContext.getTokenUsage(),
+                    currentTraceparent()
+                );
+            } catch (RuntimeException e) {
+                EchoMindTrace.recordException(span, e);
+                PipelineContext errorCtx = usageContext == null ? new PipelineContext() : usageContext;
+                fillErrorContext(errorCtx, request, span);
+                if (isQuotaOrProviderBudgetExceeded(e)) {
+                    return ChatResponse.error(request.requestId(), e.getMessage(), errorCtx.getTraceId(),
+                        currentTraceparent());
+                }
+                try {
+                    governanceService.recordStreamUsage(span, OPERATION, authUser, errorCtx, startedNanos, true, e.getMessage());
+                } finally {
+                    return ChatResponse.error(request.requestId(), e.getMessage(), errorCtx.getTraceId(),
+                        currentTraceparent());
+                }
             }
         } finally {
             span.end();
@@ -120,6 +143,14 @@ class QueuedChatStreamExecutor {
         span.setAttribute("echomind.session_id", safe(request.sessionId()));
     }
 
+    private void emit(Consumer<ChatStreamEvent> events, ChatStreamEvent event) {
+        events.accept(event.withTrace(EchoMindTrace.currentTraceId(), currentTraceparent()));
+    }
+
+    private String currentTraceparent() {
+        return EchoMindTrace.injectContext().get("traceparent");
+    }
+
     private Map<String, String> traceCarrier(ChatRequest request) {
         Map<String, String> carrier = new HashMap<>();
         if (request.traceparent() != null && !request.traceparent().isBlank()) {
@@ -133,6 +164,10 @@ class QueuedChatStreamExecutor {
             ? AuthUser.DEFAULT_USER_ID
             : request.userId();
         return new AuthUser(userId, userId, !AuthUser.DEFAULT_USER_ID.equals(userId));
+    }
+
+    private boolean isQuotaOrProviderBudgetExceeded(RuntimeException e) {
+        return e instanceof ProviderTokenBudgetExceededException || e instanceof TokenQuotaExceededException;
     }
 
     private String safe(String value) {

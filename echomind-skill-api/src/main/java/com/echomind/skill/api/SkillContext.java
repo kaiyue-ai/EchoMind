@@ -37,17 +37,17 @@ public record SkillContext(
      * 每次用户发起一个新的对话时由平台分配，在整个对话生命周期内保持不变。
      * 技能可以使用此 ID 来隔离不同会话的数据或缓存。
      */
-    String sessionId,
+    String sessionId, // sessionId
     /**
      * 发起当前技能调用的智能体唯一标识符。
      * 在单智能体场景下，这就是当前唯一的 Agent ID；
      * 在多智能体协作场景下，可用于追踪调用链中的发起方。
      */
-    String agentId,
+    String agentId, // 智能体的id
     /**
      * 会话级别的属性映射（键值对）。
      * 可以携带用户偏好设置、历史计算结果、认证 token 等会话范围内的临时数据。
      * 此 Map 是可变的，但技能应遵循只读约定（除非有明确的写入需求）。
      */
-    Map<String, Object> sessionAttributes
+    Map<String, Object> sessionAttributes // 会话级别的属性映射
 ) {}

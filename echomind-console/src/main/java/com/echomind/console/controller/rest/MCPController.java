@@ -2,10 +2,10 @@ package com.echomind.console.controller.rest;
 
 import com.echomind.console.dto.McpToolCallRequest;
 import com.echomind.console.service.McpApplicationService;
-import com.echomind.agent.tool.ExternalMcpServerConfig;
-import com.echomind.agent.tool.ExternalMcpServerStatus;
-import com.echomind.mcp.tool.ToolResult;
-import com.echomind.mcp.tool.ToolSpec;
+import com.echomind.agent.tool.mcp.ExternalMcpServerConfig;
+import com.echomind.agent.tool.mcp.ExternalMcpServerStatus;
+import com.echomind.mcp.ToolResult;
+import com.echomind.mcp.ToolSpec;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -18,7 +18,7 @@ import java.util.List;
  * <p>这里提供的是“挂载/卸载外部MCP Server”和“调用外部MCP工具”的管理入口。
  * 本项目不再暴露自己的MCP Server信息。</p>
  *
- * <p>Controller只负责HTTP协议适配，工具注册、参数提取和调用细节统一交给
+ * <p>Controller只负责HTTP协议适配，工具注册、参数传递和调用细节统一交给
  * {@link McpApplicationService}，避免Web层直接依赖MCP运行时。</p>
  */
 @RestController

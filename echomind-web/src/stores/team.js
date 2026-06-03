@@ -169,12 +169,15 @@ export const useTeamStore = defineStore('team', {
     isTerminalRun(status) {
       return ['COMPLETED', 'FAILED', 'NEEDS_CLARIFICATION'].includes(status)
     },
-    async resumeRun(answer) {
-      if (!this.selectedTeam || !this.currentRun || !answer?.trim()) return null
+    async resumeRun(payload) {
+      const hasRunAnswer = payload?.clarificationAnswer?.trim()
+      const hasStepAnswers = payload?.stepClarificationAnswers
+        && Object.values(payload.stepClarificationAnswers).some(answer => answer?.trim())
+      if (!this.selectedTeam || !this.currentRun || (!hasRunAnswer && !hasStepAnswers)) return null
       this.resuming = true
       this.error = null
       try {
-        this.currentRun = await api.team.resumeRun(this.selectedTeam.teamId, this.currentRun.runId, answer)
+        this.currentRun = await api.team.resumeRun(this.selectedTeam.teamId, this.currentRun.runId, payload)
         this.startPolling(this.currentRun.runId)
         return this.currentRun
       } catch (error) {

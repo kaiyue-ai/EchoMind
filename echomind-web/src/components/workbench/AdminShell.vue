@@ -114,6 +114,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
   Bell,
+  Connection,
   DataBoard,
   Coin,
   DataLine,
@@ -145,6 +146,7 @@ const navItems = [
   { path: '/dashboard', label: '仪表盘', icon: DataBoard },
   { path: '/usage', label: '使用记录', icon: DataLine },
   { path: '/user-tokens', label: '用户 Token', icon: Coin },
+  { path: '/provider-budgets', label: 'Provider 预算', icon: Connection },
   { path: '/client-users', label: '用户管理', icon: UserFilled },
   { path: '/sensitive', label: '脱敏治理', icon: Lock },
   { path: '/alerts', label: '告警中心', icon: Warning },

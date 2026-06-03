@@ -2,7 +2,7 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.memory.ChatMemoryPersistPublisher;
 import com.echomind.agent.pipeline.PipelineContext;
-import com.echomind.common.model.MemorySignal;
+import com.echomind.common.model.MemoryDecision;
 import org.junit.jupiter.api.Test;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -42,6 +42,6 @@ class MemoryPersistStageTest {
 
         stage.process(ctx);
 
-        verify(publisher).publish(eq("default"), eq("session-1"), eq("default"), any(), eq(MemorySignal.NONE));
+        verify(publisher).publish(eq("default"), eq("session-1"), eq("default"), any(), eq(MemoryDecision.FALLBACK));
     }
 }

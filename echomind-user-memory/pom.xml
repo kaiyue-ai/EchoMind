@@ -11,7 +11,7 @@
 
     <artifactId>echomind-user-memory</artifactId>
     <name>EchoMind User Memory Worker</name>
-    <description>Async user profile extraction worker backed by RabbitMQ and Redis Stack</description>
+    <description>Async user memory worker backed by RabbitMQ, Redis snapshots, and Milvus vectors</description>
 
     <dependencies>
         <dependency>
@@ -37,6 +37,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-spring-boot-starter</artifactId>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

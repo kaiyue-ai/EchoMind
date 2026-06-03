@@ -1,6 +1,6 @@
 package com.echomind.console.service;
 
-import com.echomind.agent.tool.SkillCapabilityService;
+import com.echomind.agent.tool.skill.SkillCapabilityService;
 import com.echomind.common.model.SkillState;
 import com.echomind.console.dto.SkillView;
 import com.echomind.skill.api.Skill;
@@ -8,7 +8,7 @@ import com.echomind.skill.api.SkillMetadata;
 import com.echomind.skill.api.SkillRequest;
 import com.echomind.skill.api.SkillResult;
 import com.echomind.skill.marketplace.MarketplaceService;
-import com.echomind.skill.marketplace.SkillRepository;
+import com.echomind.skill.marketplace.SkillEntity;
 import com.echomind.skill.registry.SkillRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
@@ -37,7 +37,7 @@ class SkillApplicationServiceTest {
     void listSkillsIncludesPersistedMarketplaceSkillsWhenRuntimeRegistryIsEmpty() {
         SkillRegistry registry = mock(SkillRegistry.class);
         MarketplaceService marketplace = mock(MarketplaceService.class);
-        SkillRepository uploaded = new SkillRepository();
+        SkillEntity uploaded = new SkillEntity();
         uploaded.setName("invoice-audit");
         uploaded.setVersion("1.2.0");
         uploaded.setDescription("Audit uploaded invoices");
@@ -64,7 +64,7 @@ class SkillApplicationServiceTest {
     void listSkillsPrefersRuntimeMetadataOverStaleMarketplaceMetadata() {
         SkillRegistry registry = new SkillRegistry();
         MarketplaceService marketplace = mock(MarketplaceService.class);
-        SkillRepository stale = new SkillRepository();
+        SkillEntity stale = new SkillEntity();
         stale.setName("report-writer");
         stale.setVersion("1.0.0");
         stale.setDescription("旧报告描述");

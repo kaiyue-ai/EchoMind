@@ -59,40 +59,35 @@ public class ChatGovernanceService {
         alertService.emitCallError(authUser, ctx, normalizeErrorMessage(errorMessage));
     }
 
+    /**
+     * 记录成功的 Token 使用。
+     *
+     * <p>核心流程：
+     * 1. 检查模型是否返回了有效的 Token 使用数据
+     * 2. 调用 AiCallUsageService 持久化到数据库
+     * 3. 将使用数据记录到追踪 Span
+     *
+     * @param span        追踪 Span
+     * @param operation   操作名称（如 echomind.chat.sync）
+     * @param authUser    认证用户
+     * @param ctx         管线上下文（包含 Token 使用数据）
+     * @param startedNanos 调用开始时间（纳秒）
+     * @return 持久化的使用记录实体，如果模型未返回有效数据则返回 null
+     */
     public AiCallUsageEntity recordSuccessAndWarnings(Span span, String operation, AuthUser authUser,
                                                       PipelineContext ctx, long startedNanos) {
         if (modelUsageNotApplicable(ctx)) {
-            alertService.emitQuotaWarning(authUser, ctx.getTraceId(), ctx.getAgentId(),
-                ctx.getSessionId(), quotaService.warningSignals(authUser));
             return null;
         }
+
         AiCallUsageEntity usage = usageService.recordSuccess(operation, authUser, ctx, startedNanos);
         tagUsage(span, usage);
-        alertService.emitQuotaWarning(authUser, ctx.getTraceId(), ctx.getAgentId(),
-            ctx.getSessionId(), quotaService.warningSignals(authUser));
         return usage;
-    }
-
-    public void recordErrorQuietly(Span span, String operation, AuthUser authUser, PipelineContext ctx,
-                                   long startedNanos, String errorMessage) {
-        try {
-            tagUsage(span, usageService.recordError(operation, authUser, ctx, startedNanos,
-                normalizeErrorMessage(errorMessage)));
-        } catch (RuntimeException usageError) {
-            EchoMindTrace.recordException(span, usageError);
-            log.warn("Failed to record token usage trace={} user={} session={}: {}",
-                ctx == null ? "" : ctx.getTraceId(),
-                authUser == null ? "" : authUser.userId(),
-                ctx == null ? "" : ctx.getSessionId(),
-                usageError.getMessage());
-        }
     }
 
     public void recordStreamUsage(Span span, String operation, AuthUser authUser, PipelineContext usageContext,
                                   long startedNanos, boolean error, String errorMessage) {
         if (!error && modelUsageNotApplicable(usageContext)) {
-            alertService.emitQuotaWarning(authUser, usageContext.getTraceId(), usageContext.getAgentId(),
-                usageContext.getSessionId(), quotaService.warningSignals(authUser));
             return;
         }
         try {
@@ -105,9 +100,10 @@ public class ChatGovernanceService {
                 emitCallError(authUser, usageContext, errorMessage);
             } else {
                 emitCallErrorIfFailed(authUser, usageContext);
-                alertService.emitQuotaWarning(authUser, usageContext.getTraceId(), usageContext.getAgentId(),
-                    usageContext.getSessionId(), quotaService.warningSignals(authUser));
             }
+        } catch (TokenQuotaExceededException e) {
+            EchoMindTrace.recordException(span, e);
+            throw e;
         } catch (RuntimeException e) {
             EchoMindTrace.recordException(span, e);
             if (error || isFailed(usageContext)) {
@@ -139,20 +135,20 @@ public class ChatGovernanceService {
     }
 
     private void assertQuotaAllowed(Span span, AuthUser authUser, String agentId, String sessionId) {
-        try {
-            quotaService.assertAllowed(authUser);
-        } catch (TokenQuotaExceededException e) {
-            alertService.emitQuotaExceeded(authUser, EchoMindTrace.traceId(span), agentId, sessionId, e);
-            throw e;
-        }
+        quotaService.assertAllowed(authUser);
     }
 
     private void tagUsage(Span span, AiCallUsageEntity usage) {
         if (span == null || usage == null) {
             return;
         }
+        span.setAttribute("echomind.user_id", safe(usage.getUserId()));
         span.setAttribute("echomind.account_type", usage.getAccountType());
         span.setAttribute("echomind.username", safe(usage.getUsername()));
+        span.setAttribute("echomind.agent_id", safe(usage.getAgentId()));
+        span.setAttribute("echomind.session_id", safe(usage.getSessionId()));
+        span.setAttribute("echomind.model_id", safe(usage.getModelId()));
+        span.setAttribute("echomind.provider_id", safe(usage.getProviderId()));
         span.setAttribute("echomind.prompt_tokens", usage.getPromptTokens());
         span.setAttribute("echomind.completion_tokens", usage.getCompletionTokens());
         span.setAttribute("echomind.total_tokens", usage.getTotalTokens());
@@ -160,7 +156,8 @@ public class ChatGovernanceService {
     }
 
     private boolean modelUsageNotApplicable(PipelineContext ctx) {
-        return ctx != null && Boolean.TRUE.equals(ctx.getAttributes().get("modelUsageNotApplicable"));
+        return ctx != null
+            && Boolean.TRUE.equals(ctx.getAttributes().get(PipelineContext.ATTR_MODEL_USAGE_NOT_APPLICABLE));
     }
 
     private String normalizeErrorMessage(String value) {

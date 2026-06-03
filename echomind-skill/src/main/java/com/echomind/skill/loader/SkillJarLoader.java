@@ -4,7 +4,6 @@ import com.echomind.common.exception.SkillLoadException;
 import com.echomind.skill.api.Skill;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,7 +41,7 @@ import java.util.jar.Manifest;
  * @see SkillClassLoader
  * @see SkillLoadResult
  */
-@Slf4j
+@Slf4j // 这是负责编排类加载器的
 public class SkillJarLoader {
 
     /**
@@ -50,11 +49,6 @@ public class SkillJarLoader {
      * Skill开发者需在JAR打包时设置此清单属性。
      */
     private static final String SKILL_CLASS_HEADER = "EchoMind-Skill-Class";
-
-    /**
-     * MANIFEST.MF中的属性名，用于指定Skill版本号（预留字段）。
-     */
-    private static final String SKILL_VERSION_HEADER = "EchoMind-Skill-Version";
 
     /**
      * 从JAR文件加载Skill。
@@ -67,31 +61,40 @@ public class SkillJarLoader {
      * @throws SkillLoadException 如果JAR不存在、清单缺失、Skill类无效或加载过程中发生错误
      */
     public SkillLoadResult load(Path jarPath) {
+        // 判断这个文件存不存在
         if (!Files.exists(jarPath)) {
             throw new SkillLoadException("Skill JAR not found: " + jarPath);
         }
 
+        // 读取JAR的清单文件
         try (JarFile jar = new JarFile(jarPath.toFile())) {
-            Manifest manifest = jar.getManifest();
+            // 读取清单文件 manifest是JAR文件的清单文件,包含了JAR文件的信息,比如类名,版本号等
+            Manifest manifest = jar.getManifest(); // 就是元数据
             if (manifest == null) {
                 throw new SkillLoadException("No MANIFEST.MF in skill JAR: " + jarPath);
             }
 
+            // 从清单中提取skill实现类的全限定名
             String skillClass = manifest.getMainAttributes().getValue(SKILL_CLASS_HEADER);
             if (skillClass == null || skillClass.isBlank()) {
                 throw new SkillLoadException("No " + SKILL_CLASS_HEADER + " in manifest: " + jarPath);
             }
-
+            // 为类加载器准备jar文件的路径,用于加载类时指定jar文件的路径
             URL[] urls = new URL[]{ jarPath.toUri().toURL() };
+            // 进行类加载,创建SkillClassLoader隔离类加载器
             SkillClassLoader classLoader = new SkillClassLoader(urls, getClass().getClassLoader());
 
+            // 根据这个类的路径来加载这个类,返回加载后的类对象
             Class<?> loaded = classLoader.loadClass(skillClass.trim());
+            // 验证其实现了Skill接口
             if (!Skill.class.isAssignableFrom(loaded)) {
+                // 如果没有实现Skill接口,则关闭类加载器防止资源泄漏
                 classLoader.close();
                 throw new SkillLoadException("Class does not implement Skill: " + skillClass);
             }
-
+            // 通过反射调用无参构造器实例化Skill,返回实例化后的Skill对象
             Skill skill = (Skill) loaded.getDeclaredConstructor().newInstance();
+            // 封装为SkillLoadResult返回
             return new SkillLoadResult(skill, classLoader, jarPath);
 
         } catch (SkillLoadException e) {

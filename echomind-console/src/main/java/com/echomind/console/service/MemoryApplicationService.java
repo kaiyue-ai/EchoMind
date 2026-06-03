@@ -1,5 +1,6 @@
 package com.echomind.console.service;
 
+import com.echomind.agent.pipeline.planning.MemoryDecisionParser;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.SessionSummary;
@@ -12,7 +13,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 记忆应用服务。
@@ -30,29 +30,21 @@ public class MemoryApplicationService {
 
     public List<SessionSummary> listSessions() {
         try {
-            return memoryManager.listSessions(AuthContext.userId());
+            return memoryManager.listSessions(AuthContext.userId()).stream()
+                .map(this::stripHiddenMemoryDecision)
+                .toList();
         } catch (Exception e) {
             log.warn("Failed to list chat sessions: {}", e.getMessage());
             return List.of();
         }
     }
 
-    public List<AgentMessage> getMemory(String sessionId) {
-        validateSessionId(sessionId);
-        return memoryManager.getFullContext(AuthContext.userId(), sessionId);
-    }
-
     public List<AgentMessage> getChatHistory(String sessionId) {
         validateSessionId(sessionId);
         return memoryManager.getFullContext(AuthContext.userId(), sessionId).stream()
+            .map(this::stripHiddenMemoryDecision)
             .map(this::refreshAttachmentUrls)
             .toList();
-    }
-
-    public Map<String, String> clearMemory(String sessionId) {
-        validateSessionId(sessionId);
-        memoryManager.clearSession(AuthContext.userId(), sessionId);
-        return Map.of("status", "cleared", "sessionId", sessionId);
     }
 
     private void validateSessionId(String sessionId) {
@@ -70,6 +62,22 @@ public class MemoryApplicationService {
             .toList();
         return new AgentMessage(message.role(), message.content(), message.timestamp(),
             message.metadata(), refreshed);
+    }
+
+    private AgentMessage stripHiddenMemoryDecision(AgentMessage message) {
+        String stripped = MemoryDecisionParser.stripHiddenDecisionBlocks(message.content());
+        if (stripped == null || stripped.equals(message.content())) {
+            return message;
+        }
+        return new AgentMessage(message.role(), stripped, message.timestamp(), message.metadata(), message.attachments());
+    }
+
+    private SessionSummary stripHiddenMemoryDecision(SessionSummary summary) {
+        String stripped = MemoryDecisionParser.stripHiddenDecisionBlocks(summary.lastMessage());
+        if (stripped == null || stripped.equals(summary.lastMessage())) {
+            return summary;
+        }
+        return new SessionSummary(summary.sessionId(), summary.messageCount(), stripped, summary.lastActivity());
     }
 
     private MessageAttachment refreshAttachmentUrl(MessageAttachment attachment) {

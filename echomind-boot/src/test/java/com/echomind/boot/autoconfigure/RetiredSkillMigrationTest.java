@@ -17,7 +17,14 @@ class RetiredSkillMigrationTest {
         config.setSkillIds(List.of("calculator", "qq-mail", "qq-mail@old"));
         config.setSystemPrompt("可以使用天气、QQ 邮箱工具和 QQ Mail。");
 
-        boolean changed = new RetiredSkillMigration(new EchoMindProperties.RetiredSkills()).applyTo(config);
+        EchoMindProperties.RetiredSkills retiredSkills = new EchoMindProperties.RetiredSkills();
+        retiredSkills.setSkillIds(List.of("qq-mail"));
+        retiredSkills.setPromptReplacements(List.of(
+            replacement("QQ 邮箱工具", ""),
+            replacement("QQ Mail", "")
+        ));
+
+        boolean changed = new RetiredSkillMigration(retiredSkills).applyTo(config);
 
         assertThat(changed).isTrue();
         assertThat(config.getSkillIds()).containsExactly("calculator");
@@ -45,5 +52,33 @@ class RetiredSkillMigrationTest {
         assertThat(migration.retiredSkillIds()).containsExactly("legacy-skill");
         assertThat(config.getSkillIds()).containsExactly("calculator");
         assertThat(config.getSystemPrompt()).isEqualTo("可以使用 新工具。");
+    }
+
+    @Test
+    void removesLegacyWebSearchSkillBindings() {
+        AgentConfig config = new AgentConfig();
+        config.setAgentId("agent-web");
+        config.setSkillIds(List.of("calculator", "web-search", "web-search@1.1.0", "date-query"));
+        config.setSystemPrompt("可以使用 SearXNG 和 skill-websearch。");
+
+        EchoMindProperties.RetiredSkills retiredSkills = new EchoMindProperties.RetiredSkills();
+        retiredSkills.setSkillIds(List.of("web-search"));
+        retiredSkills.setPromptReplacements(List.of(
+            replacement("SearXNG", "open-websearch MCP"),
+            replacement("skill-websearch", "open-websearch MCP")
+        ));
+
+        boolean changed = new RetiredSkillMigration(retiredSkills).applyTo(config);
+
+        assertThat(changed).isTrue();
+        assertThat(config.getSkillIds()).containsExactly("calculator", "date-query");
+        assertThat(config.getSystemPrompt()).isEqualTo("可以使用 open-websearch MCP 和 open-websearch MCP。");
+    }
+
+    private EchoMindProperties.TextReplacement replacement(String from, String to) {
+        EchoMindProperties.TextReplacement replacement = new EchoMindProperties.TextReplacement();
+        replacement.setFrom(from);
+        replacement.setTo(to);
+        return replacement;
     }
 }

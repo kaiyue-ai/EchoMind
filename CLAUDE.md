@@ -20,11 +20,11 @@ EchoMind 是 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 - `echomind-skill-api`：Skill SPI。
 - `echomind-skill`：Skill 加载、注册、热加载、市场状态。
 - `echomind-llm`：模型 Provider 和模型路由；Provider implementation 通过 Spring AI adapter 调用 OpenAI-compatible / DeepSeek Chat Completions。
-- `echomind-memory`：会话记忆、Redis Stack 向量检索、Agent 知识库。
-- `echomind-mcp`：外部 MCP 客户端和 stdio 通信。
+- `echomind-memory`：会话记忆、Milvus 向量检索、Agent 知识库。
+- `echomind-mcp`：基于 Spring AI MCP 的外部 MCP 客户端、stdio/SSE/Streamable HTTP 传输和工具适配。
 - `echomind-agent`：单 Agent 执行、Pipeline、能力注册表。
-- `echomind-agent/src/main/java/com/echomind/agent/tool`：工具注册、匹配、URL/domain 兼容、消歧和直调参数兜底。
-- `echomind-agent-team`：多 Agent 团队协作编排。
+- `echomind-agent/src/main/java/com/echomind/agent/tool`：工具注册、能力来源适配和显式 metadata 预匹配。
+- `echomind-agent-team`：多 Agent 团队协作编排；当前由 `TaskExecutor` 推进 MySQL 黑板状态，不使用 RabbitMQ。
 - `echomind-console`：REST Controller、Application Service、CLI。
 - `echomind-boot`：Spring Boot 自动装配。
 - `echomind-app`：应用入口和配置文件。
@@ -45,9 +45,10 @@ Controller / CLI
 - Controller 不直接拼业务流程。
 - Application Service 负责校验、持久化顺序和运行时同步。
 - `AgentFactory`、`SkillRegistry`、`CapabilityRegistry` 只是运行时索引。
-- MySQL 保存业务事实和完整会话历史；Redis 保存短期上下文和用户画像快照；Redis Stack 保存用户长期事实向量和 Agent 知识库向量。
-- `ToolRouter` 只作为工具路由入口；URL/domain 兼容性在 `ToolCompatibilityPolicy`，打分在 `ToolMatchScorer`，确定性消歧在 `ToolDisambiguationPolicy`，直调参数兜底在 `ToolParameterExtractor`。
-- LLM Provider 只处理模型协议；Spring AI 只放在 Provider adapter seam 内，不接管 Agent、Skill、MCP 或 Memory。Provider 不按具体 Skill 名称硬编码参数、工具选择或最终答案策略；工具可用 `direct-result` / `final-answer` tag 声明输出可直接交付。
+- MySQL 保存业务事实和完整会话历史；Redis 保存短期上下文和用户画像快照；Milvus 保存用户长期事实向量以及 Agent 知识库切片正文和向量。
+- RabbitMQ 只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat.stream-events` SSE 事件、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件。
+- `ToolRouter` 只作为工具路由入口；`ToolMatchScorer` 只基于工具显式 `keywords`、`aliases`、`tags` 和工具名做预匹配，参数由模型正式 tool call 生成并按 schema 校验。
+- LLM Provider 只处理模型协议；Spring AI 只放在 Provider adapter 边界内，不接管 Agent、Skill、MCP 或 Memory。Provider 不按具体 Skill 名称硬编码参数、工具选择或最终答案策略；工具输出统一回到 LLM 生成最终答复。
 - 主项目只接入外部 MCP Server，不暴露自身 MCP Server。
 - 普通聊天记忆按 `userId + sessionId` 隔离；Agent、Skill、MCP、Team 仍是全局资源。
 - AI Infra 是现有 Agent 项目的项目三管理端，不新增独立网关或 OpenAI `/v1` 入口；脱敏、告警、Trace、Token 和配额治理都挂在现有 `/api/chat/*` 链路和 `/api/admin/*` 管理端。

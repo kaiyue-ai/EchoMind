@@ -1,5 +1,8 @@
 package com.echomind.agent.tool;
 
+import com.echomind.agent.tool.core.Tool;
+import com.echomind.agent.tool.core.ToolResult;
+import com.echomind.agent.tool.router.ToolRouter;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -19,13 +22,14 @@ class ToolRouterTest {
     @Test
     void matchForAgentSkillIdsReturnsOnlyKeywordMatchedAllowedTools() {
         ToolRouter router = new ToolRouter();
-        router.register(tool("calculator", "skill", "calculator@1.0.0", List.of("calculate", "math")));
-        router.register(tool("web-search", "skill", "web-search@1.0.0", List.of("search", "web")));
+        router.register(tool("calculator", "skill", "calculator@1.0.0",
+            List.of("calculate", "math"), List.of("计算", "算"), Map.of()));
+        router.register(tool("docs-search", "skill", "docs-search@1.0.0", List.of("search", "docs")));
         router.register(tool("date-query", "skill", "date-query@1.0.0", List.of("date", "time", "weekday")));
 
         List<Tool> matched = router.matchForAgentSkillIds(
             "帮我计算一下 1+2",
-            List.of("calculator", "web-search")
+            List.of("calculator", "docs-search")
         );
 
         assertThat(matched).extracting(Tool::name).containsExactly("calculator");
@@ -34,7 +38,8 @@ class ToolRouterTest {
     @Test
     void matchForAgentSkillIdsDoesNotExposeDisallowedSkillEvenWhenKeywordMatches() {
         ToolRouter router = new ToolRouter();
-        router.register(tool("weather-query", "skill", "weather-query@1.0.0", List.of("weather", "forecast")));
+        router.register(tool("weather-query", "skill", "weather-query@1.0.0",
+            List.of("weather", "forecast"), List.of("天气"), Map.of()));
         router.register(tool("calculator", "skill", "calculator@1.0.0", List.of("calculate", "math")));
 
         List<Tool> matched = router.matchForAgentSkillIds(
@@ -49,12 +54,12 @@ class ToolRouterTest {
     void listForAgentSkillIdsStillProvidesFallbackToolsWhenKeywordsMiss() {
         ToolRouter router = new ToolRouter();
         router.register(tool("calculator", "skill", "calculator@1.0.0", List.of("calculate", "math")));
-        router.register(tool("web-search", "skill", "web-search@1.0.0", List.of("search", "web")));
+        router.register(tool("docs-search", "skill", "docs-search@1.0.0", List.of("search", "docs")));
 
-        assertThat(router.matchForAgentSkillIds("随便聊聊", List.of("calculator", "web-search"))).isEmpty();
-        assertThat(router.listForAgentSkillIds(List.of("calculator", "web-search")))
+        assertThat(router.matchForAgentSkillIds("随便聊聊", List.of("calculator", "docs-search"))).isEmpty();
+        assertThat(router.listForAgentSkillIds(List.of("calculator", "docs-search")))
             .extracting(Tool::name)
-            .containsExactlyInAnyOrder("calculator", "web-search");
+            .containsExactlyInAnyOrder("calculator", "docs-search");
     }
 
     @Test
@@ -76,6 +81,68 @@ class ToolRouterTest {
         );
 
         assertThat(matched).extracting(Tool::name).containsExactly("invoice-auditor");
+    }
+
+    @Test
+    void chineseExplicitKeywordCanBeSingleCharacterForCommonUserPhrases() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool("calculator", "skill", "calculator@1.0.0",
+            List.of("calculate", "math"), List.of("算"), Map.of()));
+
+        List<Tool> matched = router.matchForAgentSkillIds(
+            "帮我算 1+2",
+            List.of("calculator")
+        );
+
+        assertThat(matched).extracting(Tool::name).containsExactly("calculator");
+    }
+
+    @Test
+    void chineseKeywordMatchesAcrossFullWidthPunctuationAndSpaces() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool(
+            "invoice-auditor",
+            "skill",
+            "invoice-auditor@1.0.0",
+            List.of("finance"),
+            List.of("发票审核"),
+            Map.of()
+        ));
+
+        List<Tool> matched = router.matchForAgentSkillIds(
+            "麻烦做一下：发 票-审 核",
+            List.of("invoice-auditor")
+        );
+
+        assertThat(matched).extracting(Tool::name).containsExactly("invoice-auditor");
+    }
+
+    @Test
+    void chineseUsersStillNeedChineseKeywordsInsteadOfEnglishOnlyTags() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool("weather-query", "skill", "weather-query@1.0.0",
+            List.of("weather", "forecast")));
+
+        List<Tool> matched = router.matchForAgentSkillIds(
+            "查询一下杭州天气",
+            List.of("weather-query")
+        );
+
+        assertThat(matched).isEmpty();
+    }
+
+    @Test
+    void singleCharacterChineseMetadataDoesNotTriggerBroadMatches() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool("lookup-tool", "skill", "lookup-tool@1.0.0",
+            List.of("查")));
+
+        List<Tool> matched = router.matchForAgentSkillIds(
+            "查一下这个问题",
+            List.of("lookup-tool")
+        );
+
+        assertThat(matched).isEmpty();
     }
 
     @Test
@@ -105,93 +172,22 @@ class ToolRouterTest {
     @Test
     void urlRequestStronglyMatchesGenericWebSearch() {
         ToolRouter router = new ToolRouter();
-        router.register(tool("web-search", "skill", "web-search@1.1.0", List.of("search", "web")));
+        router.register(tool(
+            "open_web_search",
+            "skill",
+            "open-websearch-mcp",
+            List.of("search", "web"),
+            List.of("搜索", "搜一下", "链接", "网址", "http", "https"),
+            Map.of()
+        ));
         router.register(tool("calculator", "skill", "calculator@1.0.0", List.of("calculate", "math")));
 
         List<Tool> matched = router.matchForAgentSkillIds(
             "搜一下https://blog.csdn.net/2503_93062705/article/details/160631994",
-            List.of("web-search", "calculator")
+            List.of("open_web_search", "calculator")
         );
 
-        assertThat(matched).extracting(Tool::name).containsExactly("web-search");
-    }
-
-    @Test
-    void nonNowcoderUrlDoesNotExposeNowcoderMcpToModelFallback() {
-        ToolRouter router = new ToolRouter();
-        router.register(tool(
-            "web-search",
-            "skill",
-            "web-search@1.1.0",
-            List.of("search", "web"),
-            List.of(),
-            Map.of(),
-            "Search and read public web pages"
-        ));
-        router.register(tool(
-            "fetch_nowcoder_java_interview_article",
-            "mcp",
-            "nowcoder-java-interview",
-            List.of(),
-            List.of(),
-            Map.of(),
-            "抓取牛客网 Java 面经文章。传 url 时抓指定文章；不传 url 时随机抓取。"
-        ));
-
-        List<Tool> visibleTools = router.filterCompatibleTools(
-            "搜一下https://blog.csdn.net/2503_93062705/article/details/160631994",
-            router.listForAgentSkillIds(List.of("web-search"))
-        );
-
-        assertThat(visibleTools).extracting(Tool::name)
-            .containsExactly("web-search");
-    }
-
-    @Test
-    void nowcoderUrlKeepsNowcoderMcpAvailable() {
-        ToolRouter router = new ToolRouter();
-        router.register(tool(
-            "fetch_nowcoder_java_interview_article",
-            "mcp",
-            "nowcoder-java-interview",
-            List.of(),
-            List.of(),
-            Map.of(),
-            "抓取牛客网 Java 面经文章。传 url 时抓指定文章。"
-        ));
-
-        List<Tool> visibleTools = router.filterCompatibleTools(
-            "读取https://www.nowcoder.com/discuss/353159907862061056",
-            router.listForAgentSkillIds(List.of())
-        );
-
-        assertThat(visibleTools).extracting(Tool::name)
-            .containsExactly("fetch_nowcoder_java_interview_article");
-    }
-
-    @Test
-    void domainHostHintControlsUrlCompatibilityForSpecializedTools() {
-        ToolRouter router = new ToolRouter();
-        router.register(tool(
-            "fetch_docs_article",
-            "mcp",
-            "docs-fetcher",
-            List.of("host:docs.example.com"),
-            List.of(),
-            Map.of(),
-            "Fetch documentation pages."
-        ));
-
-        assertThat(router.filterCompatibleTools(
-            "读取https://blog.example.com/article",
-            router.listForAgentSkillIds(List.of())
-        )).isEmpty();
-
-        assertThat(router.filterCompatibleTools(
-            "读取https://docs.example.com/article",
-            router.listForAgentSkillIds(List.of())
-        )).extracting(Tool::name)
-            .containsExactly("fetch_docs_article");
+        assertThat(matched).extracting(Tool::name).containsExactly("open_web_search");
     }
 
     @Test
@@ -231,7 +227,7 @@ class ToolRouterTest {
     }
 
     @Test
-    void railwayTicketIntentDoesNotLetRelativeDateToolStealTheRoute() {
+    void railwayTicketIntentExposesAllMetadataMatchedToolsWithoutPlatformDisambiguation() {
         ToolRouter router = new ToolRouter();
         router.register(tool(
             "12306",
@@ -255,11 +251,12 @@ class ToolRouterTest {
             List.of("12306", "date-query")
         );
 
-        assertThat(matched).extracting(Tool::name).containsExactly("12306");
+        assertThat(matched).extracting(Tool::name)
+            .containsExactlyInAnyOrder("12306", "date-query");
     }
 
     @Test
-    void railwayClassificationFollowUpDoesNotTriggerTicketLookupTool() {
+    void railwayClassificationFollowUpWithoutStrongMetadataMatchDoesNotExposeTools() {
         ToolRouter router = new ToolRouter();
         router.register(tool(
             "12306",
@@ -270,39 +267,18 @@ class ToolRouterTest {
             Map.of("ticket", List.of("余票", "车票", "火车票", "高铁票"))
         ));
         router.register(tool(
-            "web-search",
+            "docs-search",
             "skill",
-            "web-search@1.1.0",
-            List.of("search", "web"),
+            "docs-search@1.1.0",
+            List.of("search", "docs"),
             List.of("搜索", "网页", "search"),
             Map.of()
         ));
 
         assertThat(router.matchForAgentSkillIds(
             "我说这是高铁还是火车？",
-            List.of("12306", "web-search")
+            List.of("12306", "docs-search")
         )).isEmpty();
-    }
-
-    @Test
-    void buildParamsExtractsEnumAliasPathAndContent() {
-        ToolRouter router = new ToolRouter();
-        Tool fileTool = schemaTool("file-writer", Map.of(
-            "type", "object",
-            "properties", Map.of(
-                "operation", Map.of("type", "string", "enum", List.of("read", "write")),
-                "path", Map.of("type", "string"),
-                "content", Map.of("type", "string")
-            ),
-            "required", List.of("operation")
-        ));
-
-        Map<String, Object> params = router.buildParams(fileTool, "写入 report.md 内容是 hello");
-
-        assertThat(params)
-            .containsEntry("operation", "write")
-            .containsEntry("path", "./data/report.md")
-            .containsEntry("content", "hello");
     }
 
     private Tool tool(String name, String sourceType, String sourceId, List<String> tags) {
@@ -355,45 +331,6 @@ class ToolRouterTest {
             @Override
             public String sourceId() {
                 return sourceId;
-            }
-
-            @Override
-            public CompletableFuture<ToolResult> execute(Map<String, Object> parameters) {
-                return CompletableFuture.completedFuture(ToolResult.success("ok", 1));
-            }
-        };
-    }
-
-    private Tool schemaTool(String name, Map<String, Object> schema) {
-        return new Tool() {
-            @Override
-            public String name() {
-                return name;
-            }
-
-            @Override
-            public String description() {
-                return name + " test tool";
-            }
-
-            @Override
-            public Map<String, Object> parameterSchema() {
-                return schema;
-            }
-
-            @Override
-            public List<String> tags() {
-                return List.of();
-            }
-
-            @Override
-            public String sourceType() {
-                return "skill";
-            }
-
-            @Override
-            public String sourceId() {
-                return name + "@1.0.0";
             }
 
             @Override

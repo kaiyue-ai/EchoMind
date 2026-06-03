@@ -18,7 +18,7 @@ import java.util.List;
 /**
  * Agent Team应用服务。
  *
- * <p>Team定义是全局资源；Run、Step、Event按当前用户隔离并落MySQL黑板。</p>
+ * <p>Team定义和Run、Step、Event都按当前用户隔离并落MySQL黑板。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -27,20 +27,21 @@ public class TeamApplicationService {
     private final TeamBlackboardService blackboardService;
 
     public List<TeamView> listTeams() {
-        return blackboardService.listTeams().stream()
+        return blackboardService.listTeams(AuthContext.userId()).stream()
             .map(TeamView::from)
             .toList();
     }
 
     public TeamView createTeam(TeamCreateRequest request) {
         return TeamView.from(blackboardService.createTeam(
+            AuthContext.userId(),
             request == null ? null : request.name(),
             toMemberSpecs(request)
         ));
     }
 
     public void deleteTeam(String teamId) {
-        blackboardService.deleteTeam(teamId);
+        blackboardService.deleteTeam(teamId, AuthContext.userId());
     }
 
     public TeamRunView createRun(String teamId, TeamRunCreateRequest request) {
@@ -66,7 +67,13 @@ public class TeamApplicationService {
 
     public TeamRunView resumeRun(String teamId, String runId, TeamResumeRequest request) {
         String answer = request == null ? null : request.clarificationAnswer();
-        return TeamRunView.from(blackboardService.resumeRun(teamId, AuthContext.userId(), runId, answer));
+        return TeamRunView.from(blackboardService.resumeRun(
+            teamId,
+            AuthContext.userId(),
+            runId,
+            answer,
+            request == null ? null : request.stepClarificationAnswers()
+        ));
     }
 
     private List<TeamMemberSpec> toMemberSpecs(TeamCreateRequest request) {

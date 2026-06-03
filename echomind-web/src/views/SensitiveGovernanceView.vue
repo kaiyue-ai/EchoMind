@@ -94,9 +94,6 @@
                 <el-switch
                   v-model="rule.enabled"
                   class="admin-switch"
-                  inline-prompt
-                  active-text="开"
-                  inactive-text="关"
                   aria-label="启用敏感数据规则"
                 />
               </td>

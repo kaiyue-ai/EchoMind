@@ -16,16 +16,9 @@ public record LlmTool(
     String description,
     /** JSON Schema 格式的参数定义。 */
     Map<String, Object> parameters,
-    /** 工具输出是否已经是最终可交付文本。 */
-    boolean directResult,
     /** 以 JSON 字符串参数执行工具，并返回工具输出。 */
     Function<String, String> callback
 ) {
-    public LlmTool(String name, String description, Map<String, Object> parameters,
-                   Function<String, String> callback) {
-        this(name, description, parameters, false, callback);
-    }
-
     public String call(String argumentsJson) {
         String args = argumentsJson == null || argumentsJson.isBlank() ? "{}" : argumentsJson;
         return callback.apply(args);

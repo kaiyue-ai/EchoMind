@@ -1,86 +1,64 @@
 package com.echomind.console.alerts;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.Id;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.Table;
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.Setter;
 
 import java.time.Instant;
-import java.util.UUID;
 
-@Entity
-@Table(name = "echomind_alert_events")
+@TableName("echomind_alert_events")
 @Getter
 @Setter
 public class AlertEventEntity {
 
-    @Id
-    @Column(name = "event_id", length = 128)
+    @TableId(value = "event_id", type = IdType.ASSIGN_UUID)
     private String eventId;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "alert_type", nullable = false, length = 64)
+    @TableField("alert_type")
     private AlertType alertType;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "severity", nullable = false, length = 32)
     private AlertSeverity severity;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false, length = 32)
     private AlertStatus status;
 
-    @Column(name = "trace_id", length = 64)
+    @TableField("trace_id")
     private String traceId;
 
-    @Column(name = "user_id", length = 128)
+    @TableField("user_id")
     private String userId;
 
-    @Column(name = "username", length = 128)
     private String username;
 
-    @Column(name = "agent_id", length = 128)
+    @TableField("agent_id")
     private String agentId;
 
-    @Column(name = "session_id", length = 128)
+    @TableField("session_id")
     private String sessionId;
 
-    @Column(name = "title", nullable = false, length = 255)
+    @TableField("provider_id")
+    private String providerId;
+
     private String title;
 
-    @Column(name = "message", length = 2000)
     private String message;
 
-    @Column(name = "suggestion", length = 1000)
     private String suggestion;
 
-    @Column(name = "failure_reason", length = 1000)
+    @TableField("failure_reason")
     private String failureReason;
 
-    @Column(name = "escalated", nullable = false)
     private boolean escalated = false;
 
-    @Column(name = "suppressed_count", nullable = false)
+    @TableField("suppressed_count")
     private int suppressedCount = 0;
 
-    @Column(name = "provider_response", length = 1000)
+    @TableField("provider_response")
     private String providerResponse;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private Instant createdAt;
-
-    @PrePersist
-    void prePersist() {
-        if (eventId == null || eventId.isBlank()) {
-            eventId = UUID.randomUUID().toString();
-        }
-        if (createdAt == null) {
-            createdAt = Instant.now();
-        }
-    }
 }

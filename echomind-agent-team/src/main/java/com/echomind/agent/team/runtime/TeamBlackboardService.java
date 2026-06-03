@@ -28,6 +28,9 @@ import com.echomind.agent.team.store.TeamRunMapper;
 import com.echomind.agent.team.store.TeamStepEntity;
 import com.echomind.agent.team.store.TeamStepMapper;
 import com.echomind.agent.team.visualization.MermaidGenerator;
+import com.echomind.common.observability.EchoMindTrace;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -63,6 +66,15 @@ import java.util.concurrent.TimeoutException;
 @Service
 public class TeamBlackboardService {
 
+    private static final String OP_PLANNER = "echomind.team.planner";
+    private static final String OP_REVIEWER = "echomind.team.reviewer";
+    private static final String OP_EXECUTOR = "echomind.team.executor";
+    private static final String OP_SUB_REVIEWER = "echomind.team.sub_reviewer";
+    private static final String OP_MERGE = "echomind.team.merge";
+    private static final String OP_CONFLICT_DETECTOR = "echomind.team.conflict_detector";
+    private static final String OP_ARBITRATION = "echomind.team.arbitration";
+    private static final String OP_REPAIR = "echomind.team.repair";
+
     // 数据库操作
     private final TeamMapper teamMapper;
     // 团队成员操作
@@ -81,6 +93,8 @@ public class TeamBlackboardService {
     private final TaskExecutor taskExecutor;
     // 运行时属性
     private final TeamRuntimeProperties runtimeProperties;
+    // Team 内部模型调用的用量与配额治理端口，由 console 层实现。
+    private TeamUsageRecorder usageRecorder = TeamUsageRecorder.NOOP;
 
     // JSON 支持类
     private final TeamJsonSupport json = new TeamJsonSupport();
@@ -125,6 +139,11 @@ public class TeamBlackboardService {
         this.orchestrator = orchestrator;
         this.taskExecutor = taskExecutor;
         this.runtimeProperties = runtimeProperties == null ? new TeamRuntimeProperties() : runtimeProperties;
+    }
+
+    @Autowired(required = false)
+    void setUsageRecorder(TeamUsageRecorder usageRecorder) {
+        this.usageRecorder = usageRecorder == null ? TeamUsageRecorder.NOOP : usageRecorder;
     }
 
     @Transactional(readOnly = true)
@@ -174,11 +193,7 @@ public class TeamBlackboardService {
         if (teamId == null || teamId.isBlank()) {
             throw new IllegalArgumentException("teamId is required");
         }
-        TeamEntity team = teamMapper.selectOptionalById(teamId)
-            .orElseThrow(() -> new IllegalArgumentException("Team not found: " + teamId));
-        if (!team.getOwnerUserId().equals(userId)) {
-            throw new IllegalArgumentException("Not authorized to delete this team");
-        }
+        TeamEntity team = loadTeamForOwner(teamId, userId);
         List<String> runIds = runMapper.selectByTeamIdOrderByCreatedAtDesc(team.getTeamId()).stream()
             .map(TeamRunEntity::getRunId)
             .toList();
@@ -208,7 +223,7 @@ public class TeamBlackboardService {
             throw new IllegalArgumentException("task is required");
         }
         // 根据团队id获取团队实体
-        getTeam(teamId);
+        loadTeamForOwner(teamId, userId);
         // 创建团队协作任务实体
         TeamRunEntity run = new TeamRunEntity();
         run.setRunId(UUID.randomUUID().toString());
@@ -238,7 +253,7 @@ public class TeamBlackboardService {
     // 返回值团队协作任务快照列表
     // 如果用户id为空或为空字符串，则返回团队id默认值
     public List<TeamRunSnapshot> listRuns(String teamId, String userId) {
-        getTeam(teamId);
+        loadTeamForOwner(teamId, userId);
         return runMapper.selectByTeamIdAndUserIdOrderByCreatedAtDesc(teamId, normalizeUserId(userId)).stream()
             .map(run -> toRunSnapshot(run, true, false))
             .toList();
@@ -297,50 +312,104 @@ public class TeamBlackboardService {
         if (!hasRunAnswer && !hasStepAnswers) {
             throw new IllegalArgumentException("clarificationAnswer or stepClarificationAnswers is required");
         }
-        if (hasRunAnswer) {
-            run.setClarificationAnswer(clarificationAnswer.trim());
-        } else {
-            StringBuilder merged = new StringBuilder();
-            for (Map.Entry<String, String> entry : stepClarificationAnswers.entrySet()) {
-                if (entry.getValue() != null && !entry.getValue().isBlank()) {
-                    TeamStepEntity step = stepMapper.selectOptionalById(entry.getKey()).orElse(null);
-                    String stepTitle = step != null ? step.getTitle() : entry.getKey();
-                    merged.append("[").append(stepTitle).append("] ").append(entry.getValue().trim()).append("\n");
-                }
-            }
-            run.setClarificationAnswer(merged.toString().trim());
+        List<TeamStepEntity> steps = stepMapper.selectByRunIdOrderByStepIndexAsc(runId);
+        boolean stepLevelClarification = steps.stream().anyMatch(this::isWaitingForStepClarification);
+        if (stepLevelClarification && !hasStepAnswers) {
+            throw new IllegalArgumentException("stepClarificationAnswers is required");
+        }
+        if (!stepLevelClarification && !hasRunAnswer) {
+            throw new IllegalArgumentException("clarificationAnswer is required");
         }
         if (run.getClarificationStage() == TeamClarificationStage.PLAN_REVIEW) {
             stepMapper.deleteByRunId(runId);
+            run.setClarificationAnswer(clarificationAnswer.trim());
             run.setPlanReviewJson(null);
             run.setResultReviewJson(null);
             run.setFinalOutput(null);
             run.setMermaidDiagram(null);
             run.setPlanRetryCount(0);
+            run.setStatus(TeamRunStatus.PENDING);
         } else if (run.getClarificationStage() == TeamClarificationStage.RESULT_REVIEW) {
-            if (hasStepAnswers) {
-                for (Map.Entry<String, String> entry : stepClarificationAnswers.entrySet()) {
-                    TeamStepEntity step = stepMapper.selectOptionalById(entry.getKey()).orElse(null);
-                    if (step != null && entry.getValue() != null && !entry.getValue().isBlank()) {
-                        String existing = step.getRevisionInstructions() == null ? "" : step.getRevisionInstructions();
-                        step.setRevisionInstructions(existing + "\n用户澄清: " + entry.getValue().trim());
-                        stepMapper.upsertById(step);
+            if (stepLevelClarification) {
+                run.setClarificationAnswer(null);
+                clearResultArtifacts(run);
+                boolean hasActiveSibling = false;
+                for (TeamStepEntity step : steps) {
+                    if (isWaitingForStepClarification(step)) {
+                        applyStepClarificationAnswer(run, step, stepClarificationAnswers);
+                    } else if (step.getStatus() == TeamStepStatus.RUNNING
+                        || step.getStatus() == TeamStepStatus.ASSIGNED) {
+                        hasActiveSibling = true;
                     }
                 }
+                run.setStatus(hasActiveSibling ? TeamRunStatus.EXECUTING : TeamRunStatus.PENDING);
+            } else {
+                run.setClarificationAnswer(clarificationAnswer.trim());
+                clearResultArtifacts(run);
+                run.setResultReplanCount(0);
+                run.setPartialReplanCount(0);
+                run.setStatus(TeamRunStatus.PENDING);
             }
-            run.setResultReviewJson(null);
-            run.setFinalOutput(null);
-            run.setMermaidDiagram(null);
-            run.setResultReplanCount(0);
-            run.setPartialReplanCount(0);
         }
+        pendingClarifications.remove(runId);
         run.setClarificationQuestion(null);
         run.setClarificationStage(null);
-        run.setStatus(TeamRunStatus.PENDING);
         runMapper.upsertById(run);
         recordEvent(runId, null, TeamEventType.RUN_RESUMED, null, null, "User clarification received", null);
-        scheduleRun(runId);
+        if (run.getStatus() == TeamRunStatus.PENDING) {
+            scheduleRun(runId);
+        }
         return getRun(teamId, userId, runId);
+    }
+
+    private boolean isWaitingForStepClarification(TeamStepEntity step) {
+        return step != null && "ASK_CLARIFICATION".equals(step.getReviewStatus());
+    }
+
+    private void applyStepClarificationAnswer(TeamRunEntity run, TeamStepEntity step,
+                                              Map<String, String> stepClarificationAnswers) {
+        String answer = stepClarificationAnswers == null ? null : stepClarificationAnswers.get(step.getStepId());
+        if ((answer == null || answer.isBlank()) && step.getClientStepId() != null) {
+            answer = stepClarificationAnswers.get(step.getClientStepId());
+        }
+        if (answer == null || answer.isBlank()) {
+            throw new IllegalArgumentException("stepClarificationAnswers is required for step: " + step.getStepId());
+        }
+        List<String> previous = new ArrayList<>(json.stringList(step.getPreviousOutputsJson()));
+        if (step.getRawOutput() != null && !step.getRawOutput().isBlank()) {
+            previous.add(step.getRawOutput());
+        }
+        String trimmed = answer.trim();
+        String existing = nullToBlank(step.getRevisionInstructions()).trim();
+        step.setPreviousOutputsJson(json.toJson(previous));
+        step.setRevisionInstructions((existing.isBlank() ? "" : existing + "\n") + "用户澄清: " + trimmed);
+        step.setLastReviewReason("用户澄清已补充");
+        step.setReflectionJson(json.toJson(new StepReflection(
+            List.of(),
+            "用户澄清已补充",
+            trimmed,
+            summarize(step.getRawOutput()),
+            List.of("按用户澄清重新执行该 Step")
+        )));
+        step.setRetryCount(step.getRetryCount() + 1);
+        step.setStatus(TeamStepStatus.RETRYING);
+        step.setQualityStatus(TeamStepQualityStatus.RETRY_REQUESTED);
+        step.setReviewStatus("RETRY_REQUESTED");
+        step.setStartedAt(null);
+        step.setCompletedAt(null);
+        stepMapper.upsertById(step);
+        recordEvent(run.getRunId(), step.getStepId(), TeamEventType.RETRY_REQUESTED, TeamRole.REVIEWER,
+            null, "用户澄清已补充，Step 准备重试", Map.of("answer", trimmed));
+    }
+
+    private void clearResultArtifacts(TeamRunEntity run) {
+        run.setResultReviewJson(null);
+        run.setGlobalReviewJson(null);
+        run.setMergeOutput(null);
+        run.setConflictReportJson(null);
+        run.setArbitrationJson(null);
+        run.setFinalOutput(null);
+        run.setMermaidDiagram(null);
     }
 
     private void executeRunSafely(String runId) {
@@ -536,7 +605,8 @@ public class TeamBlackboardService {
         String prompt = TeamPromptFactory.planner(run, team, previousPlan, plannerRevisionInstructions,
             previousExecutionResults, json);
         // 调用Planner Agent 生成步骤计划
-        PipelineContext result = executeTeamControlInternal(planner.agentId(), plannerSession(run), prompt);
+        PipelineContext result = executeTeamControlInternal(run, OP_PLANNER, planner.agentId(), plannerSession(run),
+            prompt);
         String raw = result.getFinalResponse();
         // 解析步骤
         List<PlannedStep> steps = json.parsePlan(raw);
@@ -902,13 +972,21 @@ public class TeamBlackboardService {
         try {
             // 调用 Agent 执行步骤
             // executeTeamInternal 会执行完整的 Agent Pipeline（记忆加载、工具调用等）
-            PipelineContext result = executeTeamInternal(executor.agentId(), stepSession(run, step), prompt);
+            PipelineContext result = executeTeamInternal(run, OP_EXECUTOR, executor.agentId(), stepSession(run, step),
+                prompt);
             
             // 处理可能的 null 返回值（防止 NPE）
             output = result != null ? result.getFinalResponse() : null;
             
             // 如果 Agent 返回错误标记，抛出异常
             if (output != null && output.startsWith("[Error]")) {
+                if (isToolBudgetLimit(output)) {
+                    output = executorToolBudgetFallback(run, step, executor, output);
+                    requireRunWritable(runId);
+                    step.setRawOutput(output);
+                    completeStep(runId, step, executor.agentId(), retrying, TeamStepQualityStatus.FLAWED_ACCEPTED);
+                    return;
+                }
                 throw new IllegalStateException(output);
             }
         } catch (Exception e) {
@@ -937,6 +1015,22 @@ public class TeamBlackboardService {
             return;
         }
         completeStep(runId, step, executor.agentId(), retrying, TeamStepQualityStatus.PASSED);
+    }
+
+    private String executorToolBudgetFallback(TeamRunEntity run, TeamStepEntity step, TeamMember executor,
+                                              String failureReason) {
+        String prompt = TeamPromptFactory.executorToolBudgetFallback(run, step, dependencyOutputs(step), failureReason);
+        PipelineContext fallback = executeTeamControlInternal(run, OP_EXECUTOR, executor.agentId(),
+            stepSession(run, step) + "-tool-budget-fallback-" + UUID.randomUUID(), prompt);
+        String summary = fallback == null ? "" : fallback.getFinalResponse();
+        if (summary == null || summary.isBlank() || summary.startsWith("[Error]")) {
+            throw new IllegalStateException("Executor tool budget fallback failed: " + nullToBlank(summary));
+        }
+        return "工具调用达到上限，已降级总结：\n\n" + summary;
+    }
+
+    private boolean isToolBudgetLimit(String output) {
+        return output != null && output.contains("工具调用次数超过上限");
     }
 
     /**
@@ -975,7 +1069,7 @@ public class TeamBlackboardService {
 
         try {
             // 4. 执行模型选择
-            PipelineContext result = executeTeamControlInternal(planner.agentId(),
+            PipelineContext result = executeTeamControlInternal(run, OP_PLANNER, planner.agentId(),
                 "team-run-" + run.getRunId() + "-agent-selector-" + step.getStepId() + "-" + UUID.randomUUID(),
                 prompt);
 
@@ -1113,7 +1207,8 @@ public class TeamBlackboardService {
             .map(this::toStepSnapshot)
             .toList();
         String prompt = TeamPromptFactory.merger(run, steps, json);
-        PipelineContext result = executeTeamControlInternal(merger.agentId(), "team-run-" + run.getRunId() + "-merger", prompt);
+        PipelineContext result = executeTeamControlInternal(run, OP_MERGE, merger.agentId(),
+            "team-run-" + run.getRunId() + "-merger", prompt);
         String output = result == null ? "" : result.getFinalResponse();
         return output == null || output.isBlank() ? synthesizeFallbackReport(run) : output;
     }
@@ -1125,7 +1220,7 @@ public class TeamBlackboardService {
             .toList();
         String prompt = TeamPromptFactory.conflictDetector(run, steps, mergeOutput, json);
         try {
-            PipelineContext result = executeTeamControlInternal(reviewer.agentId(),
+            PipelineContext result = executeTeamControlInternal(run, OP_CONFLICT_DETECTOR, reviewer.agentId(),
                 "team-run-" + run.getRunId() + "-conflict-detector-" + UUID.randomUUID(), prompt);
             TeamConflictReport report = json.parseConflictReport(result == null ? "" : result.getFinalResponse());
             if (!report.hasConflict()) {
@@ -1146,7 +1241,7 @@ public class TeamBlackboardService {
             .map(this::toStepSnapshot)
             .toList();
         String prompt = TeamPromptFactory.arbitration(run, conflictReport, steps, json);
-        PipelineContext result = executeTeamControlInternal(planner.agentId(),
+        PipelineContext result = executeTeamControlInternal(run, OP_ARBITRATION, planner.agentId(),
             "team-run-" + run.getRunId() + "-planner-arbitration-" + UUID.randomUUID(), prompt);
         String output = result == null ? "" : result.getFinalResponse();
         return output == null || output.isBlank() ? "未生成仲裁意见，GlobalReviewer 继续兜底终审。" : output;
@@ -1377,7 +1472,8 @@ public class TeamBlackboardService {
     ReviewerDecision executeReviewerDecision(TeamMember reviewer, TeamRunEntity run,
                                              String prompt, boolean requireFinalReport) {
         // 1. 调用 Reviewer Agent 获取原始响应
-        String raw = executeTeamControlInternal(reviewer.agentId(), reviewerSession(run), prompt).getFinalResponse();
+        String raw = executeTeamControlInternal(run, reviewerOperation(reviewer), reviewer.agentId(),
+            reviewerSession(run), prompt).getFinalResponse();
         
         // 2. Reviewer 必须返回结构化 JSON；格式坏了就用同一 Reviewer 做有限次数修复。
         for (int attempt = 0; attempt <= runtimeProperties.getMaxReviewerFormatRepairs(); attempt++) {
@@ -1403,16 +1499,75 @@ public class TeamBlackboardService {
     private String repairReviewerDecisionJson(TeamMember reviewer, TeamRunEntity run,
                                               String originalPrompt, String invalidResponse, String parseError) {
         String repairPrompt = TeamPromptFactory.reviewerRepair(originalPrompt, invalidResponse, parseError);
-        return executeTeamControlInternal(reviewer.agentId(), reviewerSession(run) + "-repair-" + UUID.randomUUID(), repairPrompt)
+        return executeTeamControlInternal(run, OP_REPAIR, reviewer.agentId(),
+            reviewerSession(run) + "-repair-" + UUID.randomUUID(), repairPrompt)
             .getFinalResponse();
     }
 
-    private PipelineContext executeTeamInternal(String agentId, String sessionId, String prompt) {
-        return orchestrator.executeInternal(agentId, sessionId, prompt);
+    private String reviewerOperation(TeamMember reviewer) {
+        return reviewer != null && reviewer.role() == TeamRole.SUB_REVIEWER ? OP_SUB_REVIEWER : OP_REVIEWER;
     }
 
-    private PipelineContext executeTeamControlInternal(String agentId, String sessionId, String prompt) {
-        return orchestrator.executeInternal(agentId, sessionId, prompt, false);
+    private PipelineContext executeTeamInternal(TeamRunEntity run, String operation, String agentId, String sessionId,
+                                                String prompt) {
+        return executeTeamCall(run, operation, agentId, sessionId, prompt, true);
+    }
+
+    private PipelineContext executeTeamControlInternal(TeamRunEntity run, String operation, String agentId,
+                                                       String sessionId, String prompt) {
+        return executeTeamCall(run, operation, agentId, sessionId, prompt, false);
+    }
+
+    private PipelineContext executeTeamCall(TeamRunEntity run, String operation, String agentId, String sessionId,
+                                            String prompt, boolean toolExposureEnabled) {
+        String userId = normalizeUserId(run == null ? null : run.getUserId());
+        TeamUsageRecorder recorder = usageRecorder == null ? TeamUsageRecorder.NOOP : usageRecorder;
+        PipelineContext result = null;
+        long startedNanos = 0L;
+        Span span = EchoMindTrace.startSpan(operation);
+        span.setAttribute("echomind.user_id", userId);
+        span.setAttribute("echomind.agent_id", nullToBlank(agentId));
+        span.setAttribute("echomind.session_id", nullToBlank(sessionId));
+        try (Scope ignored = span.makeCurrent()) {
+            try {
+                recorder.assertAllowed(userId, agentId, sessionId);
+                startedNanos = System.nanoTime();
+                result = executeInternalForUser(userId, agentId, sessionId, prompt, toolExposureEnabled);
+                fillTeamContext(result, userId, agentId, sessionId);
+                if (result != null) {
+                    span.setAttribute("echomind.model_id", nullToBlank(result.getModelId()));
+                }
+                boolean failed = result != null && result.hasFailed();
+                recorder.record(operation, userId, agentId, sessionId, result, startedNanos, failed,
+                    failed ? result.effectiveFailureReason() : null);
+                return result;
+            } catch (RuntimeException e) {
+                EchoMindTrace.recordException(span, e);
+                recorder.record(operation, userId, agentId, sessionId, result, startedNanos, true, e.getMessage());
+                throw e;
+            }
+        } finally {
+            span.end();
+        }
+    }
+
+    private void fillTeamContext(PipelineContext ctx, String userId, String agentId, String sessionId) {
+        if (ctx == null) {
+            return;
+        }
+        ctx.setUserId(nonBlank(ctx.getUserId(), userId));
+        ctx.setAgentId(nonBlank(ctx.getAgentId(), agentId));
+        ctx.setSessionId(nonBlank(ctx.getSessionId(), sessionId));
+    }
+
+    private PipelineContext executeInternalForUser(String userId, String agentId, String sessionId, String prompt,
+                                                   boolean toolExposureEnabled) {
+        if ("default".equals(userId)) {
+            return toolExposureEnabled
+                ? orchestrator.executeInternal(agentId, sessionId, prompt)
+                : orchestrator.executeInternal(agentId, sessionId, prompt, false);
+        }
+        return orchestrator.executeInternal(userId, agentId, sessionId, prompt, toolExposureEnabled);
     }
 
     private void requireRunWritable(String runId) {
@@ -1999,7 +2154,13 @@ public class TeamBlackboardService {
         if (!normalizeUserId(run.getUserId()).equals(normalizeUserId(userId))) {
             throw new IllegalArgumentException("Run does not belong to current user: " + runId);
         }
+        loadTeamForOwner(teamId, userId);
         return run;
+    }
+
+    private TeamEntity loadTeamForOwner(String teamId, String userId) {
+        return teamMapper.selectOptionalByTeamIdAndOwnerUserId(teamId, normalizeUserId(userId))
+            .orElseThrow(() -> new IllegalArgumentException("Team not found: " + teamId));
     }
 
     private TeamSnapshot toTeamSnapshot(TeamEntity team) {
@@ -2091,8 +2252,9 @@ public class TeamBlackboardService {
         if (steps == null || steps.isEmpty()) {
             return run.getMermaidDiagram();
         }
+        TeamEntity team = loadTeamForOwner(run.getTeamId(), run.getUserId());
         return MermaidGenerator.generateFromSnapshots(
-            getTeam(run.getTeamId()).name(),
+            team.getName(),
             run.getStatus(),
             run.getTaskLevel() == null ? TeamTaskLevel.COMPLEX.name() : run.getTaskLevel().name(),
             steps,
@@ -2219,6 +2381,10 @@ public class TeamBlackboardService {
 
     private String blankToDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private String nonBlank(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private String normalizeUserId(String userId) {

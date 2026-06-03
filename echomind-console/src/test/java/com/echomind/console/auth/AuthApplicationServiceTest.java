@@ -24,10 +24,10 @@ class AuthApplicationServiceTest {
 
     @Test
     void loginCreatesAdminUserAndReturnsVerifiableToken() {
-        UserAccountRepository repository = inMemoryUserAccountRepository();
+        UserAccountMapper mapper = inMemoryUserAccountMapper();
         PasswordHasher passwordHasher = new PasswordHasher();
         AuthTokenService tokenService = new AuthTokenService("test-secret", 3600);
-        AuthApplicationService service = service(repository, passwordHasher, tokenService);
+        AuthApplicationService service = service(mapper, passwordHasher, tokenService);
 
         AuthApplicationService.AuthResponse response =
             service.login(new AuthApplicationService.AuthRequest("admin", "admin123"));
@@ -42,9 +42,9 @@ class AuthApplicationServiceTest {
 
     @Test
     void wrongPasswordIsRejected() {
-        UserAccountRepository repository = inMemoryUserAccountRepository();
+        UserAccountMapper mapper = inMemoryUserAccountMapper();
         AuthApplicationService service = service(
-            repository,
+            mapper,
             new PasswordHasher(),
             new AuthTokenService("test-secret", 3600)
         );
@@ -56,9 +56,9 @@ class AuthApplicationServiceTest {
 
     @Test
     void registerCreatesIndependentUser() {
-        UserAccountRepository repository = inMemoryUserAccountRepository();
+        UserAccountMapper mapper = inMemoryUserAccountMapper();
         AuthApplicationService service = service(
-            repository,
+            mapper,
             new PasswordHasher(),
             new AuthTokenService("test-secret", 3600)
         );
@@ -73,7 +73,7 @@ class AuthApplicationServiceTest {
 
     @Test
     void uploadAvatarStoresFileAndUpdatesCurrentUser() throws Exception {
-        UserAccountRepository repository = inMemoryUserAccountRepository();
+        UserAccountMapper mapper = inMemoryUserAccountMapper();
         ObjectStorageService storageService = mock(ObjectStorageService.class);
         when(storageService.putObject(anyString(), any(Path.class), anyString())).thenAnswer(invocation -> {
             String key = invocation.getArgument(0, String.class);
@@ -81,7 +81,7 @@ class AuthApplicationServiceTest {
         });
         when(storageService.supports(anyString())).thenReturn(true);
         when(storageService.urlFor(anyString(), any())).thenReturn("https://cdn.example.com/avatar.png");
-        AuthApplicationService service = service(repository, new PasswordHasher(), new AuthTokenService("test-secret", 3600), storageService);
+        AuthApplicationService service = service(mapper, new PasswordHasher(), new AuthTokenService("test-secret", 3600), storageService);
         AuthApplicationService.AuthResponse response =
             service.register(new AuthApplicationService.AuthRequest("AvatarUser", "s3cret"));
         AuthContext.set(new AuthUser(response.user().userId(), "avataruser", true));
@@ -102,8 +102,8 @@ class AuthApplicationServiceTest {
 
     @Test
     void uploadAvatarRejectsFilesOverTwoMb() {
-        UserAccountRepository repository = inMemoryUserAccountRepository();
-        AuthApplicationService service = service(repository, new PasswordHasher(), new AuthTokenService("test-secret", 3600));
+        UserAccountMapper mapper = inMemoryUserAccountMapper();
+        AuthApplicationService service = service(mapper, new PasswordHasher(), new AuthTokenService("test-secret", 3600));
         AuthApplicationService.AuthResponse response =
             service.register(new AuthApplicationService.AuthRequest("LargeAvatar", "s3cret"));
         AuthContext.set(new AuthUser(response.user().userId(), "largeavatar", true));
@@ -122,11 +122,11 @@ class AuthApplicationServiceTest {
 
     @Test
     void uploadAvatarHidesStorageProviderDetailsOnFailure() throws Exception {
-        UserAccountRepository repository = inMemoryUserAccountRepository();
+        UserAccountMapper mapper = inMemoryUserAccountMapper();
         ObjectStorageService storageService = mock(ObjectStorageService.class);
         when(storageService.putObject(anyString(), any(Path.class), anyString()))
             .thenThrow(new java.io.IOException("internal credential details should stay server-side"));
-        AuthApplicationService service = service(repository, new PasswordHasher(), new AuthTokenService("test-secret", 3600), storageService);
+        AuthApplicationService service = service(mapper, new PasswordHasher(), new AuthTokenService("test-secret", 3600), storageService);
         AuthApplicationService.AuthResponse response =
             service.register(new AuthApplicationService.AuthRequest("FailAvatar", "s3cret"));
         AuthContext.set(new AuthUser(response.user().userId(), "failavatar", true));
@@ -146,9 +146,9 @@ class AuthApplicationServiceTest {
 
     @Test
     void requireActiveUserRejectsDisabledOrMissingUsers() {
-        UserAccountRepository repository = inMemoryUserAccountRepository();
+        UserAccountMapper mapper = inMemoryUserAccountMapper();
         AuthApplicationService service = service(
-            repository,
+            mapper,
             new PasswordHasher(),
             new AuthTokenService("test-secret", 3600)
         );
@@ -158,7 +158,7 @@ class AuthApplicationServiceTest {
         assertThat(service.requireActiveUser(new AuthUser(response.user().userId(), "bob", true)))
             .isEqualTo(new AuthUser(response.user().userId(), "bob", true));
 
-        UserAccountEntity user = repository.findByUsername("bob").orElseThrow();
+        UserAccountEntity user = mapper.selectByUsername("bob").orElseThrow();
         user.setStatus(UserAccountStatus.DISABLED);
 
         assertThat(service.requireActiveUser(new AuthUser(response.user().userId(), "bob", true)))
@@ -171,7 +171,7 @@ class AuthApplicationServiceTest {
     void authFilterSkipsLoginAndRegisterEndpoints() {
         AuthFilter filter = new AuthFilter(
             new AuthTokenService("test-secret", 3600),
-            service(inMemoryUserAccountRepository(), new PasswordHasher(), new AuthTokenService("test-secret", 3600))
+            service(inMemoryUserAccountMapper(), new PasswordHasher(), new AuthTokenService("test-secret", 3600))
         );
 
         MockHttpServletRequest login = new MockHttpServletRequest("POST", "/api/auth/login");
@@ -185,10 +185,10 @@ class AuthApplicationServiceTest {
 
     @Test
     void authFilterStoresJwtUserInThreadLocalAndClearsAfterRequest() throws Exception {
-        UserAccountRepository repository = inMemoryUserAccountRepository();
+        UserAccountMapper mapper = inMemoryUserAccountMapper();
         PasswordHasher passwordHasher = new PasswordHasher();
         AuthTokenService tokenService = new AuthTokenService("test-secret", 3600);
-        AuthApplicationService service = service(repository, passwordHasher, tokenService);
+        AuthApplicationService service = service(mapper, passwordHasher, tokenService);
         AuthApplicationService.AuthResponse login =
             service.register(new AuthApplicationService.AuthRequest("ThreadUser", "s3cret"));
         AuthFilter filter = new AuthFilter(tokenService, service);
@@ -210,7 +210,7 @@ class AuthApplicationServiceTest {
     void authFilterRejectsInvalidJwtAndDoesNotLeakThreadLocal() throws Exception {
         AuthFilter filter = new AuthFilter(
             new AuthTokenService("test-secret", 3600),
-            service(inMemoryUserAccountRepository(), new PasswordHasher(), new AuthTokenService("test-secret", 3600))
+            service(inMemoryUserAccountMapper(), new PasswordHasher(), new AuthTokenService("test-secret", 3600))
         );
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/auth/me");
         request.addHeader("Authorization", "Bearer invalid.token.value");
@@ -224,46 +224,46 @@ class AuthApplicationServiceTest {
         assertThat(AuthContext.current()).isEqualTo(AuthUser.DEFAULT);
     }
 
-    private static AuthApplicationService service(UserAccountRepository repository,
+    private static AuthApplicationService service(UserAccountMapper mapper,
                                                   PasswordHasher passwordHasher,
                                                   AuthTokenService tokenService) {
-        return service(repository, passwordHasher, tokenService, mock(ObjectStorageService.class));
+        return service(mapper, passwordHasher, tokenService, mock(ObjectStorageService.class));
     }
 
-    private static AuthApplicationService service(UserAccountRepository repository,
+    private static AuthApplicationService service(UserAccountMapper mapper,
                                                   PasswordHasher passwordHasher,
                                                   AuthTokenService tokenService,
                                                   ObjectStorageService storageService) {
-        AuthApplicationService service = new AuthApplicationService(repository, passwordHasher, tokenService, storageService);
+        AuthApplicationService service = new AuthApplicationService(mapper, passwordHasher, tokenService, storageService);
         ReflectionTestUtils.setField(service, "defaultUsername", "admin");
         ReflectionTestUtils.setField(service, "defaultPassword", "admin123");
         return service;
     }
 
-    private static UserAccountRepository inMemoryUserAccountRepository() {
+    private static UserAccountMapper inMemoryUserAccountMapper() {
         java.util.Map<String, UserAccountEntity> byUsername = new java.util.LinkedHashMap<>();
-        UserAccountRepository repository = mock(UserAccountRepository.class);
-        when(repository.findByUsername(any())).thenAnswer(invocation ->
+        UserAccountMapper mapper = mock(UserAccountMapper.class);
+        when(mapper.selectByUsername(any())).thenAnswer(invocation ->
             Optional.ofNullable(byUsername.get(invocation.getArgument(0, String.class)))
         );
-        when(repository.findByUserIdAndStatus(any(), any())).thenAnswer(invocation -> {
+        when(mapper.selectByUserIdAndStatus(any(), any())).thenAnswer(invocation -> {
             String userId = invocation.getArgument(0, String.class);
             UserAccountStatus status = invocation.getArgument(1, UserAccountStatus.class);
             return byUsername.values().stream()
                 .filter(user -> userId.equals(user.getUserId()) && status == user.getStatus())
                 .findFirst();
         });
-        when(repository.findById(any())).thenAnswer(invocation -> {
+        when(mapper.selectOptionalById(any())).thenAnswer(invocation -> {
             String userId = invocation.getArgument(0, String.class);
             return byUsername.values().stream()
                 .filter(user -> userId.equals(user.getUserId()))
                 .findFirst();
         });
-        when(repository.save(any(UserAccountEntity.class))).thenAnswer(invocation -> {
+        when(mapper.upsertById(any(UserAccountEntity.class))).thenAnswer(invocation -> {
             UserAccountEntity entity = invocation.getArgument(0, UserAccountEntity.class);
             byUsername.put(entity.getUsername(), entity);
             return entity;
         });
-        return repository;
+        return mapper;
     }
 }
