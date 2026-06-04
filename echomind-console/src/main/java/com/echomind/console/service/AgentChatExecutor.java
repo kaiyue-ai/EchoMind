@@ -27,9 +27,11 @@ class AgentChatExecutor {
         return orchestrator.execute(userId, agentId, sessionId, message, modelId, attachments, rawMessage);
     }
 
+    // 执行流式聊天，返回流式聊天上下文
     Mono<StreamExecution> executeStream(String userId, String agentId, String sessionId, String message,
                                         String modelId, List<MessageAttachment> attachments, String rawMessage) {
-        if (rawMessage == null || rawMessage.isBlank()) {
+        if (rawMessage == null || rawMessage.isBlank()) { // 没有原始消息
+            // 扴接执行流式聊天上下文
             return orchestrator.executeStreamContext(userId, agentId, sessionId, message, modelId, attachments);
         }
         return orchestrator.executeStreamContext(userId, agentId, sessionId, message, modelId, attachments, rawMessage);

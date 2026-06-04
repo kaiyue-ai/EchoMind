@@ -16,23 +16,23 @@ import java.time.Instant;
 public class AlertRuleEntity {
 
     @TableId(value = "rule_id", type = IdType.ASSIGN_UUID)
-    private String ruleId;
+    private String ruleId; // 规则id
 
     @TableField("alert_type")
-    private AlertType alertType;
+    private AlertType alertType; // 警告类型
 
     @TableField("rule_name")
-    private String ruleName;
+    private String ruleName; // 规则名称
 
-    private AlertSeverity severity = AlertSeverity.WARNING;
+    private AlertSeverity severity = AlertSeverity.WARNING; // 警告的严重性
 
-    private boolean enabled = true;
+    private boolean enabled = true; // 是否启用
 
     @TableField("threshold_percent")
-    private Double thresholdPercent;
+    private Double thresholdPercent; // 警告阈值百分比
 
     @TableField("window_minutes")
-    private Integer windowMinutes;
+    private Integer windowMinutes; // 警告窗口分钟值
 
     @TableField("quiet_minutes")
     private int quietMinutes = 30;

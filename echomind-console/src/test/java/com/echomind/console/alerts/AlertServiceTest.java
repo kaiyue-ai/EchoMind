@@ -6,11 +6,13 @@ import com.echomind.console.sensitive.SensitiveEventEntity;
 import com.echomind.console.usage.AiCallUsageMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -29,7 +31,7 @@ class AlertServiceTest {
             .thenReturn(false);
         when(feishu.send(any())).thenReturn(new FeishuWebhookClient.SendResult(AlertStatus.SENT, null));
         when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        AlertService service = new AlertService(ruleMapper, eventMapper, mock(AiCallUsageMapper.class), feishu);
+        AlertService service = service(ruleMapper, eventMapper, feishu);
 
         service.emitSensitiveEvent(sensitiveEvent());
 
@@ -47,7 +49,7 @@ class AlertServiceTest {
         when(eventMapper.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
             .thenReturn(true);
         when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        AlertService service = new AlertService(ruleMapper, eventMapper, mock(AiCallUsageMapper.class), feishu);
+        AlertService service = service(ruleMapper, eventMapper, feishu);
 
         service.emitSensitiveEvent(sensitiveEvent());
 
@@ -72,7 +74,7 @@ class AlertServiceTest {
             .thenReturn(false);
         when(feishu.send(any())).thenReturn(new FeishuWebhookClient.SendResult(AlertStatus.SENT, null, "ok"));
         when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        AlertService service = new AlertService(ruleMapper, eventMapper, mock(AiCallUsageMapper.class), feishu);
+        AlertService service = service(ruleMapper, eventMapper, feishu);
 
         service.emitSensitiveEvent(sensitiveEvent());
 
@@ -101,7 +103,7 @@ class AlertServiceTest {
         when(eventMapper.existsByAlertTypeAndEscalatedTrueAndCreatedAtGreaterThanEqual(any(), any()))
             .thenReturn(true);
         when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        AlertService service = new AlertService(ruleMapper, eventMapper, mock(AiCallUsageMapper.class), feishu);
+        AlertService service = service(ruleMapper, eventMapper, feishu);
 
         service.emitSensitiveEvent(sensitiveEvent());
 
@@ -110,10 +112,91 @@ class AlertServiceTest {
             event.getStatus() == AlertStatus.SILENCED && event.getSuppressedCount() == 6));
     }
 
+    @Test
+    void readsActiveRuleThroughCacheWhenEmittingAlert() {
+        AlertRuleMapper ruleMapper = mock(AlertRuleMapper.class);
+        AlertEventMapper eventMapper = mock(AlertEventMapper.class);
+        FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
+        AlertRuleCache cache = mock(AlertRuleCache.class);
+        AlertRuleEntity rule = activeRule();
+        when(cache.ruleByType(eq(AlertType.SENSITIVE_DATA), any())).thenReturn(Optional.of(rule));
+        when(cache.ruleByType(argThat(type -> type != AlertType.SENSITIVE_DATA), any()))
+            .thenReturn(Optional.of(rule(AlertType.CALL_ERROR)));
+        when(eventMapper.existsByAlertTypeAndStatusAndCreatedAtGreaterThanEqual(any(), any(), any()))
+            .thenReturn(false);
+        when(feishu.send(any())).thenReturn(new FeishuWebhookClient.SendResult(AlertStatus.SENT, null));
+        when(eventMapper.upsertById(any(AlertEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AlertService service = new AlertService(ruleMapper, eventMapper, cache, mock(AiCallUsageMapper.class), feishu);
+
+        service.emitSensitiveEvent(sensitiveEvent());
+
+        verify(cache, org.mockito.Mockito.atLeastOnce()).ruleByType(eq(AlertType.SENSITIVE_DATA), any());
+        verify(ruleMapper, never()).selectOneByAlertType(AlertType.SENSITIVE_DATA);
+        verify(feishu).send(any(AlertEventEntity.class));
+    }
+
+    @Test
+    void updateRulesInvalidatesCacheAfterWritingRule() {
+        AlertRuleMapper ruleMapper = mock(AlertRuleMapper.class);
+        AlertEventMapper eventMapper = mock(AlertEventMapper.class);
+        FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
+        AlertRuleCache cache = mock(AlertRuleCache.class);
+        AlertRuleEntity existing = rule(AlertType.SENSITIVE_DATA);
+        when(cache.ruleByType(any(AlertType.class), any())).thenReturn(Optional.of(existing));
+        when(cache.allRules(any())).thenReturn(List.of(existing));
+        when(ruleMapper.selectOptionalById("sensitive")).thenReturn(Optional.of(existing));
+        AlertService service = new AlertService(ruleMapper, eventMapper, cache, mock(AiCallUsageMapper.class), feishu);
+
+        service.updateRules(new AlertDtos.UpdateAlertRulesRequest(List.of(new AlertDtos.AlertRuleView(
+            "sensitive",
+            AlertType.SENSITIVE_DATA,
+            "敏感数据事件",
+            AlertSeverity.CRITICAL,
+            true,
+            null,
+            null,
+            10,
+            true,
+            3,
+            null
+        ))));
+
+        verify(ruleMapper).upsertById(existing);
+        verify(cache).invalidateRules();
+    }
+
+    @Test
+    void disabledCachedRuleDoesNotSendAlert() {
+        AlertRuleMapper ruleMapper = mock(AlertRuleMapper.class);
+        AlertEventMapper eventMapper = mock(AlertEventMapper.class);
+        FeishuWebhookClient feishu = mock(FeishuWebhookClient.class);
+        AlertRuleCache cache = mock(AlertRuleCache.class);
+        AlertRuleEntity disabled = activeRule();
+        disabled.setEnabled(false);
+        when(cache.ruleByType(eq(AlertType.SENSITIVE_DATA), any())).thenReturn(Optional.of(disabled));
+        when(cache.ruleByType(argThat(type -> type != AlertType.SENSITIVE_DATA), any()))
+            .thenReturn(Optional.of(rule(AlertType.CALL_ERROR)));
+        AlertService service = new AlertService(ruleMapper, eventMapper, cache, mock(AiCallUsageMapper.class), feishu);
+
+        service.emitSensitiveEvent(sensitiveEvent());
+
+        verify(feishu, never()).send(any());
+        verify(eventMapper, never()).upsertById(any(AlertEventEntity.class));
+    }
+
+    private AlertService service(AlertRuleMapper ruleMapper, AlertEventMapper eventMapper, FeishuWebhookClient feishu) {
+        return new AlertService(ruleMapper, eventMapper, AlertRuleCache.disabled(), mock(AiCallUsageMapper.class),
+            feishu);
+    }
+
     private AlertRuleEntity activeRule() {
+        return rule(AlertType.SENSITIVE_DATA);
+    }
+
+    private AlertRuleEntity rule(AlertType type) {
         AlertRuleEntity rule = new AlertRuleEntity();
-        rule.setRuleId("sensitive");
-        rule.setAlertType(AlertType.SENSITIVE_DATA);
+        rule.setRuleId(type.name());
+        rule.setAlertType(type);
         rule.setRuleName("敏感数据事件");
         rule.setSeverity(AlertSeverity.WARNING);
         rule.setEnabled(true);
