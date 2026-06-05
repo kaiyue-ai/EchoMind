@@ -1,18 +1,24 @@
 package com.echomind.usermemory.config;
 
+import com.echomind.common.messaging.RabbitQueueNames;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.UserMemoryEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 class UserMemoryRabbitConfigTest {
 
@@ -59,5 +65,27 @@ class UserMemoryRabbitConfigTest {
         Object converted = converter.fromMessage(message);
 
         assertThat(converted).isEqualTo(event);
+    }
+
+    @Test
+    void userMemoryQueueIsDurableAndDeadLettered() {
+        UserMemoryProperties properties = new UserMemoryProperties();
+        properties.setQueueName("user.memory.queue");
+        Queue queue = new UserMemoryRabbitConfig().userMemoryQueue(properties);
+
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+            .containsEntry("x-dead-letter-exchange", RabbitQueueNames.DEAD_LETTER_EXCHANGE)
+            .containsEntry("x-dead-letter-routing-key", RabbitQueueNames.USER_MEMORY_DLQ);
+    }
+
+    @Test
+    void rabbitTemplateUsesMandatoryPublishing() {
+        RabbitTemplate template = new UserMemoryRabbitConfig().userMemoryRabbitTemplate(
+            mock(ConnectionFactory.class),
+            mock(Jackson2JsonMessageConverter.class)
+        );
+
+        assertThat(ReflectionTestUtils.getField(template, "mandatoryExpression")).isNotNull();
     }
 }

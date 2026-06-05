@@ -51,6 +51,8 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USERNAME:echomind}
     password: ${RABBITMQ_PASSWORD:echomind_secret}
+    publisher-confirm-type: correlated
+    publisher-returns: true
 
 otel:
   service:
@@ -77,6 +79,11 @@ echomind:
     token-secret: ${ECHOMIND_ADMIN_TOKEN_SECRET:echomind-admin-dev-secret}
     token-ttl-seconds: ${ECHOMIND_ADMIN_TOKEN_TTL_SECONDS:604800}
   rabbitmq:
+    retry:
+      max-attempts: ${ECHOMIND_RABBITMQ_RETRY_MAX_ATTEMPTS:3}
+      initial-interval-ms: ${ECHOMIND_RABBITMQ_RETRY_INITIAL_INTERVAL_MS:1000}
+      multiplier: ${ECHOMIND_RABBITMQ_RETRY_MULTIPLIER:5}
+      max-interval-ms: ${ECHOMIND_RABBITMQ_RETRY_MAX_INTERVAL_MS:30000}
     chat-request:
       # 固定较高消费者数并降低 prefetch，避免短突发压测时少量消费者预取过多消息。
       concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_CONSUMERS:20}

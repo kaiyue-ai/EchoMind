@@ -1,5 +1,6 @@
 package com.echomind.agent.usermemory;
 
+import com.echomind.agent.messaging.RabbitReliableMessaging;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.model.UserMemoryEvent;
@@ -49,7 +50,8 @@ public class RabbitUserMemoryPersistPublisher implements UserMemoryPersistPublis
                 memoryDecision,
                 EchoMindTrace.currentTraceId(),
                 EchoMindTrace.injectContext().get("traceparent")
-            ));
+            ), RabbitReliableMessaging.persistentMessage(),
+                RabbitReliableMessaging.correlation("user-memory", sessionId));
         } catch (Exception e) {
             log.warn("Failed to publish user memory event sessionId={}: {}", sessionId, e.getMessage());
         }

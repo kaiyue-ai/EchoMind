@@ -48,6 +48,7 @@ import com.echomind.memory.usermemory.impl.RedisUserProfileSnapshotStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
 import com.echomind.common.messaging.ChatMemoryShardSupport;
+import com.echomind.agent.messaging.RabbitReliableMessaging;
 import com.echomind.skill.loader.SkillDirectoryWatcher;
 import com.echomind.skill.loader.SkillJarLoader;
 import com.echomind.skill.marketplace.MarketplaceService;
@@ -390,7 +391,7 @@ public class EchoMindAutoConfiguration {
 
     @Bean
     public Queue userMemoryQueue(EchoMindProperties props) {
-        return new Queue(props.getUserMemory().getQueueName(), true);
+        return reliableQueue(props.getUserMemory().getQueueName(), RabbitReliableMessaging.USER_MEMORY_DLQ);
     }
 
     @Bean
@@ -406,7 +407,13 @@ public class EchoMindAutoConfiguration {
         for (int i = 0; i < shards; i++) {
             Queue queue = new Queue(
                 ChatMemoryShardSupport.queueName(props.getMemory().getPersistQueueName(), i),
-                true
+                true,
+                false,
+                false,
+                Map.of(
+                    "x-dead-letter-exchange", RabbitReliableMessaging.DEAD_LETTER_EXCHANGE,
+                    "x-dead-letter-routing-key", RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ
+                )
             );
             Binding binding = BindingBuilder.bind(queue)
                 .to(chatMemoryPersistExchange)
@@ -415,6 +422,13 @@ public class EchoMindAutoConfiguration {
             declarables.add(binding);
         }
         return new Declarables(declarables);
+    }
+
+    private Queue reliableQueue(String queueName, String deadLetterRoutingKey) {
+        return new Queue(queueName, true, false, false, Map.of(
+            "x-dead-letter-exchange", RabbitReliableMessaging.DEAD_LETTER_EXCHANGE,
+            "x-dead-letter-routing-key", deadLetterRoutingKey
+        ));
     }
 
     @Bean

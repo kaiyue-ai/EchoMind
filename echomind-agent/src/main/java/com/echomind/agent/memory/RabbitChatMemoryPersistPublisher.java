@@ -1,5 +1,6 @@
 package com.echomind.agent.memory;
 
+import com.echomind.agent.messaging.RabbitReliableMessaging;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.ChatMemoryPersistEvent;
 import com.echomind.common.model.MemoryDecision;
@@ -60,7 +61,9 @@ public class RabbitChatMemoryPersistPublisher implements ChatMemoryPersistPublis
                     memoryDecision,
                     EchoMindTrace.currentTraceId(),
                     EchoMindTrace.injectContext().get("traceparent")
-                ));
+                ),
+                RabbitReliableMessaging.persistentMessage(),
+                RabbitReliableMessaging.correlation("chat-memory", sessionId));
         } catch (Exception e) {
             log.warn("Failed to publish chat memory persist event sessionId={}: {}", sessionId, e.getMessage());
         }

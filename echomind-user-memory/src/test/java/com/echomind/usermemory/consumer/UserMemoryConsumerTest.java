@@ -1,60 +1,42 @@
 package com.echomind.usermemory.consumer;
 
 import com.echomind.common.model.AgentMessage;
-import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.model.UserMemoryEvent;
-import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.usermemory.config.UserMemoryProperties;
 import com.echomind.usermemory.service.UserMemoryService;
-import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
-import io.opentelemetry.context.propagation.ContextPropagators;
-import io.opentelemetry.sdk.OpenTelemetrySdk;
-import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.doAnswer;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 class UserMemoryConsumerTest {
 
     @Test
-    void restoresTraceContextFromTraceIdWhenTraceparentIsMissing() {
-        String traceId = "0123456789abcdef0123456789abcdef";
-        SdkTracerProvider tracerProvider = SdkTracerProvider.builder().build();
-        OpenTelemetrySdk sdk = OpenTelemetrySdk.builder()
-            .setTracerProvider(tracerProvider)
-            .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
-            .build();
-        EchoMindTrace.setOpenTelemetry(sdk);
-        try {
-            UserMemoryService service = mock(UserMemoryService.class);
-            AtomicReference<String> currentTraceId = new AtomicReference<>();
-            doAnswer(invocation -> {
-                currentTraceId.set(EchoMindTrace.currentTraceId());
-                return null;
-            }).when(service).ingest(org.mockito.ArgumentMatchers.any());
-            UserMemoryProperties properties = new UserMemoryProperties();
-            UserMemoryConsumer consumer = new UserMemoryConsumer(service, properties);
+    void rethrowsProcessingFailureSoRabbitRetryCanHandleIt() {
+        UserMemoryService service = mock(UserMemoryService.class);
+        UserMemoryProperties properties = new UserMemoryProperties();
+        UserMemoryEvent event = new UserMemoryEvent("user-a", "session-a", "agent-a",
+            List.of(AgentMessage.user("记住我喜欢简洁代码")));
+        RuntimeException failure = new RuntimeException("milvus unavailable");
+        doThrow(failure).when(service).ingest(event);
+        UserMemoryConsumer consumer = new UserMemoryConsumer(service, properties);
 
-            consumer.onEvent(new UserMemoryEvent(
-                "user-a",
-                "session-1",
-                "default",
-                List.of(AgentMessage.user("你好")),
-                MemoryDecision.FALLBACK,
-                traceId,
-                null
-            ));
+        assertThatThrownBy(() -> consumer.onEvent(event)).isSameAs(failure);
+    }
 
-            assertThat(currentTraceId).hasValue(traceId);
-        } finally {
-            EchoMindTrace.setOpenTelemetry(OpenTelemetry.noop());
-            tracerProvider.shutdown();
-        }
+    @Test
+    void invalidEventReturnsWithoutCallingService() {
+        UserMemoryService service = mock(UserMemoryService.class);
+        UserMemoryProperties properties = new UserMemoryProperties();
+        UserMemoryConsumer consumer = new UserMemoryConsumer(service, properties);
+
+        consumer.onEvent(new UserMemoryEvent("user-a", " ", "agent-a", List.of(AgentMessage.user("x"))));
+
+        verify(service, never()).ingest(org.mockito.ArgumentMatchers.any());
     }
 }

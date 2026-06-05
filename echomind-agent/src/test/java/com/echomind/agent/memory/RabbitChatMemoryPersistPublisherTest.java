@@ -5,6 +5,8 @@ import com.echomind.common.model.ChatMemoryPersistEvent;
 import com.echomind.common.messaging.ChatMemoryShardSupport;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.amqp.core.MessagePostProcessor;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.util.List;
@@ -31,7 +33,9 @@ class RabbitChatMemoryPersistPublisherTest {
         verify(template, times(2)).convertAndSend(
             eq("chat.memory.exchange"),
             routingKeys.capture(),
-            org.mockito.ArgumentMatchers.any(ChatMemoryPersistEvent.class)
+            org.mockito.ArgumentMatchers.any(ChatMemoryPersistEvent.class),
+            org.mockito.ArgumentMatchers.any(MessagePostProcessor.class),
+            org.mockito.ArgumentMatchers.any(CorrelationData.class)
         );
         assertThat(routingKeys.getAllValues()).containsOnly(routingKeys.getAllValues().get(0));
     }
@@ -49,7 +53,9 @@ class RabbitChatMemoryPersistPublisherTest {
         verify(template, times(2)).convertAndSend(
             eq("chat.memory.exchange"),
             routingKeys.capture(),
-            org.mockito.ArgumentMatchers.any(ChatMemoryPersistEvent.class)
+            org.mockito.ArgumentMatchers.any(ChatMemoryPersistEvent.class),
+            org.mockito.ArgumentMatchers.any(MessagePostProcessor.class),
+            org.mockito.ArgumentMatchers.any(CorrelationData.class)
         );
         assertThat(routingKeys.getAllValues()).containsExactly(
             ChatMemoryShardSupport.routingKey(ChatMemoryShardSupport.shardIndex("session-a", 8)),

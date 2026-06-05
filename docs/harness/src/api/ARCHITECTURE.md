@@ -251,6 +251,12 @@ RabbitMQ 的实际使用面保持收敛：
 - `echomind.user-memory.requests`：用户长期记忆事件队列。主应用发布，独立 `echomind-user-memory`
   worker 消费。
 
+RabbitMQ 可靠性边界：`echomind.chat.requests`、普通聊天记忆分片队列和
+`echomind.user-memory.requests` 是核心消息，发布端使用 publisher confirm、publisher return、
+`mandatory=true` 和 persistent delivery mode；消费端有限重试后进入 `echomind.dlx` 下的对应
+DLQ。`echomind.chat.stream-events` 只承载在线 SSE token/result 体验，不进入强可靠 DLQ；断线恢复
+仍依赖 `SsePushService` 的短期内存 buffer 和终态事件。
+
 Agent Team 当前不使用 RabbitMQ；Team Run 由 `TaskExecutor` 在单体进程内异步推进 MySQL 黑板状态。
 
 异步聊天：

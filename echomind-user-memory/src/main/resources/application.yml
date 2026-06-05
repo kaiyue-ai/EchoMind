@@ -12,6 +12,8 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USERNAME:echomind}
     password: ${RABBITMQ_PASSWORD:echomind_secret}
+    publisher-confirm-type: correlated
+    publisher-returns: true
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
@@ -33,6 +35,12 @@ otel:
     attributes: deployment.environment=${ECHOMIND_ENV:local}
 
 echomind:
+  rabbitmq:
+    retry:
+      max-attempts: ${ECHOMIND_RABBITMQ_RETRY_MAX_ATTEMPTS:3}
+      initial-interval-ms: ${ECHOMIND_RABBITMQ_RETRY_INITIAL_INTERVAL_MS:1000}
+      multiplier: ${ECHOMIND_RABBITMQ_RETRY_MULTIPLIER:5}
+      max-interval-ms: ${ECHOMIND_RABBITMQ_RETRY_MAX_INTERVAL_MS:30000}
   user-memory:
     enabled: ${USER_MEMORY_ENABLED:true}
     queue-name: ${USER_MEMORY_QUEUE_NAME:echomind.user-memory.requests}

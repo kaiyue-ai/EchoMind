@@ -1,6 +1,7 @@
 package com.echomind.console.service;
 
 import com.echomind.common.model.ChatRequest;
+import com.echomind.agent.messaging.RabbitReliableMessaging;
 import com.echomind.console.config.RabbitMQConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,7 +19,12 @@ public class ChatRabbitProducer {
     // 需要交换机的情况：就比如说是一个消费者对应多个消息队列
     // 我们需要对用户进行区分，普通用户和VIP用户去的队列不同，这个时候就需要交换机进行路由
     public void publish(ChatRequest request) {
-        template.convertAndSend(RabbitMQConfig.QUEUE_CHAT_REQUESTS, request);
-        log.info("Published chat request {}", request.requestId());
+        template.convertAndSend(
+            RabbitMQConfig.QUEUE_CHAT_REQUESTS,
+            request,
+            RabbitReliableMessaging.persistentMessage(),
+            RabbitReliableMessaging.correlation("chat-request", request == null ? null : request.requestId())
+        );
+        log.info("Published chat request {}", request == null ? null : request.requestId());
     }
 }

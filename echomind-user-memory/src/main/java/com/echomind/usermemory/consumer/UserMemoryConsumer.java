@@ -24,8 +24,13 @@ public class UserMemoryConsumer {
         if (!properties.isEnabled()) {
             return;
         }
+        if (event == null || event.sessionId() == null || event.sessionId().isBlank()
+            || event.messages() == null || event.messages().isEmpty()) {
+            log.warn("Ignoring invalid user memory event");
+            return;
+        }
         Span span = EchoMindTrace.startSpan("echomind.user-memory.consume",
-            event == null ? null : EchoMindTrace.extractContext(event.traceparent(), event.traceId()));
+            EchoMindTrace.extractContext(event.traceparent(), event.traceId()));
         tagEvent(span, event);
         try {
             try (Scope ignored = span.makeCurrent()) {
@@ -33,9 +38,8 @@ public class UserMemoryConsumer {
             }
         } catch (Exception e) {
             EchoMindTrace.recordException(span, e);
-            String sessionId = event == null ? null : event.sessionId();
-            log.warn("Failed to process user memory event sessionId={}: {}", sessionId, e.getMessage());
-            // 不 re-throw，让 RabbitMQ ack 此消息，避免坏消息阻塞整个消费者
+            log.warn("Failed to process user memory event sessionId={}: {}", event.sessionId(), e.getMessage());
+            throw e;
         } finally {
             span.end();
         }
