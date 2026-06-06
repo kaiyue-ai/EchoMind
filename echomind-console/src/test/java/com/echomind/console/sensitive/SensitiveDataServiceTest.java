@@ -43,7 +43,64 @@ class SensitiveDataServiceTest {
     }
 
     @Test
-    void blocksWhenRuleUsesBlockAction() {
+    void requestBlockReturnsReplacementAndRecordsSanitizedEvent() {
+        SensitiveRuleMapper ruleMapper = mock(SensitiveRuleMapper.class);
+        SensitiveEventMapper eventMapper = mock(SensitiveEventMapper.class);
+        AlertService alertService = mock(AlertService.class);
+        SensitiveRuleEntity rule = rule("phone", "手机号", "(?<!\\d)1[3-9]\\d{9}(?!\\d)", "[PHONE]",
+            SensitiveAction.BLOCK);
+        when(ruleMapper.selectCountAll()).thenReturn(1L);
+        when(ruleMapper.selectEnabledOrderByRuleNameAsc()).thenReturn(List.of(rule));
+        when(eventMapper.upsertById(any(SensitiveEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        SensitiveDataService service = service(ruleMapper, eventMapper, alertService);
+
+        SensitiveDataService.GovernedText result = service.inspectRequest(
+            new AuthUser("user-a", "alice", true),
+            "trace-a",
+            "default",
+            "session-a",
+            "手机号 13800138000"
+        );
+
+        assertThat(result.text()).isEqualTo("[PHONE]");
+        assertThat(result.changed()).isTrue();
+        assertThat(result.blocked()).isTrue();
+        verify(eventMapper).upsertById(org.mockito.ArgumentMatchers.argThat(event ->
+            event.getDirection() == SensitiveDirection.REQUEST
+                && event.getAction() == SensitiveAction.BLOCK
+                && "[PHONE]".equals(event.getSample())
+        ));
+        verify(alertService).emitSensitiveEvent(any(SensitiveEventEntity.class));
+    }
+
+    @Test
+    void requestBlockJoinsAllMatchesByOriginalTextOrder() {
+        SensitiveRuleMapper ruleMapper = mock(SensitiveRuleMapper.class);
+        SensitiveEventMapper eventMapper = mock(SensitiveEventMapper.class);
+        AlertService alertService = mock(AlertService.class);
+        SensitiveRuleEntity phone = rule("phone", "手机号", "(?<!\\d)1[3-9]\\d{9}(?!\\d)", "[PHONE]",
+            SensitiveAction.BLOCK);
+        SensitiveRuleEntity email = rule("email", "邮箱", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
+            "[EMAIL]", SensitiveAction.BLOCK);
+        when(ruleMapper.selectCountAll()).thenReturn(1L);
+        when(ruleMapper.selectEnabledOrderByRuleNameAsc()).thenReturn(List.of(phone, email));
+        when(eventMapper.upsertById(any(SensitiveEventEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        SensitiveDataService service = service(ruleMapper, eventMapper, alertService);
+
+        SensitiveDataService.GovernedText result = service.inspectRequest(
+            new AuthUser("user-a", "alice", true),
+            "trace-a",
+            "default",
+            "session-a",
+            "alice@example.com 13800138000 bob@example.com"
+        );
+
+        assertThat(result.text()).isEqualTo("[EMAIL] [PHONE] [EMAIL]");
+        assertThat(result.blocked()).isTrue();
+    }
+
+    @Test
+    void responseBlockStillThrowsWhenRuleUsesBlockAction() {
         SensitiveRuleMapper ruleMapper = mock(SensitiveRuleMapper.class);
         SensitiveEventMapper eventMapper = mock(SensitiveEventMapper.class);
         AlertService alertService = mock(AlertService.class);

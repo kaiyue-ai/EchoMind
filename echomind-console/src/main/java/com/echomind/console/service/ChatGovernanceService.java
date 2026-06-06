@@ -60,21 +60,26 @@ public class ChatGovernanceService {
      * @param agentId  Agent标识
      * @param sessionId 会话ID
      * @param message  请求消息
-     * @return 脱敏后的消息文本
+     * @return 请求治理结果，包含脱敏后的消息或请求侧短路回复
      * @throws TokenQuotaExceededException 当用户Token配额超限时抛出
      */
-    public String inspectRequest(Span span, AuthUser authUser, String agentId, String sessionId, String message) {
+    public RequestInspection inspectRequest(Span span, AuthUser authUser, String agentId, String sessionId,
+                                            String message) {
         // Step 1: 检查用户Token配额
         assertQuotaAllowed(span, authUser, agentId, sessionId);
         
         // Step 2: 检测并处理请求中的敏感数据
-        return sensitiveDataService.inspectRequest(
+        SensitiveDataService.GovernedText governed = sensitiveDataService.inspectRequest(
             authUser,
             EchoMindTrace.traceId(span),
             agentId,
             sessionId,
             message
-        ).text();
+        );
+        if (governed.blocked()) {
+            return RequestInspection.shortCircuit(governed.text());
+        }
+        return RequestInspection.continueWith(governed.text());
     }
 
     /**
@@ -344,5 +349,19 @@ public class ChatGovernanceService {
      */
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    public record RequestInspection(String governedMessage, String shortCircuitReply) {
+        public static RequestInspection continueWith(String governedMessage) {
+            return new RequestInspection(governedMessage, null);
+        }
+
+        public static RequestInspection shortCircuit(String reply) {
+            return new RequestInspection(null, reply == null ? "" : reply);
+        }
+
+        public boolean shortCircuited() {
+            return shortCircuitReply != null;
+        }
     }
 }

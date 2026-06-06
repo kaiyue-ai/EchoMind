@@ -63,6 +63,10 @@ public class SsePushService {
         containerFactory = RabbitMQConfig.CHAT_STREAM_EVENT_LISTENER_FACTORY
     )
     public void onChatStreamEvent(ChatStreamEvent event) {
+        pushEvent(event);
+    }
+
+    public void pushEvent(ChatStreamEvent event) {
         if (event == null || event.requestId() == null || event.requestId().isBlank()) {
             return;
         }

@@ -14,7 +14,7 @@
 | 管理端账号 | MySQL `echomind_admin_users`，独立于客户端账号 | 独立 admin JWT，不进入客户端用户统计 |
 | AI 调用用量 | MySQL `echomind_ai_call_usage`，按客户端 `user_id` 记录 TraceID、模型、token、延迟和状态 | 管理端仪表盘和 Trace 跳转 |
 | 用户 Token 配额 | MySQL `echomind_token_quotas` 保存用户日/月限额配置；`echomind_token_quota_usage` 按 `user_id + scope + bucket_start` 保存已结算 token | 请求前快速检查已满额用户；模型返回真实 provider usage 后行锁结算 |
-| 敏感数据治理 | MySQL `echomind_sensitive_rules` 保存规则，`echomind_sensitive_events` 保存脱敏后事件样本 | Redis `echomind:sensitive:rules:*` 只做规则热缓存；`ChatApplicationService` 请求/响应治理钩子 |
+| 敏感数据治理 | MySQL `echomind_sensitive_rules` 保存规则，`echomind_sensitive_events` 保存脱敏后事件样本；请求侧 `BLOCK` 样本保存替代词结果 | Redis `echomind:sensitive:rules:*` 只做规则热缓存；`ChatApplicationService` 请求/响应治理钩子 |
 | 告警治理 | MySQL `echomind_alert_rules` 保存阈值、静默期和升级策略，`echomind_alert_events` 保存推送结果、升级标记和飞书响应摘要 | 飞书 Webhook 客户端，不作为事实来源；地址来自后端运行环境变量 `Webhook` |
 | 用户长期记忆 | Milvus `echomind_user_memory_v2` 按 `userId` 保存细粒度事实；Redis `echomind:user-profile:snapshot:*` 保存画像快照 | 主应用 Pipeline 读取画像快照并按 `userId` KNN 召回相关事实 |
 | Agent 知识库文档 | MySQL 文档表 + 对象存储文件 | Milvus 保存切片正文、切片元数据和知识库向量索引 |
@@ -44,7 +44,7 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 - 客户端用户账号和管理端用户账号，但两者必须分表、分 JWT、分接口。
 - AI 调用用量审计，包含 `trace_id`、客户端 `user_id`、`operation`、模型、prompt/completion/total token、耗时、状态和错误信息。
 - 用户 Token 配额配置和日/月结算账本；账本行按 `user_id + scope + bucket_start` 唯一，结算时必须锁行，不能只从审计表聚合判断并发 quota。
-- 敏感数据规则、脱敏事件、告警规则和告警事件。敏感事件只能保存脱敏后的样本，不允许落原始手机号、身份证、邮箱、银行卡等命中文本。
+- 敏感数据规则、脱敏事件、告警规则和告警事件。敏感事件只能保存脱敏后的样本或请求侧 `BLOCK` 替代词结果，不允许落原始手机号、身份证、邮箱、银行卡等命中文本。
 - Agent 知识库文档元数据和原文件引用。
 - 后续 Agent Team 的 Team、Member、Run、Step。
 
@@ -104,7 +104,7 @@ AI 模型调用。`echomind_ai_call_usage.trace_id` 必须能关联到导出到 
 `used_tokens`。若 `used + currentCallTokens > limit`，必须抛 `TokenQuotaExceededException` 返回配额错误；
 这类结算失败不能发普通 `CALL_ERROR` 告警，也不能删除本次真实审计记录。
 项目三 AI Infra 是当前 Agent 项目的管理端，不新增独立网关或应用 API Key；配额仍按客户端用户维度执行。
-脱敏/告警属于管理端治理事实，必须落 MySQL，不能只放内存 Map；飞书自定义机器人 Webhook 只负责通知，不是告警事实来源。Webhook 地址只来自后端运行环境变量 `Webhook`，不在管理端前端配置规则级 Webhook。
+脱敏/告警属于管理端治理事实，必须落 MySQL，不能只放内存 Map；请求侧命中 `BLOCK` 会阻止进入 Agent/RabbitMQ 管线并返回替代词拼接结果，响应侧命中 `BLOCK` 仍走阻断异常。飞书自定义机器人 Webhook 只负责通知，不是告警事实来源。Webhook 地址只来自后端运行环境变量 `Webhook`，不在管理端前端配置规则级 Webhook。
 敏感规则可以进入 Redis 热缓存来减少聊天治理链路反复查库，但 MySQL 仍是事实来源；规则写入成功后必须删除对应 Redis 缓存，让下一次读取回源刷新。
 
 每次聊天进入提示词的内容应该是：

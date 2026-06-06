@@ -92,7 +92,7 @@ Runtime / Domain Service 负责真正的执行能力：
 | `ChatApplicationService` | 保留同步、异步提交、队列流式消费和会话删除的用例入口；请求归一化、Agent 执行适配、队列流式消费和会话附件清理由同包 helper 承接 |
 | `ChatGovernanceService` | 收口聊天请求/响应治理：Token 配额快速检查、敏感数据、调用用量和调用错误告警 |
 | `AiCallUsageService` | 记录每次客户端 AI 调用的 TraceID、用户、模型、延迟、状态和 token，并用真实 provider usage 触发用户 quota 后置结算 |
-| `SensitiveDataService` | 在聊天请求进入 Agent 前、响应返回前做敏感数据脱敏/阻断，并记录脱敏后事件 |
+| `SensitiveDataService` | 在聊天请求进入 Agent 前、响应返回前做敏感数据脱敏/阻断；请求侧 `BLOCK` 返回替代词短路结果，响应侧 `BLOCK` 仍抛阻断异常，并记录脱敏后事件 |
 | `AlertService` | 根据调用错误、错误率、Token 阈值和敏感数据事件生成告警，按静默期推送飞书自定义机器人 Webhook，并在静默累计达阈值时发送升级告警 |
 | `UsageQueryService` | 管理端查询所有用户总 token、单用户总 token 和单次调用明细 |
 | `SkillApplicationService` | Skill 上传、启停、删除，并同步能力注册表 |
@@ -137,8 +137,10 @@ DELETE /api/admin/client-users/{userId}
 接口响应再生成展示 URL。
 
 项目三 AI Infra 只作为现有 Agent 项目的管理端，不新增独立网关、不新增 OpenAI `/v1` 兼容入口、
-不引入应用 API Key。治理能力挂在现有 `/api/chat/*` 链路：调用前快速检查用户级 Token 配额并对请求做脱敏/阻断，
-模型响应后再做响应脱敏/阻断、用量落库、用户 quota 结算和告警触发。敏感数据事件只保存脱敏后的样本，不落原始命中文本。
+不引入应用 API Key。治理能力挂在现有 `/api/chat/*` 链路：调用前先快速检查用户级 Token 配额，
+再对请求做脱敏或 `BLOCK` 短路；请求侧 `BLOCK` 不进入 Agent/RabbitMQ 管线，直接把命中规则
+replacement 按原文位置拼接后返回给用户。模型响应后再做响应脱敏/阻断、用量落库、用户 quota
+结算和告警触发；响应侧 `BLOCK` 仍走阻断异常。敏感数据事件只保存脱敏后的样本或替代词结果，不落原始命中文本。
 这些治理流程集中在 `ChatGovernanceService`。`ChatApplicationService` 只负责用例入口和调用顺序；
 `ChatRequestNormalizer` 负责 REST 请求归一化，`AgentChatExecutor` 负责调用 `AgentOrchestrator`
 并保留原始用户消息，`QueuedChatStreamExecutor` 负责执行队列里的流式聊天并产出 SSE token 事件，
@@ -278,6 +280,7 @@ POST /api/chat
 `POST /api/chat/stream` 直连模型流式执行已删除。前端若需要流式体验，必须先 `POST /api/chat`
 入队，再订阅 `GET /api/chat/stream/{requestId}`；SSE 层只转发事件，不承担模型执行。
 异步聊天的 Token 配额快速检查和请求脱敏只在 `ChatApplicationService.submitAsync` 入队前执行；
+请求侧 `BLOCK` 时只注册 SSE owner 并直接缓存/推送成功 `result` 事件，不发布 RabbitMQ。
 `QueuedChatStreamExecutor` 消费队列消息时不再重复请求前配额检查，只负责流式执行、响应治理、用量落库、真实 usage 后置结算和事件推送。
 
 Provider 层通过 Spring AI ChatModel adapter 使用厂商真流式能力。OpenAI 兼容协议（包括阿里云百炼/Qwen）

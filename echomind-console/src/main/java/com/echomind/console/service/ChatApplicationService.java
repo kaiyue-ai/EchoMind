@@ -21,6 +21,7 @@ import io.opentelemetry.context.Scope;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.List;
 
 /**
  * 聊天应用服务。
@@ -61,7 +62,9 @@ public class ChatApplicationService {
 
         try (Scope ignored = span.makeCurrent()) {
             // 3. 应用治理规则：限流、配额检查、权限验证
-            normalized = applyRequestGovernance(span, normalized);
+            ChatGovernanceService.RequestInspection requestInspection =
+                governanceService.inspectRequest(span, normalized.authUser(), normalized.agentId(),
+                    normalized.sessionId(), normalized.message());
 
             // 4. 获取TraceID：用于全链路追踪关联
             String traceId = EchoMindTrace.traceId(span);
@@ -71,6 +74,24 @@ public class ChatApplicationService {
 
             // 6. 注册SSE请求：建立客户端连接关联(将结果推送给指定的用户的的请求)
             ssePushService.registerRequest(requestId, normalized.userId());
+
+            if (requestInspection.shortCircuited()) {
+                ssePushService.pushEvent(ChatStreamEvent.result(ChatResponse.success(
+                    requestId,
+                    normalized.sessionId(),
+                    normalized.agentId(),
+                    normalized.modelId(),
+                    requestInspection.shortCircuitReply(),
+                    List.of(),
+                    traceId,
+                    null,
+                    EchoMindTrace.injectContext().get("traceparent")
+                )));
+                span.setAttribute("echomind.request_id", requestId);
+                return new ChatSubmitResponse(requestId, normalized.sessionId(), traceId);
+            }
+
+            normalized = normalized.withMessage(requestInspection.governedMessage());
 
             try {
                 // 7. 发布消息到RabbitMQ：异步处理核心，解耦请求提交与处理
@@ -134,7 +155,12 @@ public class ChatApplicationService {
             String rawMessage = n.message();
 
             // 6. 应用治理规则：限流、配额检查、权限验证
-            n = applyRequestGovernance(span, n);
+            ChatGovernanceService.RequestInspection requestInspection =
+                governanceService.inspectRequest(span, n.authUser(), n.agentId(), n.sessionId(), n.message());
+            if (requestInspection.shortCircuited()) {
+                return shortCircuitSyncResponse(n, span, requestInspection.shortCircuitReply());
+            }
+            n = n.withMessage(requestInspection.governedMessage());
 
             // 7. 执行Agent管线：核心处理逻辑（上下文加载、模型选择、工具调用、LLM推理）
             ctx = agentChatExecutor.execute(n.userId(), n.agentId(), n.sessionId(), n.message(), n.modelId(),
@@ -181,7 +207,23 @@ public class ChatApplicationService {
         Span span = chatSpan("echomind.chat.stream", n);
         try (Scope ignored = span.makeCurrent()) {
             String rawMessage = n.message();
-            n = applyRequestGovernance(span, n);
+            ChatGovernanceService.RequestInspection requestInspection =
+                governanceService.inspectRequest(span, n.authUser(), n.agentId(), n.sessionId(), n.message());
+            if (requestInspection.shortCircuited()) {
+                eventConsumer.accept(ChatStreamEvent.result(ChatResponse.success(
+                    "",
+                    n.sessionId(),
+                    n.agentId(),
+                    n.modelId(),
+                    requestInspection.shortCircuitReply(),
+                    List.of(),
+                    EchoMindTrace.traceId(span),
+                    null,
+                    EchoMindTrace.injectContext().get("traceparent")
+                )));
+                return;
+            }
+            n = n.withMessage(requestInspection.governedMessage());
             agentChatExecutor.executeStream(n.userId(), n.agentId(), n.sessionId(), n.message(), n.modelId(),
                 n.attachments(), rawMessage);
         } catch (RuntimeException e) {
@@ -202,11 +244,16 @@ public class ChatApplicationService {
         return sessionCleanupService.deleteSession(AuthContext.userId(), sessionId);
     }
 
-    /** 应用请求治理规则。 */
-    private NormalizedChatRequest applyRequestGovernance(Span span, NormalizedChatRequest n) {
-        String governedMessage = governanceService.inspectRequest(span, n.authUser(), n.agentId(), n.sessionId(),
-            n.message());
-        return n.withMessage(governedMessage);
+    private ChatSyncResponse shortCircuitSyncResponse(NormalizedChatRequest request, Span span, String reply) {
+        return new ChatSyncResponse(
+            request.sessionId(),
+            request.agentId(),
+            request.modelId(),
+            EchoMindTrace.traceId(span),
+            reply,
+            List.of(),
+            null
+        );
     }
 
     private void fillErrorContext(PipelineContext ctx, NormalizedChatRequest request, Span span) {

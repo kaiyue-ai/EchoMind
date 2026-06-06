@@ -67,7 +67,7 @@ class ChatApplicationServiceTest {
         ctx.setTraceId("trace-a");
         ctx.setFinalResponse("reply alice@example.com");
         when(governanceService.inspectRequest(any(), any(), eq("default"), eq("session-a"), eq("call 13800138000")))
-            .thenReturn("call [PHONE]");
+            .thenReturn(ChatGovernanceService.RequestInspection.continueWith("call [PHONE]"));
         doAnswer(invocation -> {
             PipelineContext governed = invocation.getArgument(1);
             governed.setFinalResponse("reply [EMAIL]");
@@ -245,7 +245,7 @@ class ChatApplicationServiceTest {
         ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
         ChatGovernanceService governanceService = passthroughGovernanceService();
         when(governanceService.inspectRequest(any(), any(), eq("default"), eq("session-a"), eq("hello")))
-            .thenReturn("hello [MASKED]");
+            .thenReturn(ChatGovernanceService.RequestInspection.continueWith("hello [MASKED]"));
         ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer, mock(MemoryManager.class),
             mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
 
@@ -283,6 +283,68 @@ class ChatApplicationServiceTest {
         verifyNoInteractions(rabbitProducer);
     }
 
+    @Test
+    void executeSyncShortCircuitsBlockedRequestWithoutCallingAgentOrUsage() {
+        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        when(governanceService.inspectRequest(any(), any(), eq("default"), eq("session-a"),
+            eq("call 13800138000")))
+            .thenReturn(ChatGovernanceService.RequestInspection.shortCircuit("[PHONE]"));
+        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
+            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
+
+        AuthUser user = new AuthUser("user-a", "alice", true);
+        AuthContext.set(user);
+        try {
+            var response = service.executeSync(new ChatMessageRequest("default", "call 13800138000",
+                "session-a", "mock:model", List.of()));
+            assertThat(response.response()).isEqualTo("[PHONE]");
+            assertThat(response.tokenUsage()).isNull();
+            assertThat(response.skillResults()).isEmpty();
+            assertThat(response.sessionId()).isEqualTo("session-a");
+            assertThat(response.agentId()).isEqualTo("default");
+            assertThat(response.modelId()).isEqualTo("mock:model");
+        } finally {
+            AuthContext.clear();
+        }
+
+        verifyNoInteractions(orchestrator);
+        verify(governanceService, never()).inspectResponse(any(), any());
+        verify(governanceService, never()).recordSuccessAndWarnings(any(), anyString(), any(), any(), anyLong());
+    }
+
+    @Test
+    void submitAsyncShortCircuitsBlockedRequestWithResultEventAndNoRabbitPublish() {
+        ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
+        SsePushService ssePushService = mock(SsePushService.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        when(governanceService.inspectRequest(any(), any(), eq("default"), eq("session-a"),
+            eq("call 13800138000")))
+            .thenReturn(ChatGovernanceService.RequestInspection.shortCircuit("[PHONE]"));
+        ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer, mock(MemoryManager.class),
+            mock(ObjectStorageService.class), ssePushService, governanceService);
+
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        try {
+            var response = service.submitAsync(new ChatMessageRequest("default", "call 13800138000",
+                "session-a", "mock:model", List.of()));
+            assertThat(response.sessionId()).isEqualTo("session-a");
+            assertThat(response.traceId()).isNotBlank();
+        } finally {
+            AuthContext.clear();
+        }
+
+        verify(ssePushService).registerRequest(anyString(), eq("user-a"));
+        verify(ssePushService).pushEvent(argThat((ChatStreamEvent event) ->
+            ChatStreamEvent.TYPE_RESULT.equals(event.type())
+                && event.response() != null
+                && "[PHONE]".equals(event.response().response())
+                && event.response().tokenUsage() == null
+                && event.response().skillResults().isEmpty()
+                && "OK".equals(event.response().status())
+        ));
+        verifyNoInteractions(rabbitProducer);
+    }
     @Test
     void executeQueuedStreamDoesNotRecordErrorUsageForProviderBudgetBlock() {
         AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
@@ -594,7 +656,7 @@ class ChatApplicationServiceTest {
     private ChatGovernanceService passthroughGovernanceService() {
         ChatGovernanceService service = mock(ChatGovernanceService.class);
         when(service.inspectRequest(any(), any(), anyString(), anyString(), anyString()))
-            .thenAnswer(invocation -> invocation.getArgument(4));
+            .thenAnswer(invocation -> ChatGovernanceService.RequestInspection.continueWith(invocation.getArgument(4)));
         when(service.inspectResponseText(any(), anyString(), anyString(), anyString(), anyString()))
             .thenAnswer(invocation -> invocation.getArgument(4));
         when(service.emitCallErrorIfFailed(any(), any())).thenReturn(false);

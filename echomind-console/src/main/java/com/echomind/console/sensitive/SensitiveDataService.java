@@ -14,7 +14,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -32,12 +36,13 @@ public class SensitiveDataService {
 
     @Transactional
     public GovernedText inspectRequest(AuthUser user, String traceId, String agentId, String sessionId, String text) {
-        return inspect(SensitiveDirection.REQUEST, user, traceId, agentId, sessionId, text);
+        return inspectRequestText(user, traceId, agentId, sessionId, text);
     }
 
     @Transactional
     public GovernedText inspectResponse(AuthUser user, String traceId, String agentId, String sessionId, String text) {
-        return inspect(SensitiveDirection.RESPONSE, user, traceId, agentId, sessionId, text);
+        return inspect(SensitiveDirection.RESPONSE, user, traceId, agentId, sessionId, text,
+            ruleCache.enabledRules(this::loadEnabledRulesWithDefaults));
     }
 
     @Transactional
@@ -85,11 +90,37 @@ public class SensitiveDataService {
             .toList());
     }
 
+    private GovernedText inspectRequestText(AuthUser user, String traceId, String agentId, String sessionId,
+                                            String text) {
+        String original = text == null ? "" : text;
+        List<SensitiveRuleEntity> rules = ruleCache.enabledRules(this::loadEnabledRulesWithDefaults);
+        List<BlockMatch> blockMatches = collectBlockMatches(rules, original);
+        if (!blockMatches.isEmpty()) {
+            String replacementText = blockMatches.stream()
+                .sorted(Comparator
+                    .comparingInt(BlockMatch::start)
+                    .thenComparingInt(BlockMatch::end)
+                    .thenComparingInt(BlockMatch::ruleOrder))
+                .map(match -> match.rule().getReplacement())
+                .reduce((left, right) -> left + " " + right)
+                .orElse("");
+            for (Map.Entry<SensitiveRuleEntity, Integer> entry : countByRule(blockMatches).entrySet()) {
+                SensitiveRuleEntity rule = entry.getKey();
+                SensitiveEventEntity event = recordEvent(SensitiveDirection.REQUEST, user, traceId, agentId,
+                    sessionId, rule, entry.getValue(), replacementText);
+                alertService.emitSensitiveEvent(event);
+                tagCurrentSpan(rule, SensitiveDirection.REQUEST, entry.getValue());
+            }
+            return new GovernedText(replacementText, true, true);
+        }
+        return inspect(SensitiveDirection.REQUEST, user, traceId, agentId, sessionId, original, rules);
+    }
+
     private GovernedText inspect(SensitiveDirection direction, AuthUser user, String traceId, String agentId,
-                                 String sessionId, String text) {
+                                 String sessionId, String text, List<SensitiveRuleEntity> rules) {
         String current = text == null ? "" : text;
         boolean touched = false;
-        for (SensitiveRuleEntity rule : ruleCache.enabledRules(this::loadEnabledRulesWithDefaults)) {
+        for (SensitiveRuleEntity rule : rules) {
             Pattern pattern = compile(rule.getPattern());
             Matcher matcher = pattern.matcher(current);
             int count = 0;
@@ -110,6 +141,30 @@ public class SensitiveDataService {
             current = masked;
         }
         return new GovernedText(current, touched);
+    }
+
+    private List<BlockMatch> collectBlockMatches(List<SensitiveRuleEntity> rules, String text) {
+        List<BlockMatch> matches = new ArrayList<>();
+        for (int ruleOrder = 0; ruleOrder < rules.size(); ruleOrder++) {
+            SensitiveRuleEntity rule = rules.get(ruleOrder);
+            if (rule.getAction() != SensitiveAction.BLOCK) {
+                continue;
+            }
+            Pattern pattern = compile(rule.getPattern());
+            Matcher matcher = pattern.matcher(text);
+            while (matcher.find()) {
+                matches.add(new BlockMatch(rule, matcher.start(), matcher.end(), ruleOrder));
+            }
+        }
+        return matches;
+    }
+
+    private Map<SensitiveRuleEntity, Integer> countByRule(List<BlockMatch> matches) {
+        Map<SensitiveRuleEntity, Integer> counts = new LinkedHashMap<>();
+        for (BlockMatch match : matches) {
+            counts.merge(match.rule(), 1, Integer::sum);
+        }
+        return counts;
     }
 
     private List<SensitiveRuleEntity> loadAllRulesWithDefaults() {
@@ -264,6 +319,12 @@ public class SensitiveDataService {
         return value.substring(0, maxLength);
     }
 
-    public record GovernedText(String text, boolean changed) {
+    private record BlockMatch(SensitiveRuleEntity rule, int start, int end, int ruleOrder) {
+    }
+
+    public record GovernedText(String text, boolean changed, boolean blocked) {
+        public GovernedText(String text, boolean changed) {
+            this(text, changed, false);
+        }
     }
 }

@@ -130,7 +130,7 @@ echomind-llm / echomind-memory / echomind-mcp / echomind-skill
 | 管理端账号 | MySQL `echomind_admin_users` | 管理端独立 JWT，不和客户端 `echomind_users` 混用 |
 | AI 调用用量 | MySQL `echomind_ai_call_usage` | OpenTelemetry Span tag 和管理端 Token 仪表盘 |
 | 用户 Token 配额 | MySQL `echomind_token_quotas` 配置限额，`echomind_token_quota_usage` 按用户日/月 bucket 原子结算 | 请求前快速拒绝已满额用户；模型返回真实 usage 后结算 |
-| 敏感数据规则和事件 | MySQL `echomind_sensitive_rules` / `echomind_sensitive_events`，只保存脱敏后样本 | `ChatApplicationService` 请求前和响应后治理钩子 |
+| 敏感数据规则和事件 | MySQL `echomind_sensitive_rules` / `echomind_sensitive_events`，只保存脱敏后样本；请求侧 `BLOCK` 事件样本保存替代词结果 | `ChatApplicationService` 请求前和响应后治理钩子；请求侧 `BLOCK` 直接短路返回替代词，响应侧 `BLOCK` 仍抛阻断错误 |
 | 告警规则和事件 | MySQL `echomind_alert_rules` / `echomind_alert_events` | 飞书自定义机器人 Webhook 推送、静默期和累计升级判断 |
 | Agent 知识库 | MySQL 保存文档元数据和原文件引用；Milvus 保存切片正文和向量索引 | 上传时按段落/标点切片，检索只走 Milvus 并扩展命中片段附近窗口 |
 | 工具可用性 | 已启用 Skill + 已挂载外部 MCP 服务 | `CapabilityRegistry` |
@@ -200,8 +200,10 @@ flowchart TD
 `AgentOrchestrator.execute(userId, agentId, sessionId, message, ...)`。编排器根据 `agentId` 找到 Agent，
 组装 `PipelineContext`，再交给 `Agent.chat()` 执行完整管线。
 
-异步请求走 `POST /api/chat`，入队前先完成用户级 Token 配额快速检查和请求脱敏；只有治理通过的
-`ChatRequest` 会投递到 RabbitMQ。`ChatRabbitConsumer` 消费后不再重复请求配额校验，只执行流式 Agent 管线，
+异步请求走 `POST /api/chat`，入队前先完成用户级 Token 配额快速检查和请求脱敏；请求侧命中 `BLOCK`
+规则时不投递 RabbitMQ，而是注册 SSE owner 后直接缓存/推送成功 `result` 事件，响应内容为命中规则
+replacement 按原文位置拼接后的文本。只有治理继续通过的 `ChatRequest` 会投递到 RabbitMQ。
+`ChatRabbitConsumer` 消费后不再重复请求配额校验，只执行流式 Agent 管线，
 并把 meta、token、最终结果或失败发布到
 `echomind.chat.stream-events`；`SsePushService` 只通过 `GET /api/chat/stream/{requestId}` 转发事件给前端，
 不直接执行模型调用。这样前端仍有逐 token 体验，但模型执行由 RabbitMQ 队列削峰。
@@ -789,7 +791,7 @@ docker exec echomind-db mysql --default-character-set=utf8mb4 \
 - 业务 Span 覆盖聊天提交/消费、Agent 编排、Pipeline Stage、模型调用和 Skill/MCP 工具调用；一次真实聊天在 Jaeger 中应能看到多 Span 链路，而不是只有单个 HTTP Span。
 - 聊天业务 Span 会写入 `echomind.user_id`、`echomind.account_type=client`、模型名、延迟和 token tag；管理端 Trace 查询支持按 `userId` 转成 Jaeger tag 过滤。
 - 每次普通聊天和 Team 内部 LLM 调用都会按客户端用户落库到 `echomind_ai_call_usage`，管理端可查看所有用户总 Token、单用户总 Token、单次调用 Token、今日请求、今日 Token、平均响应、模型分布和 Token 趋势。Team 调用复用同一套用户日/月配额，不新增 Team 配额表；`operation` 使用 `echomind.team.planner/reviewer/executor/sub_reviewer/merge/conflict_detector/arbitration/repair` 区分协作阶段。Token 只接受模型服务原生 usage，字段 `usage_source=PROVIDER`；模型未返回原生 usage 时拒绝记录用量，避免展示预估数据。用户 quota 不做请求前 token 预留：请求前只快速拒绝账本已满额用户，模型返回真实 provider usage 后再用 `echomind_token_quota_usage` 日/月 bucket 在事务内原子结算；结算超限时保留本次审计记录并返回配额错误，不发普通调用失败告警。
-- 项目三管理端是 Agent 项目的后台治理面，不新增独立 AI 网关或 OpenAI `/v1` 入口；脱敏和告警通过 `/api/chat/*` 现有链路的治理钩子实现。敏感事件只保存脱敏后样本，告警统一读取后端运行环境变量 `Webhook` 推送到飞书自定义机器人，不在前端配置规则级 Webhook；静默期内同类告警累计到阈值后会发送一条升级告警。
+- 项目三管理端是 Agent 项目的后台治理面，不新增独立 AI 网关或 OpenAI `/v1` 入口；脱敏和告警通过 `/api/chat/*` 现有链路的治理钩子实现。请求侧命中 `BLOCK` 会阻止进入 Agent/RabbitMQ 管线并返回替代词拼接结果，响应侧命中 `BLOCK` 仍返回阻断错误；敏感事件只保存脱敏后样本或替代词结果，告警统一读取后端运行环境变量 `Webhook` 推送到飞书自定义机器人，不在前端配置规则级 Webhook；静默期内同类告警累计到阈值后会发送一条升级告警。
 - 管理端 Trace 页面运行在独立端口 `8081`，不直连 Jaeger；默认通过后端代理 `http://jaeger:16686` 查询真实 Span。后端会从 Jaeger span tags 提取用户、Agent、会话、模型和 prompt/completion/total token，页面在 Trace 详情和 Span 行直接展示这些字段，同时保留原始 tags/logs 供排障。
 - Trace 只能查询导出开启后新产生的链路；导出关闭期间产生的旧 TraceID 不会补写到 Jaeger，`data/otel-traces` 中的文件只用于排障留档和手工检索。
 - Trace 列表默认只展示 `scope=business` 的 `echomind.chat.*` 对话链路，避免管理端查询请求本身刷出大量单 Span；

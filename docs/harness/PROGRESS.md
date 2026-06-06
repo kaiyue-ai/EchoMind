@@ -37,7 +37,7 @@
 - 已新增管理端真实数据仪表盘：按时间范围展示今日请求、今日 Token、范围 Token、累计 Token、客户端用户数、平均响应、模型 Token 分布、Token 日趋势和最近调用，不展示项目没有落库的成本、余额或 API 密钥消费。
 - 管理端 Trace 查询已支持按客户端 `userId` 过滤，后端会转换为 Jaeger tag `echomind.user_id` 查询；真实聊天链路在 Jaeger 中包含 HTTP、业务入口、Agent、Pipeline、LLM、JDBC 等多 Span。
 - AI Infra 已收敛为现有 Agent 项目的项目三管理端，不新增独立网关、OpenAI `/v1` 入口或应用 API Key。
-- 已新增敏感数据治理：聊天请求进入 Agent 前和响应返回前支持手机号、身份证、邮箱、银行卡、IP 等规则脱敏/阻断，事件只保存脱敏后样本。
+- 已新增敏感数据治理：聊天请求进入 Agent 前和响应返回前支持手机号、身份证、邮箱、银行卡、IP 等规则脱敏/阻断；请求侧命中 `BLOCK` 不进入 Agent/RabbitMQ 管线，直接返回替代词拼接结果，响应侧 `BLOCK` 仍走阻断异常，事件只保存脱敏后样本或替代词结果。
 - 已新增告警治理：调用错误、错误率、Token 超限/预警和敏感数据事件进入告警事件表，支持飞书自定义机器人 Webhook、静默期、静默累计升级和管理端规则配置。
 - 管理端已新增脱敏治理和告警中心页面，仪表盘增加错误率、脱敏事件数和告警事件数。
 - 聊天入口已进一步解耦：`ChatGovernanceService` 统一收口配额、脱敏、用量和调用错误告警；流式聊天改为 `POST /api/chat` 入队、`GET /api/chat/stream/{requestId}` 订阅 token 事件；`MemoryApplicationService` 统一会话摘要、历史读取和附件展示 URL 刷新。

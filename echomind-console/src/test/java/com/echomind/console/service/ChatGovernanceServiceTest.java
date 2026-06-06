@@ -3,16 +3,19 @@ package com.echomind.console.service;
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.console.alerts.AlertService;
 import com.echomind.console.auth.AuthUser;
+import com.echomind.console.quota.TokenQuotaExceededException;
 import com.echomind.console.quota.TokenQuotaService;
 import com.echomind.console.sensitive.SensitiveDataService;
 import com.echomind.console.usage.AiCallUsageService;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -75,13 +78,50 @@ class ChatGovernanceServiceTest {
         when(sensitiveDataService.inspectRequest(any(), anyString(), eq("agent-a"), eq("session-a"), eq("call 13800138000")))
             .thenReturn(new SensitiveDataService.GovernedText("call [PHONE]", true));
 
-        String governed = service.inspectRequest(io.opentelemetry.api.trace.Span.getInvalid(), user,
+        ChatGovernanceService.RequestInspection governed = service.inspectRequest(io.opentelemetry.api.trace.Span.getInvalid(), user,
             "agent-a", "session-a", "call 13800138000");
 
-        assertThat(governed).isEqualTo("call [PHONE]");
+        assertThat(governed.shortCircuited()).isFalse();
+        assertThat(governed.governedMessage()).isEqualTo("call [PHONE]");
         verify(quotaService).assertAllowed(user);
         verify(sensitiveDataService).inspectRequest(any(), anyString(), eq("agent-a"), eq("session-a"),
             eq("call 13800138000"));
+    }
+
+    @Test
+    void inspectRequestReturnsShortCircuitReplyWhenSensitiveRequestIsBlocked() {
+        TokenQuotaService quotaService = mock(TokenQuotaService.class);
+        SensitiveDataService sensitiveDataService = mock(SensitiveDataService.class);
+        ChatGovernanceService service = service(mock(AlertService.class), quotaService,
+            sensitiveDataService, mock(AiCallUsageService.class));
+        AuthUser user = new AuthUser("user-a", "alice", true);
+        when(sensitiveDataService.inspectRequest(any(), anyString(), eq("agent-a"), eq("session-a"),
+            eq("call 13800138000")))
+            .thenReturn(new SensitiveDataService.GovernedText("[PHONE]", true, true));
+
+        ChatGovernanceService.RequestInspection result = service.inspectRequest(
+            io.opentelemetry.api.trace.Span.getInvalid(), user, "agent-a", "session-a", "call 13800138000");
+
+        assertThat(result.shortCircuited()).isTrue();
+        assertThat(result.shortCircuitReply()).isEqualTo("[PHONE]");
+        verify(quotaService).assertAllowed(user);
+    }
+
+    @Test
+    void inspectRequestRejectsQuotaBeforeSensitiveInspection() {
+        TokenQuotaService quotaService = mock(TokenQuotaService.class);
+        SensitiveDataService sensitiveDataService = mock(SensitiveDataService.class);
+        ChatGovernanceService service = service(mock(AlertService.class), quotaService,
+            sensitiveDataService, mock(AiCallUsageService.class));
+        AuthUser user = new AuthUser("user-a", "alice", true);
+        TokenQuotaExceededException quotaError = new TokenQuotaExceededException("user-a", "daily", 100, 100);
+        doThrow(quotaError).when(quotaService).assertAllowed(user);
+
+        assertThatThrownBy(() -> service.inspectRequest(io.opentelemetry.api.trace.Span.getInvalid(), user,
+            "agent-a", "session-a", "call 13800138000"))
+            .isSameAs(quotaError);
+
+        verifyNoInteractions(sensitiveDataService);
     }
 
     @Test
