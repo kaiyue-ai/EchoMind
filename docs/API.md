@@ -32,6 +32,7 @@
 后端实际链路是 `ChatRabbitProducer -> echomind.chat.requests -> ChatRabbitConsumer`；
 消费者执行流式 Agent 后，再把事件发布到 `echomind.chat.stream-events`，由 `SsePushService`
 消费并转发给 SSE 订阅方。
+公开聊天不提供同步执行 HTTP 入口。
 
 ### GET `/api/chat/stream/{requestId}` — 订阅异步聊天事件
 ```text
@@ -54,33 +55,9 @@ event: failure
 data: {"error":"模型调用失败","traceId":"1f2e3d4c..."}
 ```
 
-### POST `/api/chat/sync` — 同步执行聊天
-```json
-// 请求
-{
-  "agentId": "default",
-  "sessionId": "uuid-optional",
-  "message": "北京今天天气怎么样？",
-  "modelId": "deepseek:deepseek-v4-flash"
-}
-
-// 响应
-{
-  "sessionId": "a1b2c3d4-...",
-  "agentId": "default",
-  "modelId": "deepseek:deepseek-v4-flash",
-  "traceId": "1f2e3d4c...",
-  "response": "北京今天晴天，22°C...",
-  "skillResults": ["[weather-query]: Weather for Beijing: Sunny, 22C"],
-  "tokenUsage": {
-    "promptTokens": 120,
-    "completionTokens": 60,
-    "totalTokens": 180
-  }
-}
-```
-
 ### GET `/api/chat/sessions` — 获取会话摘要列表
+`lastMessage` 使用最近一条可展示消息，内部工具调用消息不会作为侧边栏预览。
+
 ```json
 // 响应
 [
@@ -94,6 +71,8 @@ data: {"error":"模型调用失败","traceId":"1f2e3d4c..."}
 ```
 
 ### GET `/api/chat/{sessionId}/history` — 获取会话历史
+返回前端可展示的消息角色：`user`、`assistant`、`system`。内部 `tool` 消息仍保留在 MySQL 审计历史中，但不会从展示历史接口返回。
+
 ```json
 // 响应
 [
@@ -236,21 +215,6 @@ data: {"error":"模型调用失败","traceId":"1f2e3d4c..."}
 }
 
 // 响应: Agent 实体
-```
-
-### POST `/api/agents/{agentId}/execute` — 执行Agent
-```json
-// 请求
-{
-  "message": "1+1等于几？",
-  "sessionId": "optional-uuid"
-}
-
-// 响应
-{
-  "sessionId": "uuid",
-  "response": "1+1等于2"
-}
 ```
 
 ---

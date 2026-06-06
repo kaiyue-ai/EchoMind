@@ -36,7 +36,6 @@ public class JaegerTraceClient {
     private static final String TRACE_SCOPE_ALL = "all";
     private static final String TRACE_SCOPE_BUSINESS = "business";
     private static final List<String> BUSINESS_OPERATIONS = List.of(
-        "echomind.chat.sync",
         "echomind.chat.submit",
         "echomind.chat.stream.consume",
         "echomind.team.planner",

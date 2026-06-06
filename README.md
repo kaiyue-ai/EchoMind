@@ -167,16 +167,13 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["前端 / REST / CLI"] --> B["ChatController"]
-    B --> C{"入口类型"}
-    C -->|"POST /api/chat/sync"| D["AgentOrchestrator.execute"]
-    C -->|"POST /api/chat"| E["ChatRabbitProducer"]
-    E --> F["RabbitMQ: chat.requests"]
+    B --> E["ChatApplicationService.submitAsync"]
+    E --> F0["ChatRabbitProducer"]
+    F0 --> F["RabbitMQ: chat.requests"]
     F --> G["ChatRabbitConsumer"]
     G --> H["AgentOrchestrator.executeStreamContext"]
-    D --> I["Agent.chat"]
     H --> J["Agent.chatStream"]
-    I --> K["ExecutionPipeline"]
-    J --> K
+    J --> K["ExecutionPipeline"]
     K --> L["ContextEnrichStage: 读取会话提示词上下文并追加用户消息"]
     L --> U["UserMemoryRetrievalStage: 读取用户画像快照并召回用户相关长期事实"]
     U --> N["KnowledgeRetrievalStage: 召回 Agent 私有知识库"]
@@ -196,11 +193,9 @@ flowchart TD
 
 聊天接口会先从 `Authorization: Bearer ...` 解析当前用户；客户端 token 是 HS256 JWT，后端
 `AuthFilter` 校验签名、过期时间和账号状态后写入 `AuthContext` ThreadLocal，并在请求结束清理。
-无 token 的兼容请求归属 `default` 用户。同步请求走 `POST /api/chat/sync`，`ChatController` 创建或复用前端 `sessionId` 后，调用
-`AgentOrchestrator.execute(userId, agentId, sessionId, message, ...)`。编排器根据 `agentId` 找到 Agent，
-组装 `PipelineContext`，再交给 `Agent.chat()` 执行完整管线。
-
-异步请求走 `POST /api/chat`，入队前先完成用户级 Token 配额快速检查和请求脱敏；请求侧命中 `BLOCK`
+无 token 的兼容请求归属 `default` 用户。公开聊天入口只保留异步请求：客户端调用 `POST /api/chat`
+提交消息，拿到 `requestId` 后订阅 `GET /api/chat/stream/{requestId}` 接收 meta、token、tool 和终态事件。
+入队前先完成用户级 Token 配额快速检查和请求脱敏；请求侧命中 `BLOCK`
 规则时不投递 RabbitMQ，而是注册 SSE owner 后直接缓存/推送成功 `result` 事件，响应内容为命中规则
 replacement 按原文位置拼接后的文本。只有治理继续通过的 `ChatRequest` 会投递到 RabbitMQ。
 `ChatRabbitConsumer` 消费后不再重复请求配额校验，只执行流式 Agent 管线，
@@ -452,7 +447,6 @@ npm.cmd run dev
 | `GET` | `/api/observability/traces/{traceId}` | 查询单条 Trace 的完整 Span 树 |
 | `POST` | `/api/chat` | 异步发送消息，返回 requestId 和 sessionId |
 | `GET` | `/api/chat/stream/{requestId}` | 订阅异步最终结果 SSE |
-| `POST` | `/api/chat/sync` | 同步执行 Agent 并返回完整回复 |
 | `GET` | `/api/chat/sessions` | 列出有记忆的会话摘要 |
 | `GET` | `/api/chat/{sessionId}/history` | 查询会话历史 |
 | `DELETE` | `/api/chat/{sessionId}` | 删除单条会话历史并回收关联附件 |
@@ -465,7 +459,6 @@ npm.cmd run dev
 | `DELETE` | `/api/skills/{id}` | 删除 Skill |
 | `GET` | `/api/agents` | 列出所有 Agent |
 | `POST` | `/api/agents` | 创建或覆盖 Agent，并写入 MySQL |
-| `POST` | `/api/agents/{id}/execute` | 执行 Agent |
 | `GET` | `/api/mcp/servers` | 列出服务端配置或运行时挂载的外部 MCP 服务 |
 | `POST` | `/api/mcp/servers/{id}/refresh` | 刷新外部 MCP 服务工具列表，前端工作台仅保留该操作 |
 | `POST` | `/api/mcp/servers` | 动态挂载外部 stdio / SSE / Streamable HTTP MCP 服务，默认仅供服务端运维/自动化使用 |

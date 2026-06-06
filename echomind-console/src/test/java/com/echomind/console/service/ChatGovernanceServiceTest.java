@@ -136,7 +136,7 @@ class ChatGovernanceServiceTest {
         ctx.setFinalResponse("工具操作失败: 参数不完整");
         ctx.getAttributes().put(PipelineContext.ATTR_MODEL_USAGE_NOT_APPLICABLE, true);
         assertThat(service.recordSuccessAndWarnings(io.opentelemetry.api.trace.Span.getInvalid(),
-            "echomind.chat.sync", user, ctx, System.nanoTime())).isNull();
+            "echomind.chat.stream.consume", user, ctx, System.nanoTime())).isNull();
 
         verify(usageService, never()).recordSuccess(anyString(), any(), any(), anyLong());
         verifyNoInteractions(alertService);

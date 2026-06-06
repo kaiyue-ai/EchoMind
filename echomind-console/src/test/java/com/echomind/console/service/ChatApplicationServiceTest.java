@@ -38,7 +38,6 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -54,165 +53,6 @@ import reactor.core.publisher.Mono;
  * <p>应用服务只编排请求、执行和清理；配额、敏感数据、告警和用量归治理服务覆盖。</p>
  */
 class ChatApplicationServiceTest {
-
-    @Test
-    void executeSyncUsesGovernedRequestAndResponseText() {
-        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
-        ChatGovernanceService governanceService = passthroughGovernanceService();
-        PipelineContext ctx = new PipelineContext();
-        ctx.setUserId("user-a");
-        ctx.setAgentId("default");
-        ctx.setSessionId("session-a");
-        ctx.setModelId("mock:model");
-        ctx.setTraceId("trace-a");
-        ctx.setFinalResponse("reply alice@example.com");
-        when(governanceService.inspectRequest(any(), any(), eq("default"), eq("session-a"), eq("call 13800138000")))
-            .thenReturn(ChatGovernanceService.RequestInspection.continueWith("call [PHONE]"));
-        doAnswer(invocation -> {
-            PipelineContext governed = invocation.getArgument(1);
-            governed.setFinalResponse("reply [EMAIL]");
-            return null;
-        }).when(governanceService).inspectResponse(any(), eq(ctx));
-        when(orchestrator.execute(eq("user-a"), eq("default"), eq("session-a"), eq("call [PHONE]"),
-            eq("mock:model"), any(), eq("call 13800138000"))).thenReturn(ctx);
-        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
-            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
-
-        AuthContext.set(new AuthUser("user-a", "alice", true));
-        try {
-            var response = service.executeSync(new ChatMessageRequest("default", "call 13800138000",
-                "session-a", "mock:model", List.of()));
-            assertThat(response.response()).isEqualTo("reply [EMAIL]");
-        } finally {
-            AuthContext.clear();
-        }
-
-        verify(orchestrator).execute(eq("user-a"), eq("default"), eq("session-a"), eq("call [PHONE]"),
-            eq("mock:model"), any(), eq("call 13800138000"));
-    }
-
-    @Test
-    void executeSyncDoesNotEmitCallErrorForProviderBudgetBlock() {
-        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
-        ChatGovernanceService governanceService = passthroughGovernanceService();
-        ProviderTokenBudgetExceededException budgetError =
-            new ProviderTokenBudgetExceededException("deepseek", "daily", 1000, 1000);
-        when(orchestrator.execute(eq("user-a"), eq("default"), eq("session-budget"), eq("hello"),
-            eq("deepseek:model"), any(), eq("hello"))).thenThrow(budgetError);
-        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
-            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
-
-        AuthUser user = new AuthUser("user-a", "alice", true);
-        AuthContext.set(user);
-        try {
-            assertThatThrownBy(() -> service.executeSync(new ChatMessageRequest("default", "hello",
-                "session-budget", "deepseek:model", List.of())))
-                .isSameAs(budgetError);
-        } finally {
-            AuthContext.clear();
-        }
-
-        verify(governanceService, never()).emitCallError(any(), any(), anyString());
-    }
-
-    @Test
-    void executeSyncDoesNotEmitCallErrorForTokenQuotaSettlementBlock() {
-        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
-        ChatGovernanceService governanceService = passthroughGovernanceService();
-        PipelineContext ctx = new PipelineContext();
-        ctx.setUserId("user-a");
-        ctx.setAgentId("default");
-        ctx.setSessionId("session-quota");
-        ctx.setModelId("mock:model");
-        ctx.setTraceId("trace-quota");
-        ctx.setFinalResponse("ok");
-        ctx.setTokenUsage(new TokenUsage(10, 6, 16));
-        TokenQuotaExceededException quotaError = new TokenQuotaExceededException("user-a", "daily", 116, 100);
-        when(orchestrator.execute(eq("user-a"), eq("default"), eq("session-quota"), eq("hello"),
-            eq("mock:model"), any(), eq("hello"))).thenReturn(ctx);
-        doThrow(quotaError).when(governanceService)
-            .recordSuccessAndWarnings(any(), anyString(), any(), eq(ctx), anyLong());
-        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
-            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
-
-        AuthUser user = new AuthUser("user-a", "alice", true);
-        AuthContext.set(user);
-        try {
-            assertThatThrownBy(() -> service.executeSync(new ChatMessageRequest("default", "hello",
-                "session-quota", "mock:model", List.of())))
-                .isSameAs(quotaError);
-        } finally {
-            AuthContext.clear();
-        }
-
-        verify(governanceService, never()).emitCallError(any(), any(), anyString());
-    }
-
-    @Test
-    void executeSyncDoesNotEmitDuplicateCallErrorWhenPipelineFailureWasAlreadyReported() {
-        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
-        ChatGovernanceService governanceService = passthroughGovernanceService();
-        PipelineContext ctx = new PipelineContext();
-        ctx.setUserId("user-a");
-        ctx.setAgentId("default");
-        ctx.setSessionId("session-error");
-        ctx.setModelId("mock:model");
-        ctx.setTraceId("trace-error");
-        ctx.setFinalResponse("[Error] LLM call failed: boom");
-        when(orchestrator.execute(eq("user-a"), eq("default"), eq("session-error"), eq("hello"),
-            eq("mock:model"), any(), eq("hello"))).thenReturn(ctx);
-        when(governanceService.emitCallErrorIfFailed(any(), eq(ctx))).thenReturn(true);
-        doThrow(new IllegalStateException("模型未返回原生 token usage"))
-            .when(governanceService).recordSuccessAndWarnings(any(), anyString(), any(), eq(ctx), anyLong());
-        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
-            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
-
-        AuthUser user = new AuthUser("user-a", "alice", true);
-        AuthContext.set(user);
-        try {
-            assertThatThrownBy(() -> service.executeSync(new ChatMessageRequest("default", "hello",
-                "session-error", "mock:model", List.of())))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("模型未返回原生 token usage");
-        } finally {
-            AuthContext.clear();
-        }
-
-        verify(governanceService).emitCallErrorIfFailed(user, ctx);
-        verify(governanceService, never()).emitCallError(eq(user), eq(ctx), anyString());
-    }
-
-    @Test
-    void executeSyncEmitsCallErrorWhenGovernanceFailsBeforePipelineErrorAlert() {
-        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
-        ChatGovernanceService governanceService = passthroughGovernanceService();
-        PipelineContext ctx = new PipelineContext();
-        ctx.setUserId("user-a");
-        ctx.setAgentId("default");
-        ctx.setSessionId("session-error");
-        ctx.setModelId("mock:model");
-        ctx.setTraceId("trace-error");
-        ctx.setFinalResponse("partial");
-        when(orchestrator.execute(eq("user-a"), eq("default"), eq("session-error"), eq("hello"),
-            eq("mock:model"), any(), eq("hello"))).thenReturn(ctx);
-        doThrow(new IllegalStateException("模型未返回原生 token usage"))
-            .when(governanceService).recordSuccessAndWarnings(any(), anyString(), any(), eq(ctx), anyLong());
-        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
-            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
-
-        AuthUser user = new AuthUser("user-a", "alice", true);
-        AuthContext.set(user);
-        try {
-            assertThatThrownBy(() -> service.executeSync(new ChatMessageRequest("default", "hello",
-                "session-error", "mock:model", List.of())))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("模型未返回原生 token usage");
-        } finally {
-            AuthContext.clear();
-        }
-
-        verify(governanceService).emitCallError(user, ctx, "模型未返回原生 token usage");
-    }
 
     @Test
     void submitAsyncRegistersRequestOwnerBeforePublishing() {
@@ -281,36 +121,6 @@ class ChatApplicationServiceTest {
 
         verifyNoInteractions(ssePushService);
         verifyNoInteractions(rabbitProducer);
-    }
-
-    @Test
-    void executeSyncShortCircuitsBlockedRequestWithoutCallingAgentOrUsage() {
-        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
-        ChatGovernanceService governanceService = passthroughGovernanceService();
-        when(governanceService.inspectRequest(any(), any(), eq("default"), eq("session-a"),
-            eq("call 13800138000")))
-            .thenReturn(ChatGovernanceService.RequestInspection.shortCircuit("[PHONE]"));
-        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
-            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
-
-        AuthUser user = new AuthUser("user-a", "alice", true);
-        AuthContext.set(user);
-        try {
-            var response = service.executeSync(new ChatMessageRequest("default", "call 13800138000",
-                "session-a", "mock:model", List.of()));
-            assertThat(response.response()).isEqualTo("[PHONE]");
-            assertThat(response.tokenUsage()).isNull();
-            assertThat(response.skillResults()).isEmpty();
-            assertThat(response.sessionId()).isEqualTo("session-a");
-            assertThat(response.agentId()).isEqualTo("default");
-            assertThat(response.modelId()).isEqualTo("mock:model");
-        } finally {
-            AuthContext.clear();
-        }
-
-        verifyNoInteractions(orchestrator);
-        verify(governanceService, never()).inspectResponse(any(), any());
-        verify(governanceService, never()).recordSuccessAndWarnings(any(), anyString(), any(), any(), anyLong());
     }
 
     @Test
@@ -649,7 +459,7 @@ class ChatApplicationServiceTest {
             new QueuedChatStreamExecutor(agentChatExecutor, governanceService);
         ChatSessionCleanupService sessionCleanupService =
             new ChatSessionCleanupService(memoryManager, storageService);
-        return new ChatApplicationService(agentChatExecutor, rabbitProducer, ssePushService, governanceService,
+        return new ChatApplicationService(rabbitProducer, ssePushService, governanceService,
             queuedChatStreamExecutor, sessionCleanupService);
     }
 

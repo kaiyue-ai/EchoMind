@@ -1,6 +1,5 @@
 package com.echomind.console.controller.rest;
 
-import com.echomind.console.dto.AgentExecuteRequest;
 import com.echomind.console.dto.AgentSaveRequest;
 import com.echomind.console.dto.AgentView;
 import com.echomind.console.service.AgentApplicationService;
@@ -22,7 +21,7 @@ import java.util.Map;
 import lombok.RequiredArgsConstructor;
 
 /**
- * Agent 管理控制器 —— 提供 Agent 的创建、查询与执行 API。
+ * Agent 管理控制器 —— 提供 Agent 的创建、查询和知识库管理 API。
  *
  * <p>Agent 是 EchoMind 平台的核心执行单元，每个 Agent 拥有独立的：
  * <ul>
@@ -35,7 +34,6 @@ import lombok.RequiredArgsConstructor;
  * <ol>
  *   <li><b>列表</b>：查看所有已创建的 Agent</li>
  *   <li><b>创建</b>：使用 {@link AgentConfig} 配置创建新的 Agent 实例</li>
- *   <li><b>执行</b>：向指定 Agent 提交任务消息，委托执行管线处理</li>
  * </ol>
  */
 @RestController
@@ -70,26 +68,6 @@ public class AgentController {
     @PostMapping
     public ResponseEntity<AgentView> create(@RequestBody AgentSaveRequest request) {
         return ResponseEntity.ok(agentService.createOrUpdate(request));
-    }
-
-    /**
-     * 向指定 Agent 提交执行任务。
-     *
-     * <p>将用户消息发送给指定 Agent，经过执行管线（上下文增强 →
-     * 工具解析 → 技能调用 → 结果聚合 → 记忆持久化）后返回结果。
-     *
-     * @param agentId 目标 Agent 标识
-     * @param body    请求体，包含：
-     *                <ul>
-     *                  <li>{@code sessionId} —— （可选）会话标识，默认自动生成 UUID</li>
-     *                  <li>{@code message} —— （必填）任务消息</li>
-     *                </ul>
-     * @return 包含 sessionId 和最终回复的响应
-     */
-    @PostMapping("/{agentId}/execute")
-    public ResponseEntity<Map<String, Object>> execute(
-            @PathVariable String agentId, @RequestBody AgentExecuteRequest request) {
-        return ResponseEntity.ok(agentService.execute(agentId, request));
     }
 
     /** 查询指定 Agent 的知识库文档列表。 */

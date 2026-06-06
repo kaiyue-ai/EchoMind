@@ -153,7 +153,7 @@ public class ChatGovernanceService {
      * </p>
      * 
      * @param span         追踪Span
-     * @param operation    操作名称（如 echomind.chat.sync）
+     * @param operation    操作名称（如 echomind.chat.stream.consume）
      * @param authUser     认证用户
      * @param ctx          管线上下文（包含Token使用数据）
      * @param startedNanos 调用开始时间（纳秒）

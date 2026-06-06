@@ -36,7 +36,7 @@ class JaegerTraceClientTest {
                         "spans": [
                           {
                             "spanID": "root",
-                            "operationName": "POST /api/chat/sync",
+                            "operationName": "POST /api/chat",
                             "references": [],
                             "startTime": 900,
                             "duration": 400,
@@ -46,7 +46,7 @@ class JaegerTraceClientTest {
                           },
                           {
                             "spanID": "aaaa",
-                            "operationName": "echomind.chat.sync",
+                            "operationName": "echomind.chat.stream.consume",
                             "references": [{"refType":"CHILD_OF","traceID":"0123456789abcdef0123456789abcdef","spanID":"root"}],
                             "startTime": 1000,
                             "duration": 200,
@@ -94,7 +94,7 @@ class JaegerTraceClientTest {
             var response = client.getTrace("0123456789abcdef0123456789abcdef");
 
             assertThat(response.trace().traceId()).isEqualTo("0123456789abcdef0123456789abcdef");
-            assertThat(response.trace().operationName()).isEqualTo("echomind.chat.sync");
+            assertThat(response.trace().operationName()).isEqualTo("echomind.chat.stream.consume");
             assertThat(response.trace().spans()).hasSize(3);
             assertThat(response.trace().durationMicros()).isEqualTo(400);
             assertThat(response.trace().externalUrl()).isEqualTo("http://jaeger.example/trace/0123456789abcdef0123456789abcdef");
@@ -110,7 +110,8 @@ class JaegerTraceClientTest {
     @Test
     void searchDefaultsToBusinessTraceScope() throws IOException, InterruptedException {
         try (MockWebServer server = new MockWebServer()) {
-            server.enqueue(json(traceSearchResponse("11111111111111111111111111111111", "echomind.chat.sync", 1_000)));
+            server.enqueue(json(traceSearchResponse("11111111111111111111111111111111",
+                "echomind.chat.stream.consume", 1_000)));
             enqueueEmptyBusinessResponses(server, 1);
 
             JaegerTraceClient client = new JaegerTraceClient(enabledProperties(server), new ObjectMapper());
@@ -118,9 +119,8 @@ class JaegerTraceClientTest {
             var response = client.search(10, "24h", null, null);
 
             assertThat(response.traces()).hasSize(1);
-            assertThat(response.traces().get(0).operationName()).isEqualTo("echomind.chat.sync");
+            assertThat(response.traces().get(0).operationName()).isEqualTo("echomind.chat.stream.consume");
             assertThat(response.traces().get(0).spanCount()).isEqualTo(2);
-            assertThat(server.takeRequest().getPath()).contains("operation=echomind.chat.sync");
             assertThat(server.takeRequest().getPath()).contains("operation=echomind.chat.submit");
             assertThat(server.takeRequest().getPath()).contains("operation=echomind.chat.stream.consume");
         }
@@ -144,7 +144,8 @@ class JaegerTraceClientTest {
     @Test
     void searchAddsUserIdTagsWhenProvided() throws IOException, InterruptedException {
         try (MockWebServer server = new MockWebServer()) {
-            server.enqueue(json(traceSearchResponse("33333333333333333333333333333333", "echomind.chat.sync", 3_000)));
+            server.enqueue(json(traceSearchResponse("33333333333333333333333333333333",
+                "echomind.chat.stream.consume", 3_000)));
             enqueueEmptyBusinessResponses(server, 1);
 
             JaegerTraceClient client = new JaegerTraceClient(enabledProperties(server), new ObjectMapper());

@@ -40,7 +40,7 @@ class AiCallUsageServiceTest {
         ctx.setTokenUsage(new TokenUsage(12, 4, 16));
 
         AiCallUsageEntity usage = service.recordSuccess(
-            "echomind.chat.sync",
+            "echomind.chat.stream.consume",
             new AuthUser("user-a", "alice", true),
             ctx,
             System.nanoTime()
@@ -65,7 +65,7 @@ class AiCallUsageServiceTest {
         PipelineContext ctx = contextWithUsage(12, 4, 16);
         AuthUser user = new AuthUser("user-a", "alice", true);
 
-        service.recordSuccess("echomind.chat.sync", user, ctx, System.nanoTime());
+        service.recordSuccess("echomind.chat.stream.consume", user, ctx, System.nanoTime());
 
         verify(mapper).upsertById(any(AiCallUsageEntity.class));
         verify(quotaService).settleUsage(user, 16);
@@ -85,7 +85,7 @@ class AiCallUsageServiceTest {
         TokenQuotaExceededException quotaError = new TokenQuotaExceededException("user-a", "daily", 116, 100);
         doThrow(quotaError).when(quotaService).settleUsage(eq(user), eq(16L));
 
-        assertThatThrownBy(() -> service.recordSuccess("echomind.chat.sync", user, ctx, System.nanoTime()))
+        assertThatThrownBy(() -> service.recordSuccess("echomind.chat.stream.consume", user, ctx, System.nanoTime()))
             .isSameAs(quotaError);
 
         verify(mapper).upsertById(any(AiCallUsageEntity.class));
@@ -101,7 +101,7 @@ class AiCallUsageServiceTest {
         ObjectProvider<TokenQuotaService> quotaProvider = quotaProvider(null);
         AiCallUsageService service = new AiCallUsageService(mapper, userMapper, quotaProvider);
 
-        service.recordSuccess("echomind.chat.sync", new AuthUser("user-a", "alice", true),
+        service.recordSuccess("echomind.chat.stream.consume", new AuthUser("user-a", "alice", true),
             contextWithUsage(12, 4, 16), System.nanoTime());
 
         verify(mapper).upsertById(any(AiCallUsageEntity.class));
@@ -115,7 +115,7 @@ class AiCallUsageServiceTest {
         ctx.setTraceId("trace-a");
 
         assertThatThrownBy(() -> service.recordSuccess(
-            "echomind.chat.sync",
+            "echomind.chat.stream.consume",
             new AuthUser("user-a", "alice", true),
             ctx,
             System.nanoTime()

@@ -28,11 +28,6 @@ function sendChat(agentId, message, sessionId, modelId, attachments = []) {
     .then(r => r.data)
 }
 
-function sendChatSync(agentId, message, sessionId, modelId, attachments = []) {
-  return api.post('/chat/sync', { agentId: agentId || 'default', message, sessionId, modelId, attachments })
-    .then(r => r.data)
-}
-
 function chatStreamQuery() {
   const token = localStorage.getItem('echomind_auth_token')
   return token ? `?token=${encodeURIComponent(token)}` : ''
@@ -166,8 +161,6 @@ export default {
   chat: {
     /** 异步发送消息：立即拿到 requestId，结果通过 SSE 获取 */
     send: sendChat,
-    /** 同步发送消息：直接等待完整回复 */
-    sendSync: sendChatSync,
     /** 订阅异步结果 SSE 流 */
     streamResult: streamChatResult,
     /** 提交异步聊天任务，再通过 SSE 接收模型流式文本片段和最终结果。 */
@@ -226,9 +219,6 @@ export default {
     list: () => api.get('/agents').then(r => r.data),
     /** 创建Agent */
     create: (config) => api.post('/agents', config).then(r => r.data),
-    /** 执行Agent */
-    execute: (agentId, message, sessionId) =>
-      api.post(`/agents/${agentId}/execute`, { message, sessionId }).then(r => r.data),
     /** 查询Agent私有知识库 */
     knowledge: (agentId) =>
       api.get(`/agents/${agentId}/knowledge`).then(r => r.data),

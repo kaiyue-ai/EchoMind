@@ -3,17 +3,13 @@ package com.echomind.console.service;
 import com.echomind.agent.Agent;
 import com.echomind.agent.AgentConfig;
 import com.echomind.agent.AgentFactory;
-import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.pipeline.ExecutionPipeline;
-import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.store.AgentPersistenceService;
-import com.echomind.console.dto.AgentExecuteRequest;
 import com.echomind.console.dto.AgentView;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,10 +30,9 @@ class AgentApplicationServiceTest {
     @Test
     void createOrUpdatePersistsBeforeRuntimeRegistration() {
         AgentFactory factory = mock(AgentFactory.class);
-        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
         AgentPersistenceService persistenceService = mock(AgentPersistenceService.class);
         AgentApplicationService service = new AgentApplicationService(
-            factory, orchestrator, persistenceService, mock(AgentKnowledgeApplicationService.class));
+            factory, persistenceService, mock(AgentKnowledgeApplicationService.class));
 
         AgentConfig config = validConfig();
         Agent runtimeAgent = new Agent(
@@ -65,7 +60,6 @@ class AgentApplicationServiceTest {
         AgentFactory factory = mock(AgentFactory.class);
         AgentApplicationService service = new AgentApplicationService(
             factory,
-            mock(AgentOrchestrator.class),
             mock(AgentPersistenceService.class),
             mock(AgentKnowledgeApplicationService.class)
         );
@@ -91,7 +85,6 @@ class AgentApplicationServiceTest {
         AgentPersistenceService persistenceService = mock(AgentPersistenceService.class);
         AgentApplicationService service = new AgentApplicationService(
             factory,
-            mock(AgentOrchestrator.class),
             persistenceService,
             mock(AgentKnowledgeApplicationService.class)
         );
@@ -106,36 +99,12 @@ class AgentApplicationServiceTest {
     }
 
     @Test
-    void executeDelegatesToOrchestratorAndReturnsResponse() {
-        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
-        AgentApplicationService service = new AgentApplicationService(
-            mock(AgentFactory.class),
-            orchestrator,
-            mock(AgentPersistenceService.class),
-            mock(AgentKnowledgeApplicationService.class)
-        );
-        PipelineContext context = new PipelineContext();
-        context.setSessionId("session-1");
-        context.setFinalResponse("完成");
-        when(orchestrator.execute("agent-test", "session-1", "你好")).thenReturn(context);
-
-        Map<String, Object> response = service.execute(
-            "agent-test",
-            new AgentExecuteRequest("session-1", "你好")
-        );
-
-        assertThat(response).containsEntry("sessionId", "session-1");
-        assertThat(response).containsEntry("response", "完成");
-    }
-
-    @Test
     void deleteAgentCleansKnowledgeBeforeRemovingRuntimeAndPersistence() {
         AgentFactory factory = mock(AgentFactory.class);
         AgentPersistenceService persistenceService = mock(AgentPersistenceService.class);
         AgentKnowledgeApplicationService knowledgeService = mock(AgentKnowledgeApplicationService.class);
         AgentApplicationService service = new AgentApplicationService(
             factory,
-            mock(AgentOrchestrator.class),
             persistenceService,
             knowledgeService
         );
