@@ -41,6 +41,10 @@ public class PipelineContext {
     public static final String ATTR_MODEL_USAGE_NOT_APPLICABLE = "modelUsageNotApplicable";
     /** 平台 provider token 预算已阻断本轮模型调用。 */
     public static final String ATTR_PROVIDER_TOKEN_BUDGET_BLOCKED = "providerTokenBudgetBlocked";
+    /** 入队前用户 Token 配额预留 ID 列表。 */
+    public static final String ATTR_USER_TOKEN_RESERVATION_IDS = "userTokenReservationIds";
+    /** 模型调用前 Provider Token 预算预留 ID 列表。 */
+    public static final String ATTR_PROVIDER_TOKEN_RESERVATION_IDS = "providerTokenReservationIds";
     public static final String TOOL_MATCH_KEYWORD = "keyword";
     public static final String TOOL_MATCH_MODEL = "model";
     public static final String TOOL_MATCH_DISABLED = "disabled";

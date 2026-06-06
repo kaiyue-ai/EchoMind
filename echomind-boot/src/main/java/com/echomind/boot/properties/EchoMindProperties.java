@@ -23,7 +23,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *   memory:
      *     short-term-window: 50
  *     redis-ttl-seconds: 604800
- *     embedding-model: tongyi-embedding-vision-plus
+ *     embedding-model: text-embedding-v4
  *   skill:
  *     auto-load-path: ./skills/
  *     hot-reload: true
@@ -132,12 +132,14 @@ public class EchoMindProperties {
         private long redisTtlSeconds = 604800;
         /** 向量检索开关。 */
         private boolean embeddingEnabled = true;
-        /** 百炼向量接口 Base URL，默认使用 DashScope 原生地址。 */
-        private String embeddingBaseUrl = "https://dashscope.aliyuncs.com";
+        /** OpenAI-compatible 向量接口 Base URL；DashScope 使用 compatible-mode，Spring AI 会追加 /v1/embeddings。 */
+        private String embeddingBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode";
         /** 百炼向量 API Key，默认从 ALIYUN_BAILIAN_API_KEY 读取。 */
         private String embeddingApiKey;
-        /** 向量模型，按需求默认使用 tongyi-embedding-vision-plus。 */
-        private String embeddingModel = "tongyi-embedding-vision-plus";
+        /** OpenAI-compatible 文本向量模型。 */
+        private String embeddingModel = "text-embedding-v4";
+        /** 向量维度；需与 embeddingModel 实际输出保持一致。 */
+        private int embeddingDimension = 1024;
         /** 普通聊天记忆持久化 RabbitMQ 队列名。 */
         private String persistQueueName = "echomind.chat-memory.persist.requests";
         /** 普通聊天记忆持久化 RabbitMQ Direct Exchange 名。 */
@@ -162,10 +164,10 @@ public class EchoMindProperties {
         private String milvusHost = "localhost";
         /** Milvus 向量数据库端口。 */
         private int milvusPort = 19530;
-        /** Milvus 用户长期事实 Collection 名；v2 schema 包含三类时间戳。 */
-        private String milvusUserMemoryCollection = "echomind_user_memory_v2";
-        /** Milvus Agent 知识库 Collection 名。 */
-        private String milvusKnowledgeCollection = "echomind_agent_knowledge";
+        /** Spring AI Milvus 用户长期事实 Collection 名；旧 collection 保留但不再读取。 */
+        private String milvusUserMemoryCollection = "echomind_user_memory_spring_ai_v1";
+        /** Spring AI Milvus Agent 知识库 Collection 名；旧 collection 保留但不再读取。 */
+        private String milvusKnowledgeCollection = "echomind_agent_knowledge_spring_ai_v1";
         /** 是否启用扫描版 PDF OCR。 */
         private boolean knowledgeOcrEnabled = true;
         /** OCR 语言包，chi_sim+eng 表示简体中文和英文混合识别。 */

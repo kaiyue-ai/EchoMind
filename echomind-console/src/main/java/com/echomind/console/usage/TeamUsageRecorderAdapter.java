@@ -11,6 +11,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 /**
  * 将 Team 内部 LLM 调用纳入客户端同一套 token 用量和配额治理。
  */
@@ -28,6 +30,15 @@ public class TeamUsageRecorderAdapter implements TeamUsageRecorder {
         AuthUser owner = authUser(userId);
         try {
             quotaService.assertAllowed(owner);
+        } catch (TokenQuotaExceededException e) {
+            throw new TeamUsageQuotaExceededException(e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public List<String> reserveUserQuota(String userId, String agentId, String sessionId) {
+        try {
+            return quotaService.reserveUsage(authUser(userId), sessionId);
         } catch (TokenQuotaExceededException e) {
             throw new TeamUsageQuotaExceededException(e.getMessage(), e);
         }
@@ -54,8 +65,6 @@ public class TeamUsageRecorderAdapter implements TeamUsageRecorder {
             if (error) {
                 alertService.emitCallError(owner, ctx, errorMessage);
             }
-        } catch (TokenQuotaExceededException e) {
-            throw new TeamUsageQuotaExceededException(e.getMessage(), e);
         } catch (RuntimeException e) {
             log.warn("Failed to record team token usage operation={} user={} agent={} session={}: {}",
                 operation, userId, agentId, sessionId, e.getMessage());
@@ -63,6 +72,11 @@ public class TeamUsageRecorderAdapter implements TeamUsageRecorder {
                 alertService.emitCallError(owner, ctx, errorMessage);
             }
         }
+    }
+
+    @Override
+    public void releaseReservations(List<String> reservationIds) {
+        usageService.releaseReservations(reservationIds);
     }
 
     private AuthUser authUser(String userId) {

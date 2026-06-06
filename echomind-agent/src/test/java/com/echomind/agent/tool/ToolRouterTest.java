@@ -256,6 +256,35 @@ class ToolRouterTest {
     }
 
     @Test
+    void currentDaySearchIntentKeepsDateQueryVisibleWithWebSearch() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool(
+            "date-query",
+            "skill",
+            "date-query@1.0.0",
+            List.of("date", "time", "weekday"),
+            List.of("日期", "时间", "今天", "今日", "当日", "当天", "星期", "几号"),
+            Map.of("date", List.of("日期", "几号", "今天", "今日", "当日", "当天"))
+        ));
+        router.register(tool(
+            "open_web_search",
+            "mcp",
+            "mcp:open-websearch",
+            List.of("search", "web", "current"),
+            List.of("搜索", "搜一下", "查询", "查一下", "最新", "实时信息"),
+            Map.of("search", List.of("搜索", "查一下", "查询"))
+        ));
+
+        List<Tool> matched = router.matchForAgentSkillIds(
+            "查询一下今日NBA的战况",
+            List.of("date-query")
+        );
+
+        assertThat(matched).extracting(Tool::name)
+            .containsExactlyInAnyOrder("date-query", "open_web_search");
+    }
+
+    @Test
     void railwayClassificationFollowUpWithoutStrongMetadataMatchDoesNotExposeTools() {
         ToolRouter router = new ToolRouter();
         router.register(tool(

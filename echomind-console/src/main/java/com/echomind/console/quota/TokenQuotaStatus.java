@@ -1,6 +1,6 @@
 package com.echomind.console.quota;
 
 public enum TokenQuotaStatus {
-    ACTIVE,
-    DISABLED
+    ACTIVE, // 激活
+    DISABLED // 禁用
 }

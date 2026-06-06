@@ -1,22 +1,20 @@
 package com.echomind.memory.knowledge;
 
-import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.knowledge.entity.AgentKnowledgeDocumentEntity;
 import com.echomind.memory.knowledge.mapper.AgentKnowledgeDocumentMapper;
-import com.echomind.memory.milvus.MilvusVectorStoreSupport;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.vectorstore.VectorStore;
 
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
-class AgentKnowledgeServiceMilvusOnlySearchTest {
+class AgentKnowledgeServiceSpringAiSearchTest {
 
     @Test
-    void doesNotFallBackToMysqlSearchWhenMilvusIsUnavailable() {
-        AgentKnowledgeService service = service(text -> Optional.of(new double[] {1, 0}), 0.6);
+    void doesNotFallBackToMysqlSearchWhenVectorStoreIsUnavailable() {
+        AgentKnowledgeService service = service(null, 0.6);
 
         List<AgentKnowledgeHit> hits = service.search("agent-1", "进程退出", 3);
 
@@ -24,36 +22,31 @@ class AgentKnowledgeServiceMilvusOnlySearchTest {
     }
 
     @Test
-    void milvusDistanceIsConvertedToSimilarity() {
-        assertThat(MilvusVectorStoreSupport.distanceToSimilarity(0.2f)).isEqualTo(0.8);
-        assertThat(MilvusVectorStoreSupport.distanceToSimilarity(1.3f)).isZero();
-    }
-
-    @Test
-    void milvusCosineScoreIsAlreadySimilarity() {
-        assertThat(MilvusVectorStoreSupport.cosineScoreToSimilarity(0.8f)).isEqualTo(0.8);
-        assertThat(MilvusVectorStoreSupport.cosineScoreToSimilarity(-2f)).isEqualTo(-1);
-        assertThat(MilvusVectorStoreSupport.cosineScoreToSimilarity(Float.NaN)).isZero();
-    }
-
-    @Test
-    void milvusWindowExpressionExpandsCenterChunkByFiveNeighbors() {
-        String expr = AgentKnowledgeService.windowFilterExpr("agent-1", 42L, 7);
+    void springAiMilvusWindowExpressionExpandsCenterChunkByFiveNeighbors() {
+        String expr = KnowledgeWindowQuery.windowFilterExpr("agent-1", 42L, 7);
 
         assertThat(expr).isEqualTo(
-            "agent_id == " + AgentKnowledgeService.hashAgentId("agent-1")
-                + " && document_id == 42"
-                + " && chunk_index >= 2"
-                + " && chunk_index <= 12"
+            "metadata[\"agentId\"] == \"agent-1\""
+                + " && metadata[\"documentId\"] == 42"
+                + " && metadata[\"chunkIndex\"] >= 2"
+                + " && metadata[\"chunkIndex\"] <= 12"
         );
     }
 
     @Test
-    void milvusWindowExpressionDoesNotStartBelowZero() {
-        String expr = AgentKnowledgeService.windowFilterExpr("agent-1", 42L, 3);
+    void springAiMilvusWindowExpressionDoesNotStartBelowZero() {
+        String expr = KnowledgeWindowQuery.windowFilterExpr("agent-1", 42L, 3);
 
-        assertThat(expr).contains("chunk_index >= 0");
-        assertThat(expr).contains("chunk_index <= 8");
+        assertThat(expr).contains("metadata[\"chunkIndex\"] >= 0");
+        assertThat(expr).contains("metadata[\"chunkIndex\"] <= 8");
+    }
+
+    @Test
+    void vectorDocumentIdIsStableAndScopedByAgentDocumentAndChunk() {
+        assertThat(AgentKnowledgeService.vectorDocumentId("agent-1", 42L, 7))
+            .isEqualTo(AgentKnowledgeService.vectorDocumentId("agent-1", 42L, 7));
+        assertThat(AgentKnowledgeService.vectorDocumentId("agent-1", 42L, 7))
+            .isNotEqualTo(AgentKnowledgeService.vectorDocumentId("agent-2", 42L, 7));
     }
 
     @Test
@@ -75,14 +68,12 @@ class AgentKnowledgeServiceMilvusOnlySearchTest {
         assertThat(view.hasOriginalFile()).isTrue();
     }
 
-    private AgentKnowledgeService service(EmbeddingClient embeddingClient,
+    private AgentKnowledgeService service(VectorStore vectorStore,
                                           double minSimilarity) {
         return new AgentKnowledgeService(
             mock(AgentKnowledgeDocumentMapper.class),
-            embeddingClient,
-            null,
+            vectorStore,
             true,
-            "echomind_agent_knowledge_test",
             500,
             0.15,
             minSimilarity,
@@ -91,7 +82,8 @@ class AgentKnowledgeServiceMilvusOnlySearchTest {
             200,
             80,
             20,
-            "tesseract"
+            "tesseract",
+            "echomind_agent_knowledge_test"
         );
     }
 }

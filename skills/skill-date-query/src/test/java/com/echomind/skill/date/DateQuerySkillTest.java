@@ -56,4 +56,17 @@ class DateQuerySkillTest {
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.error()).contains("date 参数格式");
     }
+
+    @Test
+    void metadataIncludesCommonChineseCurrentDayAliases() {
+        var metadata = skill.metadata();
+
+        assertThat(metadata.keywords())
+            .contains("今日", "当日", "本日", "当天", "今日日期", "当天日期",
+                "今日时间", "北京时间", "现在时间");
+        assertThat(metadata.aliases().get("date"))
+            .contains("今日", "当日", "本日", "当天", "今日日期", "当天日期");
+        assertThat(metadata.aliases().get("time"))
+            .contains("今日时间", "北京时间", "现在时间");
+    }
 }

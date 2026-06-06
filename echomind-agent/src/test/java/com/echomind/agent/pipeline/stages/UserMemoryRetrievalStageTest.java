@@ -2,7 +2,6 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.RetrievalQueryRewriter;
-import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryHit;
 import com.echomind.memory.usermemory.UserMemoryStore;
@@ -24,44 +23,38 @@ class UserMemoryRetrievalStageTest {
 
     @Test
     void skipsWhenDisabled() {
-        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
         UserMemoryStore store = mock(UserMemoryStore.class);
         UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
-            embeddingClient, store, UserProfileSnapshotStore.noop(), false, 5, 0.3);
+            store, UserProfileSnapshotStore.noop(), false, 5, 0.3);
         PipelineContext ctx = context();
 
         stage.process(ctx);
 
-        verify(embeddingClient, never()).embed("我喜欢简洁代码");
+        verify(store, never()).search("user:default", "我喜欢简洁代码", 5, 0.3, 0.40);
         assertThat(ctx.getMessages()).isEmpty();
     }
 
     @Test
-    void skipsWhenEmbeddingUnavailable() {
-        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
+    void skipsWhenVectorStoreUnavailable() {
         UserMemoryStore store = mock(UserMemoryStore.class);
-        when(embeddingClient.embed("我喜欢简洁代码")).thenReturn(Optional.empty());
         UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
-            embeddingClient, store, UserProfileSnapshotStore.noop(), true, 5, 0.3);
+            null, UserProfileSnapshotStore.noop(), true, 5, 0.3);
         PipelineContext ctx = context();
 
         stage.process(ctx);
 
-        verify(store, never()).search("user:default", new double[] {1}, 5, 0.3, 0.40);
+        verify(store, never()).search("user:default", "我喜欢简洁代码", 5, 0.3, 0.40);
         assertThat(ctx.getMessages()).isEmpty();
     }
 
     @Test
     void injectsUserProfileHits() {
-        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
         UserMemoryStore store = mock(UserMemoryStore.class);
-        double[] vector = new double[] {0.1, 0.2};
-        when(embeddingClient.embed("我喜欢简洁代码")).thenReturn(Optional.of(vector));
-        when(store.search("user:default", vector, 5, 0.3, 0.40)).thenReturn(List.of(
+        when(store.search("user:default", "我喜欢简洁代码", 5, 0.3, 0.40)).thenReturn(List.of(
             new UserMemoryHit("entry-1", UserMemoryCategory.PREFERENCE, "用户喜欢简洁代码", "用户说喜欢简洁代码", 0.9, 0.8)
         ));
         UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
-            embeddingClient, store, UserProfileSnapshotStore.noop(), true, 5, 0.3);
+            store, UserProfileSnapshotStore.noop(), true, 5, 0.3);
         PipelineContext ctx = context();
 
         stage.process(ctx);
@@ -74,19 +67,16 @@ class UserMemoryRetrievalStageTest {
 
     @Test
     void injectsProfileSnapshotBeforeRelatedFacts() {
-        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
         UserMemoryStore store = mock(UserMemoryStore.class);
         UserProfileSnapshotStore snapshotStore = mock(UserProfileSnapshotStore.class);
-        double[] vector = new double[] {0.1, 0.2};
         when(snapshotStore.get("default")).thenReturn(Optional.of(
             new UserProfileSnapshot("default", "用户长期使用 Windows 和 PowerShell", 1, Instant.now())
         ));
-        when(embeddingClient.embed("我喜欢简洁代码")).thenReturn(Optional.of(vector));
-        when(store.search("user:default", vector, 5, 0.3, 0.40)).thenReturn(List.of(
+        when(store.search("user:default", "我喜欢简洁代码", 5, 0.3, 0.40)).thenReturn(List.of(
             new UserMemoryHit("entry-1", UserMemoryCategory.PREFERENCE, "用户喜欢简洁代码", "用户说喜欢简洁代码", 0.9, 0.8)
         ));
         UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
-            embeddingClient, store, snapshotStore, true, 5, 0.3);
+            store, snapshotStore, true, 5, 0.3);
         PipelineContext ctx = context();
 
         stage.process(ctx);
@@ -97,13 +87,9 @@ class UserMemoryRetrievalStageTest {
     }
 
     @Test
-    void usesRetrievalQueryForEmbeddingWithoutChangingUserMessage() {
-        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
+    void usesRetrievalQueryForVectorSearchWithoutChangingUserMessage() {
         UserMemoryStore store = mock(UserMemoryStore.class);
-        double[] vector = new double[] {0.1, 0.2};
-        when(embeddingClient.embed("今天苹果的价格")).thenReturn(Optional.of(vector));
         UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
-            embeddingClient,
             store,
             UserProfileSnapshotStore.noop(),
             true,
@@ -116,9 +102,8 @@ class UserMemoryRetrievalStageTest {
 
         stage.process(ctx);
 
-        verify(embeddingClient).embed("今天苹果的价格");
-        verify(embeddingClient, never()).embed("今天苹果多少钱");
-        verify(store).search("user:default", vector, 5, 0.3, 0.40);
+        verify(store).search("user:default", "今天苹果的价格", 5, 0.3, 0.40);
+        verify(store, never()).search("user:default", "今天苹果多少钱", 5, 0.3, 0.40);
         assertThat(ctx.getUserMessage()).isEqualTo("今天苹果多少钱");
     }
 

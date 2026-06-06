@@ -32,13 +32,13 @@
 - 用户头像已支持上传到统一对象存储，MySQL 用户表仅保存 `avatar_uri`，前端侧栏可直接更换头像。
 - 管理端账号已和客户端账号分离：管理端使用 `/api/admin/auth/*` 与 `echomind_admin_users`，客户端继续使用 `/api/auth/*` 与 `echomind_users`，两类 token 不互认。
 - 已新增 `echomind_ai_call_usage` 调用用量表和管理端用户用量页面：支持查看所有客户端总 Token、客户端用户列表、单用户总 Token、每次调用 Token 和 TraceID。
-- 用户日/月 Token quota 已改为“请求前快速检查 + 模型返回后原子结算”：`echomind_token_quotas` 保存限额配置，`echomind_token_quota_usage` 按用户日/月 bucket 保存已结算额度；真实 provider usage 审计先落 `echomind_ai_call_usage`，再结算 quota，结算超限返回配额错误且不发普通调用失败告警。
+- 用户日/月 Token quota 已改为“请求前快速检查 + Redis 原子预留 + 模型返回后真实用量结算”：`echomind_token_quotas` 保存限额配置，`echomind_token_quota_usage` 按用户日/月 bucket 保存真实已用；Redis `echomind:quota:*` 保存当前 bucket used 热镜像和 in-flight reserved 冻结额度；真实 provider usage 审计先落 `echomind_ai_call_usage`，再结算 quota，后置结算不拒绝已完成调用，下一次请求前预留负责返回配额错误。
 - 已新增管理端客户端用户管理页面：支持查询所有客户端用户，并对客户端账号执行封禁、解封和硬删除；删除会清理该用户聊天、消息、用量、配额和记忆缓存，不影响全局 Agent、Skill、MCP、Team。
 - 已新增管理端真实数据仪表盘：按时间范围展示今日请求、今日 Token、范围 Token、累计 Token、客户端用户数、平均响应、模型 Token 分布、Token 日趋势和最近调用，不展示项目没有落库的成本、余额或 API 密钥消费。
 - 管理端 Trace 查询已支持按客户端 `userId` 过滤，后端会转换为 Jaeger tag `echomind.user_id` 查询；真实聊天链路在 Jaeger 中包含 HTTP、业务入口、Agent、Pipeline、LLM、JDBC 等多 Span。
 - AI Infra 已收敛为现有 Agent 项目的项目三管理端，不新增独立网关、OpenAI `/v1` 入口或应用 API Key。
 - 已新增敏感数据治理：聊天请求进入 Agent 前和响应返回前支持手机号、身份证、邮箱、银行卡、IP 等规则脱敏/阻断；请求侧命中 `BLOCK` 不进入 Agent/RabbitMQ 管线，直接返回替代词拼接结果，响应侧 `BLOCK` 仍走阻断异常，事件只保存脱敏后样本或替代词结果。
-- 已新增告警治理：调用错误、错误率、Token 超限/预警和敏感数据事件进入告警事件表，支持飞书自定义机器人 Webhook、静默期、静默累计升级和管理端规则配置。
+- 已新增告警治理：调用错误、错误率、Provider Token 预算超限/预警和敏感数据事件进入告警事件表，支持飞书自定义机器人 Webhook、静默期、静默累计升级和管理端规则配置；Provider budget 也使用 Redis 预留和 `echomind_provider_token_budget_usage` 日/周/月真实已用账本；用户日/月 Token quota 不再保留单用户百分比预警。
 - 管理端已新增脱敏治理和告警中心页面，仪表盘增加错误率、脱敏事件数和告警事件数。
 - 聊天入口已进一步解耦：`ChatGovernanceService` 统一收口配额、脱敏、用量和调用错误告警；流式聊天改为 `POST /api/chat` 入队、`GET /api/chat/stream/{requestId}` 订阅 token 事件；`MemoryApplicationService` 统一会话摘要、历史读取和附件展示 URL 刷新。
 - RabbitMQ 使用面已梳理：当前只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat.stream-events` SSE 事件、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件；Agent Team 仍由 `TaskExecutor` 推进 MySQL 黑板状态机。

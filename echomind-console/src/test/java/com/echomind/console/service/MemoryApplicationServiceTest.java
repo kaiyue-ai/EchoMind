@@ -80,6 +80,26 @@ class MemoryApplicationServiceTest {
     }
 
     @Test
+    void getChatHistoryHidesToolMessagesFromDisplayHistory() {
+        MemoryManager memoryManager = mock(MemoryManager.class);
+        MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
+        when(memoryManager.getFullContext("default", "session-1")).thenReturn(List.of(
+            AgentMessage.user("查询一下今天新闻"),
+            AgentMessage.tool("open_web_search", "open_web_search"),
+            AgentMessage.assistant("今天新闻摘要")
+        ));
+
+        List<AgentMessage> result = service.getChatHistory("session-1");
+
+        assertThat(result)
+            .extracting(AgentMessage::role)
+            .containsExactly("user", "assistant");
+        assertThat(result)
+            .extracting(AgentMessage::content)
+            .containsExactly("查询一下今天新闻", "今天新闻摘要");
+    }
+
+    @Test
     void blankSessionIdIsRejected() {
         MemoryManager memoryManager = mock(MemoryManager.class);
         MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));

@@ -1,73 +1,50 @@
 package com.echomind.memory.knowledge;
 
-import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.knowledge.entity.AgentKnowledgeDocumentEntity;
 import com.echomind.memory.knowledge.mapper.AgentKnowledgeDocumentMapper;
-import io.milvus.client.MilvusServiceClient;
-import io.milvus.grpc.QueryResults;
-import io.milvus.grpc.SearchResults;
-import io.milvus.param.MetricType;
-import io.milvus.param.R;
-import io.milvus.param.dml.InsertParam;
-import io.milvus.param.dml.QueryParam;
-import io.milvus.param.dml.SearchParam;
-import io.milvus.response.QueryResultsWrapper;
-import io.milvus.response.SearchResultsWrapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.ai.vectorstore.milvus.MilvusSearchRequest;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
-
-import static com.echomind.memory.milvus.MilvusVectorStoreSupport.*;
+import java.util.UUID;
 
 /**
  * Agent 私有知识库服务。
  *
- * <p>职责分三段：</p>
- * <ul>
- *   <li>上传：txt/pdf 提取文本，按段落/标点切片，并写入 MySQL 文档表。</li>
- *   <li>索引：每个切片正文和向量都写入 Milvus。</li>
- *   <li>召回：聊天时只按 agentId 在 Milvus 中检索，并扩展命中片段附近窗口。</li>
- * </ul>
+ * <p>文档元数据仍由 MySQL 保存；切片正文和向量进入 Spring AI Milvus VectorStore。
+ * 召回时先用 VectorStore 找中心切片，再用一个很薄的 Milvus native query 读取同文档前后窗口。</p>
  */
 @Slf4j
 public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
 
-    private static final int WINDOW_RADIUS = 5;
-    private static final String FIELD_PK = "id";
-    private static final String FIELD_AGENT_ID = "agent_id";
-    private static final String FIELD_DOCUMENT_ID = "document_id";
-    private static final String FIELD_CHUNK_ID = "chunk_id";
-    private static final String FIELD_CHUNK_INDEX = "chunk_index";
-    private static final String FIELD_FILE_NAME = "file_name";
-    private static final String FIELD_CONTENT = "content";
-    private static final String FIELD_EMBEDDING = "embedding";
+    static final int WINDOW_RADIUS = 5;
+    static final String META_AGENT_ID = "agentId";
+    static final String META_DOCUMENT_ID = "documentId";
+    static final String META_CHUNK_ID = "chunkId";
+    static final String META_CHUNK_INDEX = "chunkIndex";
+    static final String META_FILE_NAME = "fileName";
 
     private final AgentKnowledgeDocumentMapper documentMapper;
-    private final EmbeddingClient embeddingClient;
+    private final VectorStore vectorStore;
+    private final KnowledgeWindowQuery windowQuery;
     private final AgentKnowledgeTextExtractor textExtractor;
     private final AgentKnowledgeChunker chunker;
-    private final MilvusServiceClient milvusClient;
     private final boolean enabled;
-    private final String collectionName;
     private final double minVectorSimilarity;
 
-    private volatile boolean collectionReady;
-    private volatile int indexDimension;
-
     public AgentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
-                                 EmbeddingClient embeddingClient,
-                                 MilvusServiceClient milvusClient,
+                                 VectorStore vectorStore,
                                  boolean enabled,
-                                 String collectionName,
                                  int chunkSize,
                                  double chunkOverlapRatio,
                                  double minVectorSimilarity,
@@ -76,12 +53,30 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
                                  int ocrDpi,
                                  int ocrMinTextChars,
                                  int ocrMaxPages,
-                                 String tesseractCommand) {
+                                 String tesseractCommand,
+                                 String collectionName) {
+        this(documentMapper, vectorStore, vectorStore == null ? null : new KnowledgeWindowQuery(vectorStore, collectionName),
+            enabled, chunkSize, chunkOverlapRatio, minVectorSimilarity, ocrEnabled, ocrLanguage, ocrDpi,
+            ocrMinTextChars, ocrMaxPages, tesseractCommand);
+    }
+
+    AgentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
+                          VectorStore vectorStore,
+                          KnowledgeWindowQuery windowQuery,
+                          boolean enabled,
+                          int chunkSize,
+                          double chunkOverlapRatio,
+                          double minVectorSimilarity,
+                          boolean ocrEnabled,
+                          String ocrLanguage,
+                          int ocrDpi,
+                          int ocrMinTextChars,
+                          int ocrMaxPages,
+                          String tesseractCommand) {
         this.documentMapper = documentMapper;
-        this.embeddingClient = embeddingClient;
-        this.milvusClient = milvusClient;
-        this.enabled = enabled;
-        this.collectionName = collectionName;
+        this.vectorStore = vectorStore;
+        this.windowQuery = windowQuery;
+        this.enabled = enabled && vectorStore != null;
         this.minVectorSimilarity = clamp(minVectorSimilarity, 0, 1);
         this.textExtractor = new AgentKnowledgeTextExtractor(
             ocrEnabled, ocrLanguage, ocrDpi, ocrMinTextChars, ocrMaxPages, tesseractCommand);
@@ -113,21 +108,18 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
         document.setChunkCount(0);
         document = documentMapper.upsertById(document);
 
-        int indexed = 0;
+        List<Document> vectorDocuments = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
-            Optional<double[]> embedding = embeddingClient.embed(chunks.get(i));
-            if (embedding.isEmpty()) {
-                continue;
-            }
-            if (saveMilvus(agentId, document.getId(), document.getFileName(), i, chunks.get(i), embedding.get())) {
-                indexed++;
-            }
+            vectorDocuments.add(toVectorDocument(agentId, document.getId(), document.getFileName(), i, chunks.get(i)));
         }
-        if (indexed == 0) {
+        try {
+            vectorStore.add(vectorDocuments);
+        } catch (Exception e) {
             documentMapper.deleteEntity(document);
-            throw new IllegalStateException("文件切片写入 Milvus 向量索引失败，请检查 Milvus 和向量模型配置");
+            throw new IllegalStateException("文件切片写入 Spring AI Milvus 向量索引失败，请检查 Milvus 和向量模型配置", e);
         }
-        document.setChunkCount(indexed);
+
+        document.setChunkCount(vectorDocuments.size());
         document = documentMapper.upsertById(document);
         return AgentKnowledgeDocument.from(document);
     }
@@ -153,7 +145,7 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
             throw new IllegalArgumentException("不能删除其它 Agent 的知识库文档");
         }
         documentMapper.deleteEntity(document);
-        deleteMilvusDocument(agentId, documentId);
+        deleteVectorDocument(agentId, documentId, document.getChunkCount());
     }
 
     /** 删除指定 Agent 的全部知识库。 */
@@ -162,7 +154,7 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
     public void deleteAll(String agentId) {
         requireAgentId(agentId);
         for (AgentKnowledgeDocumentEntity document : documentMapper.selectByAgentIdOrderByCreatedAtDesc(agentId)) {
-            deleteMilvusDocument(agentId, document.getId());
+            deleteVectorDocument(agentId, document.getId(), document.getChunkCount());
             documentMapper.deleteEntity(document);
         }
     }
@@ -173,217 +165,81 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
         if (!enabled || topK <= 0 || query == null || query.isBlank() || agentId == null || agentId.isBlank()) {
             return List.of();
         }
-        Optional<double[]> queryVector = embeddingClient.embed(truncate(query, 2000));
-        if (queryVector.isEmpty()) {
-            return List.of();
-        }
-        return search(agentId, query, queryVector.get(), topK);
-    }
-
-    /** 使用已计算的查询向量召回 Agent 私有知识库片段。 */
-    @Transactional(readOnly = true)
-    public List<AgentKnowledgeHit> search(String agentId, String query, double[] queryVector, int topK) {
-        if (!enabled || topK <= 0 || query == null || query.isBlank()
-            || agentId == null || agentId.isBlank() || queryVector == null || queryVector.length == 0) {
-            return List.of();
-        }
         List<AgentKnowledgeHit> centers;
         try {
-            centers = searchMilvus(agentId, queryVector, expandedTopK(topK)).stream()
-                .filter(hit -> hit.score() >= minVectorSimilarity)
+            FilterExpressionBuilder filterBuilder = new FilterExpressionBuilder();
+            MilvusSearchRequest request = MilvusSearchRequest.milvusBuilder()
+                .query(truncate(query, 2000))
+                .topK(expandedTopK(topK))
+                .similarityThreshold(minVectorSimilarity)
+                .filterExpression(filterBuilder.eq(META_AGENT_ID, agentId).build())
+                .searchParamsJson("{\"ef\":128}")
+                .build();
+            centers = vectorStore.similaritySearch(request).stream()
+                .map(this::toHit)
+                .filter(Objects::nonNull)
                 .limit(topK)
                 .toList();
         } catch (Exception e) {
-            log.warn("Milvus agent knowledge search failed; skipping vector hits agentId={}: {}",
+            log.warn("Spring AI Milvus agent knowledge search failed; skipping vector hits agentId={}: {}",
                 agentId, e.getMessage());
             return List.of();
         }
         return expandWindows(agentId, centers);
     }
 
-    // ── Milvus 操作 ──
-
-    private boolean saveMilvus(String agentId, Long documentId, String fileName,
-                               int chunkIndex, String content, double[] embedding) {
-        if (milvusClient == null) {
-            return false;
-        }
-        try {
-            ensureCollection(embedding.length);
-            List<InsertParam.Field> fields = new ArrayList<>();
-            fields.add(new InsertParam.Field(FIELD_AGENT_ID, Collections.singletonList(hashAgentId(agentId))));
-            fields.add(new InsertParam.Field(FIELD_DOCUMENT_ID, Collections.singletonList(documentId)));
-            fields.add(new InsertParam.Field(FIELD_CHUNK_ID, Collections.singletonList(syntheticChunkId(documentId, chunkIndex))));
-            fields.add(new InsertParam.Field(FIELD_CHUNK_INDEX, Collections.singletonList(chunkIndex)));
-            fields.add(new InsertParam.Field(FIELD_FILE_NAME, Collections.singletonList(fileName)));
-            fields.add(new InsertParam.Field(FIELD_CONTENT, Collections.singletonList(content)));
-            fields.add(new InsertParam.Field(FIELD_EMBEDDING, Collections.singletonList(toFloatList(embedding))));
-
-            return insert(milvusClient, collectionName, fields);
-        } catch (Exception e) {
-            log.warn("Failed to write agent knowledge vector to Milvus agentId={} documentId={} chunkIndex={}: {}",
-                agentId, documentId, chunkIndex, e.getMessage());
-            return false;
-        }
+    private Document toVectorDocument(String agentId, Long documentId, String fileName, int chunkIndex, String content) {
+        Long chunkId = syntheticChunkId(documentId, chunkIndex);
+        return Document.builder()
+            .id(vectorDocumentId(agentId, documentId, chunkIndex))
+            .text(content)
+            .metadata(Map.of(
+                META_AGENT_ID, agentId,
+                META_DOCUMENT_ID, documentId,
+                META_CHUNK_ID, chunkId,
+                META_CHUNK_INDEX, chunkIndex,
+                META_FILE_NAME, fileName
+            ))
+            .build();
     }
 
-    private synchronized void ensureCollection(int dimension) {
-        if (milvusClient == null || (collectionReady && indexDimension == dimension)) {
+    private AgentKnowledgeHit toHit(Document document) {
+        if (document == null) {
+            return null;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        Long documentId = asLong(metadata.get(META_DOCUMENT_ID));
+        Long chunkId = asLong(metadata.get(META_CHUNK_ID));
+        int chunkIndex = asInt(metadata.get(META_CHUNK_INDEX), 0);
+        String fileName = asString(metadata.get(META_FILE_NAME));
+        String content = document.getText();
+        double score = document.getScore() == null ? 0 : document.getScore();
+        if (documentId == null || chunkId == null || content == null) {
+            return null;
+        }
+        return new AgentKnowledgeHit(chunkId, documentId, fileName, chunkIndex, content, score);
+    }
+
+    private void deleteVectorDocument(String agentId, Long documentId, int chunkCount) {
+        if (vectorStore == null || documentId == null || chunkCount <= 0) {
             return;
         }
-        if (hasCollection(milvusClient, collectionName)) {
-            collectionReady = true;
-            indexDimension = dimension;
-            loadCollection(milvusClient, collectionName);
-            return;
+        List<String> ids = new ArrayList<>(chunkCount);
+        for (int i = 0; i < chunkCount; i++) {
+            ids.add(vectorDocumentId(agentId, documentId, i));
         }
         try {
-            List<io.milvus.param.collection.FieldType> fields = List.of(
-                pkField(FIELD_PK),
-                int64Field(FIELD_AGENT_ID),
-                int64Field(FIELD_DOCUMENT_ID),
-                int64Field(FIELD_CHUNK_ID),
-                int32Field(FIELD_CHUNK_INDEX),
-                varCharField(FIELD_FILE_NAME, 512),
-                varCharField(FIELD_CONTENT, 8192),
-                floatVectorField(FIELD_EMBEDDING, dimension)
-            );
-            createCollection(milvusClient, collectionName, fields, "Agent 私有知识库向量存储");
-            createHnswIndex(milvusClient, collectionName, FIELD_EMBEDDING, "idx_embedding");
-            loadCollection(milvusClient, collectionName);
-            collectionReady = true;
-            indexDimension = dimension;
-            log.info("Created Milvus agent knowledge collection {} with dimension {}", collectionName, dimension);
+            vectorStore.delete(ids);
         } catch (Exception e) {
-            collectionReady = false;
-            throw new RuntimeException("Failed to create Milvus agent knowledge collection: " + e.getMessage(), e);
-        }
-    }
-
-    private List<AgentKnowledgeHit> searchMilvus(String agentId, double[] queryVector, int topK) {
-        if (milvusClient == null) {
-            return List.of();
-        }
-        ensureCollection(queryVector.length);
-        try {
-            String expr = agentFilterExpr(agentId);
-            List<List<Float>> vectors = Collections.singletonList(toFloatList(queryVector));
-            List<String> outputFields = Arrays.asList(
-                FIELD_DOCUMENT_ID, FIELD_CHUNK_ID, FIELD_CHUNK_INDEX, FIELD_FILE_NAME, FIELD_CONTENT);
-
-            R<SearchResults> response = milvusClient.search(SearchParam.newBuilder()
-                .withCollectionName(collectionName)
-                .withOutFields(outputFields)
-                .withExpr(expr)
-                .withVectors(vectors)
-                .withVectorFieldName(FIELD_EMBEDDING)
-                .withTopK(topK)
-                .withMetricType(MetricType.COSINE)
-                .withParams("{\"ef\":128}")
-                .build());
-
-            if (response.getStatus() != R.Status.Success.getCode()) {
-                log.warn("Milvus agent knowledge search failed agentId={}: {}", agentId, response.getMessage());
-                return List.of();
-            }
-
-            SearchResultsWrapper wrapper = new SearchResultsWrapper(response.getData().getResults());
-            List<AgentKnowledgeHit> hits = new ArrayList<>();
-            for (SearchResultsWrapper.IDScore score : wrapper.getIDScore(0)) {
-                Long documentId = asLong(score.get(FIELD_DOCUMENT_ID));
-                Long chunkId = asLong(score.get(FIELD_CHUNK_ID));
-                int chunkIndex = asInt(score.get(FIELD_CHUNK_INDEX), 0);
-                String fileName = asString(score.get(FIELD_FILE_NAME));
-                String content = asString(score.get(FIELD_CONTENT));
-                double similarity = distanceToSimilarity((float) score.getScore());
-                if (documentId != null && chunkId != null && content != null) {
-                    hits.add(new AgentKnowledgeHit(chunkId, documentId, fileName, chunkIndex, content, similarity));
-                }
-            }
-            return hits;
-        } catch (Exception e) {
-            log.warn("Milvus agent knowledge search failed agentId={}: {}", agentId, e.getMessage());
-            return List.of();
-        }
-    }
-
-    private List<AgentKnowledgeHit> searchMilvusWindow(String agentId, AgentKnowledgeHit center) {
-        if (milvusClient == null || center == null || center.documentId() == null) {
-            return List.of();
-        }
-        String expr = windowFilterExpr(agentId, center.documentId(), center.chunkIndex());
-        try {
-            R<QueryResults> response = milvusClient.query(QueryParam.newBuilder()
-                .withCollectionName(collectionName)
-                .withExpr(expr)
-                .withOutFields(Arrays.asList(FIELD_DOCUMENT_ID, FIELD_CHUNK_ID, FIELD_CHUNK_INDEX, FIELD_FILE_NAME, FIELD_CONTENT))
-                .withLimit((long) (WINDOW_RADIUS * 2 + 1))
-                .build());
-            if (response.getStatus() != R.Status.Success.getCode()) {
-                log.warn("Milvus agent knowledge window query failed agentId={} documentId={} chunkIndex={}: {}",
-                    agentId, center.documentId(), center.chunkIndex(), response.getMessage());
-                return List.of();
-            }
-            QueryResultsWrapper wrapper = new QueryResultsWrapper(response.getData());
-            List<AgentKnowledgeHit> hits = new ArrayList<>();
-            for (var row : wrapper.getRowRecords()) {
-                Long documentId = asLong(row.get(FIELD_DOCUMENT_ID));
-                Long chunkId = asLong(row.get(FIELD_CHUNK_ID));
-                int chunkIndex = asInt(row.get(FIELD_CHUNK_INDEX), 0);
-                String fileName = asString(row.get(FIELD_FILE_NAME));
-                String content = asString(row.get(FIELD_CONTENT));
-                if (documentId != null && chunkId != null && content != null) {
-                    hits.add(new AgentKnowledgeHit(chunkId, documentId, fileName, chunkIndex, content, center.score()));
-                }
-            }
-            hits.sort(Comparator.comparingLong(AgentKnowledgeHit::documentId)
-                .thenComparingInt(AgentKnowledgeHit::chunkIndex));
-            return hits;
-        } catch (Exception e) {
-            log.warn("Milvus agent knowledge window query failed agentId={} documentId={} chunkIndex={}: {}",
-                agentId, center.documentId(), center.chunkIndex(), e.getMessage());
-            return List.of();
-        }
-    }
-
-    private void deleteMilvusDocument(String agentId, Long documentId) {
-        if (milvusClient == null) {
-            return;
-        }
-        try {
-            String expr = documentFilterExpr(agentId, documentId);
-            delete(milvusClient, collectionName, expr);
-        } catch (Exception e) {
-            log.warn("Failed to delete Milvus agent knowledge vectors agentId={} documentId={}: {}",
+            log.warn("Failed to delete Spring AI Milvus agent knowledge vectors agentId={} documentId={}: {}",
                 agentId, documentId, e.getMessage());
         }
-    }
-
-    static String agentFilterExpr(String agentId) {
-        return "agent_id == " + hashAgentId(agentId);
-    }
-
-    static String documentFilterExpr(String agentId, Long documentId) {
-        return agentFilterExpr(agentId) + " && document_id == " + documentId;
-    }
-
-    static String windowFilterExpr(String agentId, Long documentId, int centerChunkIndex) {
-        int start = Math.max(0, centerChunkIndex - WINDOW_RADIUS);
-        int end = centerChunkIndex + WINDOW_RADIUS;
-        return documentFilterExpr(agentId, documentId)
-            + " && chunk_index >= " + start
-            + " && chunk_index <= " + end;
-    }
-
-    /** 将 agentId 哈希为 long，用作 Milvus 标量过滤字段。 */
-    static long hashAgentId(String agentId) {
-        return (long) agentId.hashCode();
     }
 
     private List<AgentKnowledgeHit> expandWindows(String agentId, List<AgentKnowledgeHit> centers) {
         Map<String, AgentKnowledgeHit> merged = new LinkedHashMap<>();
         for (AgentKnowledgeHit center : centers) {
-            List<AgentKnowledgeHit> window = searchMilvusWindow(agentId, center);
+            List<AgentKnowledgeHit> window = windowQuery == null ? List.of() : windowQuery.search(agentId, center);
             if (window.isEmpty()) {
                 window = List.of(center);
             }
@@ -391,14 +247,22 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
                 merged.putIfAbsent(hit.documentId() + ":" + hit.chunkIndex(), hit);
             }
         }
-        return new ArrayList<>(merged.values());
+        List<AgentKnowledgeHit> result = new ArrayList<>(merged.values());
+        result.sort(Comparator.comparingLong(AgentKnowledgeHit::documentId)
+            .thenComparingInt(AgentKnowledgeHit::chunkIndex));
+        return result;
     }
 
     private int expandedTopK(int topK) {
         return Math.max(topK, topK * 3);
     }
 
-    private long syntheticChunkId(Long documentId, int chunkIndex) {
+    static String vectorDocumentId(String agentId, Long documentId, int chunkIndex) {
+        String raw = "knowledge\0" + agentId + "\0" + documentId + "\0" + chunkIndex;
+        return UUID.nameUUIDFromBytes(raw.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    private Long syntheticChunkId(Long documentId, int chunkIndex) {
         return Integer.toUnsignedLong(Objects.hash(documentId, chunkIndex));
     }
 
@@ -450,10 +314,13 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
         return value == null || value.isBlank() ? null : value;
     }
 
+    private double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private void requireAgentId(String agentId) {
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agentId不能为空");
         }
     }
-
 }

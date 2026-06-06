@@ -88,7 +88,12 @@ public class ChatApplicationService {
 
             normalized = normalized.withMessage(requestInspection.governedMessage());
 
+            List<String> userReservationIds = List.of();
             try {
+                userReservationIds = governanceService.reserveUserQuota(normalized.authUser(), requestId);
+                if (userReservationIds == null) {
+                    userReservationIds = List.of();
+                }
                 // 7. 发布消息到RabbitMQ：异步处理核心，解耦请求提交与处理
                 rabbitProducer.publish(new ChatRequest(
                     requestId,           // 请求唯一标识
@@ -99,11 +104,13 @@ public class ChatApplicationService {
                     normalized.modelId(),  // 模型ID
                     traceId,              // 追踪ID
                     EchoMindTrace.injectContext().get("traceparent"), // 追踪上下文（用于跨服务追踪）
-                    normalized.attachments() // 附件
+                    normalized.attachments(), // 附件
+                    userReservationIds
                 ));
             } catch (RuntimeException e) {
                 // 发布失败：清理SSE注册，避免无效连接泄漏
                 ssePushService.discardRequest(requestId);
+                governanceService.releaseReservations(userReservationIds);
                 throw e;
             }
 

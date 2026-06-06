@@ -157,6 +157,28 @@ class ToolExposurePlannerTest {
     }
 
     @Test
+    void currentDayBusinessQueryAlsoExposesDateToolAlongsideSearchTool() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool("date-query", "skill", "date-query@1.0.0",
+            List.of("date", "time"), List.of("今天", "今日", "当日", "当天", "日期")));
+        router.register(tool("open_web_search", "mcp", "mcp:open-websearch",
+            List.of("search", "web", "current"), List.of("搜索", "查询", "查一下", "最新", "实时信息")));
+        ToolExposurePlanner planner = new ToolExposurePlanner(router);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setUserMessage("查询一下今日NBA的战况");
+        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("date-query"));
+
+        ToolExposure exposure = planner.plan(ctx);
+
+        assertThat(exposure.tools()).extracting(Tool::name)
+            .containsExactlyInAnyOrder("date-query", "open_web_search");
+        assertThat(exposure.requiredToolName()).isNull();
+        assertThat(ctx.getAttributes())
+            .containsEntry(PipelineContext.ATTR_TOOL_MATCH_MODE, PipelineContext.TOOL_MATCH_KEYWORD);
+    }
+
+    @Test
     void followUpDateQueryAlsoExposesRailwayToolFromRecentHistory() {
         ToolRouter router = new ToolRouter();
         router.register(tool("12306", "skill", "12306@1.0.0",

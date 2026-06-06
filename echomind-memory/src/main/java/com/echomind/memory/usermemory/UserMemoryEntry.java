@@ -12,8 +12,7 @@ public record UserMemoryEntry(
     double confidence,
     Instant firstObservedAt,
     Instant lastObservedAt,
-    Instant updatedAt,
-    double[] embedding
+    Instant updatedAt
 ) {
     public UserMemoryEntry {
         Instant now = Instant.now();

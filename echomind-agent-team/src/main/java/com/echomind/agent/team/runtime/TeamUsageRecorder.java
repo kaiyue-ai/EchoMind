@@ -2,6 +2,8 @@ package com.echomind.agent.team.runtime;
 
 import com.echomind.agent.pipeline.PipelineContext;
 
+import java.util.List;
+
 /**
  * Team 运行时的轻量用量治理端口。
  *
@@ -16,7 +18,14 @@ public interface TeamUsageRecorder {
     default void assertAllowed(String userId, String agentId, String sessionId) {
     }
 
+    default List<String> reserveUserQuota(String userId, String agentId, String sessionId) {
+        return List.of();
+    }
+
     default void record(String operation, String userId, String agentId, String sessionId,
                         PipelineContext ctx, long startedNanos, boolean error, String errorMessage) {
+    }
+
+    default void releaseReservations(List<String> reservationIds) {
     }
 }

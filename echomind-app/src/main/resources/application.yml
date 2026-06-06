@@ -109,6 +109,11 @@ echomind:
   alerts:
     feishu:
       webhook-url: ${Webhook:}
+  governance:
+    token-reservation:
+      # 请求入队和模型调用前的并发保护预留值；真实用量仍以 provider usage 后置结算。
+      default-reserve-tokens: ${ECHOMIND_GOVERNANCE_TOKEN_RESERVATION_DEFAULT_TOKENS:4096}
+      ttl-seconds: ${ECHOMIND_GOVERNANCE_TOKEN_RESERVATION_TTL_SECONDS:900}
   team:
     runtime:
       # Team 协作会触发多次模型调用；默认保持保守，避免 Reviewer/Planner 循环把一次任务拖得过长。
@@ -176,13 +181,14 @@ echomind:
     # MySQL 保存完整会话供前端展示；Redis 只保存最近 short-term-window 条且不超过 short-term-max-chars 的 LLM 上下文。
     redis-ttl-seconds: 604800
     embedding-enabled: true
-    embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com}
+    embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     embedding-api-key: ${ALIYUN_BAILIAN_API_KEY:}
-    embedding-model: tongyi-embedding-vision-plus
+    embedding-model: ${ECHOMIND_EMBEDDING_MODEL:text-embedding-v4}
+    embedding-dimension: ${ECHOMIND_EMBEDDING_DIMENSION:1024}
     milvus-host: ${ECHOMIND_MILVUS_HOST:localhost}
     milvus-port: ${ECHOMIND_MILVUS_PORT:19530}
-    milvus-user-memory-collection: ${ECHOMIND_MILVUS_USER_MEMORY_COLLECTION:echomind_user_memory_v2}
-    milvus-knowledge-collection: ${ECHOMIND_MILVUS_KNOWLEDGE_COLLECTION:echomind_agent_knowledge}
+    milvus-user-memory-collection: ${ECHOMIND_MILVUS_USER_MEMORY_COLLECTION:echomind_user_memory_spring_ai_v1}
+    milvus-knowledge-collection: ${ECHOMIND_MILVUS_KNOWLEDGE_COLLECTION:echomind_agent_knowledge_spring_ai_v1}
     persist-queue-name: ${ECHOMIND_MEMORY_PERSIST_QUEUE_NAME:echomind.chat-memory.persist.requests}
     persist-exchange-name: ${ECHOMIND_MEMORY_PERSIST_EXCHANGE_NAME:echomind.chat-memory.persist.exchange}
     # 普通聊天记忆按 sessionId hash 到多个队列；每个分片单消费者，避免同一会话乱序。

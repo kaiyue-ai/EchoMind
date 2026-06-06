@@ -48,6 +48,17 @@ public interface ChatMessageMapper extends MybatisPlusMapper<ChatMessageEntity> 
             .last("limit " + Math.max(1, limit)));
     }
 
+    default List<ChatMessageEntity> selectByUserIdAndSessionIdAndRoleNotOrderByTimestampDescIdDesc(
+        String userId, String sessionId, String excludedRole, int limit) {
+        return selectList(Wrappers.lambdaQuery(ChatMessageEntity.class)
+            .eq(ChatMessageEntity::getUserId, userId)
+            .eq(ChatMessageEntity::getSessionId, sessionId)
+            .ne(ChatMessageEntity::getRole, excludedRole)
+            .orderByDesc(ChatMessageEntity::getTimestamp)
+            .orderByDesc(ChatMessageEntity::getId)
+            .last("limit " + Math.max(1, limit)));
+    }
+
     default long countByUserId(String userId) {
         return selectCount(Wrappers.lambdaQuery(ChatMessageEntity.class)
             .eq(ChatMessageEntity::getUserId, userId));

@@ -10,14 +10,14 @@
         </article>
       </div>
 
-      <div v-else-if="messages.length === 0" class="empty-chat">
+      <div v-else-if="displayMessages.length === 0" class="empty-chat">
         <div class="empty-chat-mark">EM</div>
         <h1>从一个任务开始</h1>
         <p>选择 Agent 和模型，直接把问题交给 EchoMind。</p>
       </div>
 
       <article
-        v-for="(message, index) in messages"
+        v-for="(message, index) in displayMessages"
         :key="index"
         :class="['message-row', `message-${message.role}`]"
       >
@@ -60,7 +60,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import { useAuthStore } from '../../stores/auth'
 
@@ -69,14 +69,16 @@ const props = defineProps({
   loadingHistory: { type: Boolean, default: false }
 })
 
+const DISPLAY_ROLES = new Set(['user', 'assistant', 'system'])
 const containerRef = ref(null)
 const authStore = useAuthStore()
+const displayMessages = computed(() => props.messages.filter(message => DISPLAY_ROLES.has(message?.role)))
 const isNearBottom = ref(true)
 const showJumpButton = ref(false)
 let scrollFrame = 0
 let queuedScrollBehavior = 'auto'
 
-watch(() => props.messages.length, (count, previousCount = 0) => {
+watch(() => displayMessages.value.length, (count, previousCount = 0) => {
   if (!props.loadingHistory) {
     if (count < previousCount) {
       isNearBottom.value = true

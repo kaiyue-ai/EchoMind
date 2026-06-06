@@ -33,6 +33,7 @@ public class PersistentChatMemoryStore {
 
     private static final int TITLE_MAX_CHARS = 60;
     private static final int LAST_MESSAGE_MAX_CHARS = 100;
+    private static final String TOOL_ROLE = "tool";
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final TypeReference<List<MessageAttachment>> ATTACHMENT_LIST_TYPE = new TypeReference<>() {};
 
@@ -214,8 +215,8 @@ public class PersistentChatMemoryStore {
     private SessionSummary toSummary(String userId, ChatSessionEntity session) {
         String lastMessage = "";
         List<ChatMessageEntity> lastRows =
-            messageMapper.selectByUserIdAndSessionIdOrderByTimestampDescIdDesc(
-                normalizeUserId(userId), session.getSessionId(), 1);
+            messageMapper.selectByUserIdAndSessionIdAndRoleNotOrderByTimestampDescIdDesc(
+                normalizeUserId(userId), session.getSessionId(), TOOL_ROLE, 1);
         if (!lastRows.isEmpty()) {
             lastMessage = truncate(lastRows.get(0).getContent(), LAST_MESSAGE_MAX_CHARS);
         }

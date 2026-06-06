@@ -14,6 +14,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 /**
  * 聊天治理服务
  * 
@@ -80,6 +82,14 @@ public class ChatGovernanceService {
             return RequestInspection.shortCircuit(governed.text());
         }
         return RequestInspection.continueWith(governed.text());
+    }
+
+    public List<String> reserveUserQuota(AuthUser authUser, String requestId) {
+        return quotaService.reserveUsage(authUser, requestId);
+    }
+
+    public void releaseReservations(List<String> reservationIds) {
+        usageService.releaseReservations(reservationIds);
     }
 
     /**
@@ -163,6 +173,7 @@ public class ChatGovernanceService {
                                                       PipelineContext ctx, long startedNanos) {
         // 检查是否需要记录模型使用（某些场景可能不需要记录）
         if (modelUsageNotApplicable(ctx)) {
+            usageService.releaseReservations(ctx);
             return null;
         }
 
@@ -192,6 +203,7 @@ public class ChatGovernanceService {
                                   long startedNanos, boolean error, String errorMessage) {
         // 非错误场景下检查是否需要记录
         if (!error && modelUsageNotApplicable(usageContext)) {
+            usageService.releaseReservations(usageContext);
             return;
         }
         

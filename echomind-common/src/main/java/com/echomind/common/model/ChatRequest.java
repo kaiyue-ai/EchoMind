@@ -17,22 +17,33 @@ public record ChatRequest(
     String modelId,
     String traceId,
     String traceparent, // 这是聊天请求的 Trace 父级，用于链路追踪
-    List<MessageAttachment> attachments
+    List<MessageAttachment> attachments,
+    List<String> userReservationIds
 ) {
+    public ChatRequest {
+        attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        userReservationIds = userReservationIds == null ? List.of() : List.copyOf(userReservationIds);
+    }
+
+    public ChatRequest(String requestId, String userId, String agentId, String sessionId, String message,
+                       String modelId, String traceId, String traceparent, List<MessageAttachment> attachments) {
+        this(requestId, userId, agentId, sessionId, message, modelId, traceId, traceparent, attachments, List.of());
+    }
+
     /** 兼容旧异步请求：没有附件时仍可按原字段创建。 */
     public ChatRequest(String requestId, String agentId, String sessionId, String message, String modelId) {
-        this(requestId, null, agentId, sessionId, message, modelId, null, null, null);
+        this(requestId, null, agentId, sessionId, message, modelId, null, null, null, List.of());
     }
 
     /** 兼容旧异步请求：没有用户身份时由消费端回退 default 用户。 */
     public ChatRequest(String requestId, String agentId, String sessionId, String message, String modelId,
                        List<MessageAttachment> attachments) {
-        this(requestId, null, agentId, sessionId, message, modelId, null, null, attachments);
+        this(requestId, null, agentId, sessionId, message, modelId, null, null, attachments, List.of());
     }
 
     /** 兼容第一阶段用户隔离请求：没有 traceId 时由消费端创建新的消费端 Trace。 */
     public ChatRequest(String requestId, String userId, String agentId, String sessionId, String message, String modelId,
                        List<MessageAttachment> attachments) {
-        this(requestId, userId, agentId, sessionId, message, modelId, null, null, attachments);
+        this(requestId, userId, agentId, sessionId, message, modelId, null, null, attachments, List.of());
     }
 }

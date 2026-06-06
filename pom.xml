@@ -53,7 +53,6 @@
         <knife4j.version>4.5.0</knife4j.version>
         <aliyun-oss.version>3.18.1</aliyun-oss.version>
         <pdfbox.version>2.0.31</pdfbox.version>
-        <milvus-sdk.version>2.6.20</milvus-sdk.version>
         <opentelemetry.instrumentation.version>2.26.0</opentelemetry.instrumentation.version>
 
         <maven-surefire-plugin.version>3.3.1</maven-surefire-plugin.version>
@@ -192,11 +191,6 @@
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${pdfbox.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.milvus</groupId>
-                <artifactId>milvus-sdk-java</artifactId>
-                <version>${milvus-sdk.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

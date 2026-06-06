@@ -71,13 +71,15 @@ public class DateQuerySkill implements Skill {
             "EchoMind",
             List.of("date", "time", "calendar", "weekday", "日期", "时间", "星期", "日历"),
             List.of(
-                "日期", "时间", "今天", "明天", "昨天", "前天", "后天", "星期", "周几", "几号",
-                "哪一天", "当前日期", "当前时间", "date", "time", "today", "tomorrow",
+                "日期", "时间", "今天", "今日", "当日", "本日", "当天", "明天", "昨天", "前天", "后天",
+                "星期", "周几", "几号", "哪一天", "当前日期", "今日日期", "当天日期", "当前时间",
+                "今日时间", "北京时间", "现在时间", "date", "time", "today", "tomorrow",
                 "yesterday", "weekday", "calendar"
             ),
             Map.of(
-                "date", List.of("日期", "几号", "哪天", "今天", "明天", "昨天", "后天", "前天"),
-                "time", List.of("时间", "几点", "当前时间", "现在时间", "time", "clock"),
+                "date", List.of("日期", "几号", "哪天", "今天", "今日", "当日", "本日", "当天",
+                    "明天", "昨天", "后天", "前天", "今日日期", "当天日期"),
+                "time", List.of("时间", "几点", "当前时间", "今日时间", "北京时间", "现在时间", "time", "clock"),
                 "weekday", List.of("星期", "周几", "礼拜几", "weekday", "day of week"),
                 "timezone", List.of("时区", "timezone", "zone")
             )

@@ -3,7 +3,6 @@ package com.echomind.usermemory.service;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.model.UserMemoryEvent;
-import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryEntry;
 import com.echomind.memory.usermemory.UserMemoryHit;
@@ -44,7 +43,6 @@ class UserMemoryServiceTest {
     void processesOneTurnImmediatelyAndWritesFactsAndProfileSnapshot() {
         Fixture fixture = fixture();
         Instant oldFirstObservedAt = Instant.parse("2026-01-01T00:00:00Z");
-        when(fixture.embeddingClient().embed(anyString())).thenReturn(Optional.of(new double[] {0.1, 0.2}));
         when(fixture.vectorStore().search(eq("user:user-a"), any(), eq(12), eq(0.3), eq(0.65))).thenReturn(List.of(
             new UserMemoryHit("old-fact", UserMemoryCategory.PREFERENCE, "用户喜欢英文注释", "", 0.8,
                 oldFirstObservedAt, oldFirstObservedAt, oldFirstObservedAt, 0.9)
@@ -98,8 +96,7 @@ class UserMemoryServiceTest {
     @Test
     void analyzesOnlyUserMessagesSoAssistantHallucinationsCannotBecomeEvidence() {
         Fixture fixture = fixture();
-        when(fixture.embeddingClient().embed(anyString())).thenReturn(Optional.of(new double[] {0.1, 0.2}));
-        when(fixture.vectorStore().search(eq("user:user-a"), any(), eq(12), eq(0.3), eq(0.65))).thenReturn(List.of());
+        when(fixture.vectorStore().search(eq("user:user-a"), eq("我叫秦墨舟"), eq(12), eq(0.3), eq(0.65))).thenReturn(List.of());
         when(fixture.analyzer().analyze(eq("user:user-a"), eq(""), any(), any(), eq(true), eq(true))).thenReturn(
             new UserMemoryAnalysisResult(List.of(), List.of(), List.of(), "")
         );
@@ -114,7 +111,7 @@ class UserMemoryServiceTest {
         assertThat(turnCaptor.getValue().messages())
             .extracting(AgentMessage::content)
             .containsExactly("我叫秦墨舟");
-        verify(fixture.embeddingClient()).embed("我叫秦墨舟");
+        verify(fixture.vectorStore()).search("user:user-a", "我叫秦墨舟", 12, 0.3, 0.65);
     }
 
     private UserMemoryEvent event(MemoryDecision decision) {
@@ -128,8 +125,6 @@ class UserMemoryServiceTest {
         UserMemoryStore vectorStore = mock(UserMemoryStore.class);
         UserProfileSnapshotStore snapshotStore = mock(UserProfileSnapshotStore.class);
         UserMemoryAnalyzer analyzer = mock(UserMemoryAnalyzer.class);
-        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
-        when(embeddingClient.embed(anyString())).thenReturn(Optional.empty());
         UserMemoryProperties properties = new UserMemoryProperties();
         properties.setRelatedFactTopK(12);
         properties.setMinConfidence(0.3);
@@ -138,18 +133,16 @@ class UserMemoryServiceTest {
             vectorStore,
             snapshotStore,
             analyzer,
-            embeddingClient,
             properties
         );
-        return new Fixture(service, vectorStore, snapshotStore, analyzer, embeddingClient);
+        return new Fixture(service, vectorStore, snapshotStore, analyzer);
     }
 
     private record Fixture(
         UserMemoryService service,
         UserMemoryStore vectorStore,
         UserProfileSnapshotStore snapshotStore,
-        UserMemoryAnalyzer analyzer,
-        EmbeddingClient embeddingClient
+        UserMemoryAnalyzer analyzer
     ) {
     }
 }

@@ -3,7 +3,6 @@ package com.echomind.usermemory.service;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.model.UserMemoryEvent;
-import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryEntry;
 import com.echomind.memory.usermemory.UserMemoryHit;
@@ -30,7 +29,6 @@ public class UserMemoryService {
     private final UserMemoryStore vectorStore;
     private final UserProfileSnapshotStore snapshotStore;
     private final UserMemoryAnalyzer analyzer;
-    private final EmbeddingClient embeddingClient;
     private final UserMemoryProperties properties;
 
     public void process(UserMemoryEvent event) {
@@ -95,15 +93,13 @@ public class UserMemoryService {
         if (text == null || text.isBlank()) {
             return List.of();
         }
-        return embeddingClient.embed(text)
-            .map(vector -> vectorStore.search(
-                userMemoryKey,
-                vector,
-                Math.max(1, properties.getRelatedFactTopK()),
-                Math.max(0, properties.getMinConfidence()),
-                clampSimilarity(properties.getMergeMinSimilarity())
-            ))
-            .orElseGet(List::of);
+        return vectorStore.search(
+            userMemoryKey,
+            text,
+            Math.max(1, properties.getRelatedFactTopK()),
+            Math.max(0, properties.getMinConfidence()),
+            clampSimilarity(properties.getMergeMinSimilarity())
+        );
     }
 
     private int applyFactChanges(String userMemoryKey,
@@ -116,10 +112,6 @@ public class UserMemoryService {
             changed++;
         }
         for (UserMemoryAnalysisResult.FactToUpdate item : result.factsToUpdate()) {
-            Optional<double[]> embedding = embeddingClient.embed(item.content());
-            if (embedding.isEmpty()) {
-                continue;
-            }
             UserMemoryHit old = relatedFacts.stream()
                 .filter(hit -> hit.entryId().equals(item.factId()))
                 .findFirst()
@@ -134,16 +126,11 @@ public class UserMemoryService {
                 item.confidence(),
                 old == null || old.firstObservedAt() == null ? observedAt : old.firstObservedAt(),
                 observedAt,
-                Instant.now(),
-                embedding.get()
+                Instant.now()
             ));
             changed++;
         }
         for (UserMemoryAnalysisResult.FactToAdd item : dedupeAdds(result.factsToAdd(), relatedFacts)) {
-            Optional<double[]> embedding = embeddingClient.embed(item.content());
-            if (embedding.isEmpty()) {
-                continue;
-            }
             vectorStore.save(new UserMemoryEntry(
                 userMemoryKey,
                 UUID.randomUUID().toString(),
@@ -153,8 +140,7 @@ public class UserMemoryService {
                 item.confidence(),
                 observedAt,
                 observedAt,
-                Instant.now(),
-                embedding.get()
+                Instant.now()
             ));
             changed++;
         }

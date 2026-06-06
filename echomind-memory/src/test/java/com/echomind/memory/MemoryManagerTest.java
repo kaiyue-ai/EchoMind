@@ -121,6 +121,20 @@ class MemoryManagerTest {
             .containsExactly("不会进入新缓存");
     }
 
+    @Test
+    void sessionPreviewUsesLatestNonToolMessage() {
+        memoryManager.addMessage("default", "session-tool-preview", "agent-1", AgentMessage.user("查今天新闻"));
+        memoryManager.addMessage("default", "session-tool-preview", "agent-1", AgentMessage.assistant("正在整理"));
+        memoryManager.addMessage("default", "session-tool-preview", "agent-1",
+            AgentMessage.tool("open_web_search", "open_web_search"));
+
+        assertThat(memoryManager.listSessions("default"))
+            .filteredOn(summary -> "session-tool-preview".equals(summary.sessionId()))
+            .singleElement()
+            .extracting(com.echomind.common.model.SessionSummary::lastMessage)
+            .isEqualTo("正在整理");
+    }
+
     @SpringBootConfiguration
     @EnableAutoConfiguration
     @MapperScan(basePackages = "com.echomind.memory.persistence.mapper")

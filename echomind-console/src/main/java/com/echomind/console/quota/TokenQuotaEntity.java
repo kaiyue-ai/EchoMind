@@ -16,16 +16,13 @@ import java.time.Instant;
 public class TokenQuotaEntity {
 
     @TableId(value = "user_id", type = IdType.INPUT)
-    private String userId;
+    private String userId; // 用户名
 
     @TableField("daily_limit_tokens")
-    private Long dailyLimitTokens;
+    private Long dailyLimitTokens; // 每日Token
 
     @TableField("monthly_limit_tokens")
-    private Long monthlyLimitTokens;
-
-    @TableField("warning_threshold_percent")
-    private int warningThresholdPercent = 80;
+    private Long monthlyLimitTokens; // 每月token
 
     private TokenQuotaStatus status = TokenQuotaStatus.ACTIVE;
 

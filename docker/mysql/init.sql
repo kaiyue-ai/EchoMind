@@ -73,7 +73,6 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_token_quotas (
     user_id VARCHAR(128) PRIMARY KEY,
     daily_limit_tokens BIGINT,
     monthly_limit_tokens BIGINT,
-    warning_threshold_percent INT NOT NULL DEFAULT 80,
     status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -104,6 +103,19 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_provider_token_budgets (
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     INDEX idx_provider_token_budgets_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Provider Token 预算结算账本：模型返回真实 provider usage 后按 Provider 日/周/月桶原子结算
+CREATE TABLE IF NOT EXISTS echomind.echomind_provider_token_budget_usage (
+    provider_id VARCHAR(128) NOT NULL,
+    scope VARCHAR(16) NOT NULL,
+    bucket_start DATE NOT NULL,
+    used_tokens BIGINT NOT NULL DEFAULT 0,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (provider_id, scope, bucket_start),
+    INDEX idx_provider_token_budget_usage_bucket (scope, bucket_start),
+    CONSTRAINT chk_provider_token_budget_usage_scope CHECK (scope IN ('daily', 'weekly', 'monthly'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 项目三治理：敏感数据规则和事件，只保存脱敏后的样本

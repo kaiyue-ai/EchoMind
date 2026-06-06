@@ -10,7 +10,7 @@ public interface UserMemoryStore {
 
     // 搜索
     List<UserMemoryHit> search(String sessionId,
-                               double[] queryVector,
+                               String query,
                                int topK,
                                double minConfidence,
                                double minSimilarity);

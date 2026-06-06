@@ -30,9 +30,8 @@ import com.echomind.memory.MemoryManager;
 import com.echomind.memory.cache.InMemoryRecentMemoryCache;
 import com.echomind.memory.cache.RecentMemoryCache;
 import com.echomind.memory.cache.RedisRecentMemoryCache;
-import com.echomind.memory.embedding.DashScopeEmbeddingClient;
-import com.echomind.memory.embedding.DisabledEmbeddingClient;
-import com.echomind.memory.embedding.EmbeddingClient;
+import com.echomind.memory.embedding.DisabledEmbeddingModel;
+import com.echomind.memory.embedding.DisabledVectorStore;
 
 import com.echomind.memory.persistence.mapper.ChatMessageMapper;
 import com.echomind.memory.persistence.mapper.ChatSessionMapper;
@@ -42,9 +41,8 @@ import com.echomind.memory.knowledge.AgentKnowledgeService;
 import com.echomind.memory.usermemory.impl.NoopUserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserMemoryStore;
-import com.echomind.memory.milvus.MilvusClientFactory;
-import com.echomind.memory.usermemory.impl.MilvusUserMemoryStore;
 import com.echomind.memory.usermemory.impl.RedisUserProfileSnapshotStore;
+import com.echomind.memory.usermemory.impl.SpringAiUserMemoryStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
 import com.echomind.common.messaging.ChatMemoryShardSupport;
@@ -58,6 +56,18 @@ import com.echomind.skill.storage.AliyunOssObjectStorageService;
 import com.echomind.skill.storage.LocalObjectStorageService;
 import com.echomind.skill.storage.ObjectStorageService;
 import lombok.extern.slf4j.Slf4j;
+import io.milvus.client.MilvusServiceClient;
+import io.milvus.param.ConnectParam;
+import io.milvus.param.IndexType;
+import io.milvus.param.MetricType;
+import org.springframework.ai.document.MetadataMode;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.milvus.MilvusVectorStore;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.amqp.core.Binding;
@@ -70,6 +80,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -86,6 +97,8 @@ import java.util.*;
 @EnableConfigurationProperties(EchoMindProperties.class)
 @Slf4j
 public class EchoMindAutoConfiguration {
+
+    private static final String MILVUS_HNSW_INDEX_PARAMS = "{\"M\":16,\"efConstruction\":256}";
 
     // --- 大模型装配 ---
 
@@ -251,25 +264,25 @@ public class EchoMindAutoConfiguration {
         return new PersistentChatMemoryStore(sessionMapper, messageMapper, mapper);
     }
 
-    @Bean
-    public EmbeddingClient embeddingClient(EchoMindProperties props, ObjectMapper mapper) {
+    @Bean("echomindEmbeddingModel")
+    public EmbeddingModel embeddingModel(EchoMindProperties props) {
         var memory = props.getMemory();
-        String apiKey = firstNonBlank(
-            memory.getEmbeddingApiKey(),
-            System.getenv("ALIYUN_BAILIAN_API_KEY"),
-            System.getenv("DASHSCOPE_API_KEY")
-        );
-        if (!memory.isEmbeddingEnabled() || isBlank(apiKey)) {
+        String apiKey = embeddingApiKey(memory);
+        if (!embeddingAvailable(memory)) {
             log.warn("Memory embedding disabled: no ALIYUN_BAILIAN_API_KEY/DASHSCOPE_API_KEY configured");
-            return new DisabledEmbeddingClient();
+            return new DisabledEmbeddingModel(memory.getEmbeddingDimension());
         }
-        log.info("Using DashScope embedding model: {}", memory.getEmbeddingModel());
-        return new DashScopeEmbeddingClient(
-            memory.getEmbeddingBaseUrl(),
-            apiKey,
-            memory.getEmbeddingModel(),
-            mapper
-        );
+        log.info("Using Spring AI OpenAI-compatible embedding model: {}", memory.getEmbeddingModel());
+        OpenAiApi openAiApi = OpenAiApi.builder()
+            .baseUrl(memory.getEmbeddingBaseUrl())
+            .apiKey(apiKey)
+            .embeddingsPath("/v1/embeddings")
+            .build();
+        OpenAiEmbeddingOptions options = OpenAiEmbeddingOptions.builder()
+            .model(memory.getEmbeddingModel())
+            .dimensions(memory.getEmbeddingDimension())
+            .build();
+        return new OpenAiEmbeddingModel(openAiApi, MetadataMode.EMBED, options);
     }
 
     @Bean
@@ -296,24 +309,56 @@ public class EchoMindAutoConfiguration {
     }
 
     @Bean(destroyMethod = "close")
-    public MilvusClientFactory milvusClientFactory(EchoMindProperties props) {
-        return new MilvusClientFactory(
-            props.getMemory().getMilvusHost(),
-            props.getMemory().getMilvusPort()
+    @Lazy
+    public MilvusServiceClient milvusServiceClient(EchoMindProperties props) {
+        return new MilvusServiceClient(ConnectParam.newBuilder()
+            .withHost(props.getMemory().getMilvusHost())
+            .withPort(props.getMemory().getMilvusPort())
+            .build());
+    }
+
+    @Bean("agentKnowledgeVectorStore")
+    public VectorStore agentKnowledgeVectorStore(ObjectProvider<MilvusServiceClient> milvusServiceClient,
+                                                 @Qualifier("echomindEmbeddingModel") EmbeddingModel embeddingModel,
+                                                 EchoMindProperties props) throws Exception {
+        if (!embeddingAvailable(props.getMemory())) {
+            return new DisabledVectorStore();
+        }
+        MilvusVectorStore store = milvusVectorStore(
+            milvusServiceClient.getObject(),
+            embeddingModel,
+            props.getMemory().getMilvusKnowledgeCollection(),
+            props.getMemory().getEmbeddingDimension()
         );
+        store.afterPropertiesSet();
+        return store;
+    }
+
+    @Bean("userMemoryVectorStore")
+    public VectorStore userMemoryVectorStore(ObjectProvider<MilvusServiceClient> milvusServiceClient,
+                                             @Qualifier("echomindEmbeddingModel") EmbeddingModel embeddingModel,
+                                             EchoMindProperties props) throws Exception {
+        if (!embeddingAvailable(props.getMemory())) {
+            return new DisabledVectorStore();
+        }
+        MilvusVectorStore store = milvusVectorStore(
+            milvusServiceClient.getObject(),
+            embeddingModel,
+            props.getMemory().getMilvusUserMemoryCollection(),
+            props.getMemory().getEmbeddingDimension()
+        );
+        store.afterPropertiesSet();
+        return store;
     }
 
     @Bean
     public AgentKnowledgeService agentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
-                                                       EmbeddingClient embeddingClient,
                                                        EchoMindProperties props,
-                                                       MilvusClientFactory milvusClientFactory) {
+                                                       @Qualifier("agentKnowledgeVectorStore") VectorStore vectorStore) {
         return new AgentKnowledgeService(
             documentMapper,
-            embeddingClient,
-            milvusClientFactory.getClient(),
-            props.getMemory().isEmbeddingEnabled(),
-            props.getMemory().getMilvusKnowledgeCollection(),
+            vectorStore,
+            embeddingAvailable(props.getMemory()),
             props.getMemory().getKnowledgeChunkSize(),
             props.getMemory().getKnowledgeChunkOverlapRatio(),
             props.getMemory().getKnowledgeMinVectorSimilarity(),
@@ -322,7 +367,8 @@ public class EchoMindAutoConfiguration {
             props.getMemory().getKnowledgeOcrDpi(),
             props.getMemory().getKnowledgeOcrMinTextChars(),
             props.getMemory().getKnowledgeOcrMaxPages(),
-            props.getMemory().getKnowledgeOcrTesseractCommand()
+            props.getMemory().getKnowledgeOcrTesseractCommand(),
+            props.getMemory().getMilvusKnowledgeCollection()
         );
     }
 
@@ -368,11 +414,11 @@ public class EchoMindAutoConfiguration {
 
     @Bean
     public UserMemoryStore userMemoryStore(EchoMindProperties props,
-                                           MilvusClientFactory milvusClientFactory) {
-        return new MilvusUserMemoryStore(
-            milvusClientFactory.getClient(),
-            props.getMemory().getMilvusUserMemoryCollection()
-        );
+                                           @Qualifier("userMemoryVectorStore") VectorStore vectorStore) {
+        if (!embeddingAvailable(props.getMemory())) {
+            return new NoopUserMemoryStore();
+        }
+        return new SpringAiUserMemoryStore(vectorStore);
     }
 
     @Bean
@@ -429,6 +475,20 @@ public class EchoMindAutoConfiguration {
             "x-dead-letter-exchange", RabbitReliableMessaging.DEAD_LETTER_EXCHANGE,
             "x-dead-letter-routing-key", deadLetterRoutingKey
         ));
+    }
+
+    private MilvusVectorStore milvusVectorStore(MilvusServiceClient client,
+                                                EmbeddingModel embeddingModel,
+                                                String collectionName,
+                                                int dimension) {
+        return MilvusVectorStore.builder(client, embeddingModel)
+            .collectionName(collectionName)
+            .embeddingDimension(dimension)
+            .metricType(MetricType.COSINE)
+            .indexType(IndexType.HNSW)
+            .indexParameters(MILVUS_HNSW_INDEX_PARAMS)
+            .initializeSchema(true)
+            .build();
     }
 
     @Bean
@@ -559,7 +619,6 @@ public class EchoMindAutoConfiguration {
     @Bean
     public ExecutionPipeline executionPipeline(MemoryManager memory,
                                                  AgentKnowledgeService knowledgeService,
-                                                 EmbeddingClient embeddingClient,
                                                  ObjectProvider<UserMemoryStore> userMemoryStore,
                                                  ObjectProvider<UserProfileSnapshotStore> userProfileSnapshotStore,
                                                  ChatMemoryPersistPublisher chatMemoryPersistPublisher,
@@ -573,7 +632,6 @@ public class EchoMindAutoConfiguration {
         List<PipelineStage> stages = List.of(
             new ContextEnrichStage(memory),
             new UserMemoryRetrievalStage(
-                embeddingClient,
                 userMemoryStore.getIfAvailable(NoopUserMemoryStore::new),
                 userProfileSnapshotStore.getIfAvailable(UserProfileSnapshotStore::noop),
                 props.getUserMemory().isEnabled(),
@@ -582,7 +640,7 @@ public class EchoMindAutoConfiguration {
                 props.getUserMemory().getRetrievalMinSimilarity(),
                 retrievalQueryRewriter
             ),
-            new KnowledgeRetrievalStage(knowledgeService, embeddingClient, props.getMemory().getKnowledgeTopK(),
+            new KnowledgeRetrievalStage(knowledgeService, props.getMemory().getKnowledgeTopK(),
                 retrievalQueryRewriter),
             new ModelResolutionStage(router),
             new ProviderTokenBudgetGuardStage(
@@ -681,5 +739,17 @@ public class EchoMindAutoConfiguration {
             }
         }
         return null;
+    }
+
+    private String embeddingApiKey(EchoMindProperties.Memory memory) {
+        return firstNonBlank(
+            memory.getEmbeddingApiKey(),
+            System.getenv("ALIYUN_BAILIAN_API_KEY"),
+            System.getenv("DASHSCOPE_API_KEY")
+        );
+    }
+
+    private boolean embeddingAvailable(EchoMindProperties.Memory memory) {
+        return memory.isEmbeddingEnabled() && !isBlank(embeddingApiKey(memory));
     }
 }

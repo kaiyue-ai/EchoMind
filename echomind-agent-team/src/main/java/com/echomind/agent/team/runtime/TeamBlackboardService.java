@@ -1523,6 +1523,7 @@ public class TeamBlackboardService {
         String userId = normalizeUserId(run == null ? null : run.getUserId());
         TeamUsageRecorder recorder = usageRecorder == null ? TeamUsageRecorder.NOOP : usageRecorder;
         PipelineContext result = null;
+        List<String> userReservationIds = List.of();
         long startedNanos = 0L;
         Span span = EchoMindTrace.startSpan(operation);
         span.setAttribute("echomind.user_id", userId);
@@ -1531,9 +1532,11 @@ public class TeamBlackboardService {
         try (Scope ignored = span.makeCurrent()) {
             try {
                 recorder.assertAllowed(userId, agentId, sessionId);
+                userReservationIds = recorder.reserveUserQuota(userId, agentId, sessionId);
                 startedNanos = System.nanoTime();
                 result = executeInternalForUser(userId, agentId, sessionId, prompt, toolExposureEnabled);
                 fillTeamContext(result, userId, agentId, sessionId);
+                attachUserReservations(result, userReservationIds);
                 if (result != null) {
                     span.setAttribute("echomind.model_id", nullToBlank(result.getModelId()));
                 }
@@ -1543,7 +1546,11 @@ public class TeamBlackboardService {
                 return result;
             } catch (RuntimeException e) {
                 EchoMindTrace.recordException(span, e);
+                attachUserReservations(result, userReservationIds);
                 recorder.record(operation, userId, agentId, sessionId, result, startedNanos, true, e.getMessage());
+                if (result == null) {
+                    recorder.releaseReservations(userReservationIds);
+                }
                 throw e;
             }
         } finally {
@@ -1558,6 +1565,13 @@ public class TeamBlackboardService {
         ctx.setUserId(nonBlank(ctx.getUserId(), userId));
         ctx.setAgentId(nonBlank(ctx.getAgentId(), agentId));
         ctx.setSessionId(nonBlank(ctx.getSessionId(), sessionId));
+    }
+
+    private void attachUserReservations(PipelineContext ctx, List<String> reservationIds) {
+        if (ctx == null || reservationIds == null || reservationIds.isEmpty()) {
+            return;
+        }
+        ctx.getAttributes().putIfAbsent(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS, reservationIds);
     }
 
     private PipelineContext executeInternalForUser(String userId, String agentId, String sessionId, String prompt,

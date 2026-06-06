@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 记忆应用服务。
@@ -24,6 +25,8 @@ import java.util.List;
 @RequiredArgsConstructor
 @Slf4j
 public class MemoryApplicationService {
+
+    private static final Set<String> DISPLAY_ROLES = Set.of("user", "assistant", "system");
 
     private final MemoryManager memoryManager;
     private final ObjectStorageService storageService;
@@ -42,6 +45,7 @@ public class MemoryApplicationService {
     public List<AgentMessage> getChatHistory(String sessionId) {
         validateSessionId(sessionId);
         return memoryManager.getFullContext(AuthContext.userId(), sessionId).stream()
+            .filter(this::isDisplayableMessage)
             .map(this::stripHiddenMemoryDecision)
             .map(this::refreshAttachmentUrls)
             .toList();
@@ -62,6 +66,10 @@ public class MemoryApplicationService {
             .toList();
         return new AgentMessage(message.role(), message.content(), message.timestamp(),
             message.metadata(), refreshed);
+    }
+
+    private boolean isDisplayableMessage(AgentMessage message) {
+        return message != null && DISPLAY_ROLES.contains(message.role());
     }
 
     private AgentMessage stripHiddenMemoryDecision(AgentMessage message) {

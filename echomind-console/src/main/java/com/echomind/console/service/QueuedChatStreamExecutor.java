@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -50,6 +51,7 @@ class QueuedChatStreamExecutor {
                     throw new IllegalStateException("stream execution was not created");
                 }
                 usageContext = execution.context();
+                attachRequestReservations(usageContext, request);
                 ensureTraceId(usageContext, span);
                 usageContext.setToolProgressSink(event -> {
                     if (PipelineContext.ToolProgressEvent.TYPE_START.equals(event.type())) {
@@ -101,6 +103,7 @@ class QueuedChatStreamExecutor {
                 PipelineContext errorCtx = usageContext == null ? new PipelineContext() : usageContext;
                 fillErrorContext(errorCtx, request, span);
                 if (isQuotaOrProviderBudgetExceeded(e)) {
+                    governanceService.releaseReservations(reservationIds(errorCtx, request));
                     return ChatResponse.error(request.requestId(), e.getMessage(), errorCtx.getTraceId(),
                         currentTraceparent());
                 }
@@ -123,6 +126,7 @@ class QueuedChatStreamExecutor {
     }
 
     private void fillErrorContext(PipelineContext ctx, ChatRequest request, Span span) {
+        attachRequestReservations(ctx, request);
         ensureTraceId(ctx, span);
         if (ctx.getUserId() == null || ctx.getUserId().isBlank()) {
             ctx.setUserId(request.userId());
@@ -133,6 +137,23 @@ class QueuedChatStreamExecutor {
         if (ctx.getSessionId() == null || ctx.getSessionId().isBlank()) {
             ctx.setSessionId(request.sessionId());
         }
+    }
+
+    private void attachRequestReservations(PipelineContext ctx, ChatRequest request) {
+        if (ctx == null || request == null || request.userReservationIds().isEmpty()) {
+            return;
+        }
+        ctx.getAttributes().putIfAbsent(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS,
+            request.userReservationIds());
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> reservationIds(PipelineContext ctx, ChatRequest request) {
+        Object value = ctx == null ? null : ctx.getAttributes().get(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS);
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        return request == null ? List.of() : request.userReservationIds();
     }
 
     private void tagRequest(Span span, ChatRequest request) {

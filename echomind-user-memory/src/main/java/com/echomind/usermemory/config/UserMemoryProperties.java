@@ -19,10 +19,11 @@ public class UserMemoryProperties {
     private String extractorModelId = "deepseek:deepseek-v4-flash";
     private String milvusHost = "localhost";
     private int milvusPort = 19530;
-    private String milvusUserMemoryCollection = "echomind_user_memory_v2";
-    private String embeddingBaseUrl = "https://dashscope.aliyuncs.com";
+    private String milvusUserMemoryCollection = "echomind_user_memory_spring_ai_v1";
+    private String embeddingBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode";
     private String embeddingApiKey;
-    private String embeddingModel = "tongyi-embedding-vision-plus";
+    private String embeddingModel = "text-embedding-v4";
+    private int embeddingDimension = 1024;
     private String deepSeekApiKey;
     private String deepSeekBaseUrl;
     private String deepSeekModel = "deepseek-v4-flash";
