@@ -12,6 +12,8 @@ export const useTeamStore = defineStore('team', {
     teams: [],
     selectedTeam: null,
     taskInput: '',
+    reviewPreset: 'quality',
+    reviewOptions: defaultReviewOptions(),
     teamResult: null,
     currentRun: null,
     userRuns: [],
@@ -119,14 +121,14 @@ export const useTeamStore = defineStore('team', {
         this.deleting = false
       }
     },
-    async executeTask(task = this.taskInput) {
+    async executeTask(task = this.taskInput, reviewOptions = this.reviewOptions) {
       if (!this.selectedTeam || !task?.trim()) return null
       this.executing = true
       this.error = null
       this.teamResult = null
       this.currentRun = null
       try {
-        this.currentRun = await api.team.createRun(this.selectedTeam.teamId, task)
+        this.currentRun = await api.team.createRun(this.selectedTeam.teamId, task, normalizeReviewOptions(reviewOptions))
         await this.loadTeamRuns(this.selectedTeam.teamId).catch(() => {})
         this.startPolling(this.currentRun.runId)
         return this.currentRun
@@ -189,3 +191,19 @@ export const useTeamStore = defineStore('team', {
     }
   }
 })
+
+function defaultReviewOptions() {
+  return {
+    planReviewEnabled: true,
+    subReviewEnabled: true,
+    globalReviewEnabled: true,
+    simpleFastPathEnabled: false
+  }
+}
+
+function normalizeReviewOptions(options) {
+  return {
+    ...defaultReviewOptions(),
+    ...(options || {})
+  }
+}

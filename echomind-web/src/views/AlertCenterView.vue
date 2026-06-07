@@ -312,8 +312,6 @@ function typeLabel(type) {
     ERROR_RATE: '错误率',
     PROVIDER_TOKEN_BUDGET_EXCEEDED: 'Provider 预算超限',
     PROVIDER_TOKEN_BUDGET_WARNING: 'Provider 预算预警',
-    TOKEN_QUOTA_EXCEEDED: '用户 Token 超限（历史）',
-    TOKEN_QUOTA_WARNING: '用户 Token 预警（历史）',
     SENSITIVE_DATA: '敏感数据'
   }[type] || type
 }

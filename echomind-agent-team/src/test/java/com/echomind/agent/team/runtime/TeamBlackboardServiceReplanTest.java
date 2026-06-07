@@ -78,6 +78,121 @@ class TeamBlackboardServiceReplanTest {
     }
 
     @Test
+    void simpleFastPathReturnsExecutorOutputWithoutReviewOrMerge() {
+        RuntimeHarness harness = new RuntimeHarness();
+        TeamRunEntity run = harness.run();
+        run.setSimpleFastPathEnabled(true);
+        harness.wire(run);
+
+        when(harness.orchestrator.executeInternal(eq("planner"), eq("team-run-run-1-planner"), anyString(), eq(false)))
+            .thenReturn(context("""
+                {"taskLevel":"SIMPLE","steps":[{"clientStepId":"draft","title":"资料整理","description":"整理用户给出的材料","requiredCapabilities":["general"],"acceptanceCriteria":"输出清晰初稿"}]}
+                """));
+        when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
+            .thenReturn(context("简易初稿"));
+
+        harness.service.executeRun("run-1");
+
+        assertThat(run.getStatus()).isEqualTo(TeamRunStatus.COMPLETED);
+        assertThat(run.getFinalOutput()).isEqualTo("简易初稿");
+        verify(harness.orchestrator, never()).executeInternal(eq("reviewer"), anyString(), anyString(), eq(false));
+        verify(harness.orchestrator, never()).executeInternal(eq("planner"), contains("agent-selector"), anyString(), eq(false));
+        verify(harness.orchestrator, never()).executeInternal(eq("reviewer"), contains("conflict-detector"), anyString(), eq(false));
+    }
+
+    @Test
+    void disabledPlanReviewSkipsReviewerButStillExecutesGlobalReview() {
+        RuntimeHarness harness = new RuntimeHarness();
+        TeamRunEntity run = harness.run();
+        run.setPlanReviewEnabled(false);
+        harness.wire(run);
+
+        when(harness.orchestrator.executeInternal(eq("planner"), eq("team-run-run-1-planner"), anyString(), eq(false)))
+            .thenReturn(context("""
+                {"taskLevel":"COMPLEX","steps":[{"clientStepId":"draft","title":"资料整理","description":"整理用户给出的材料","requiredCapabilities":["general"],"acceptanceCriteria":"输出清晰初稿"}]}
+                """));
+        when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
+            .thenReturn(context("执行输出"));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), contains("acting as GlobalReviewer"), eq(false)))
+            .thenReturn(context("""
+                {"action":"CONTINUE","reason":"终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
+                """));
+
+        harness.service.executeRun("run-1");
+
+        assertThat(run.getStatus()).isEqualTo(TeamRunStatus.COMPLETED);
+        assertThat(run.getPlanReviewJson()).contains("用户跳过 PlanReview");
+        verify(harness.orchestrator, never()).executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
+            contains("Review whether the Planner"), eq(false));
+    }
+
+    @Test
+    void disabledGlobalReviewUsesMergeOutputAsFinalOutput() {
+        RuntimeHarness harness = new RuntimeHarness();
+        TeamRunEntity run = harness.run();
+        run.setGlobalReviewEnabled(false);
+        harness.wire(run);
+
+        when(harness.orchestrator.executeInternal(eq("planner"), eq("team-run-run-1-planner"), anyString(), eq(false)))
+            .thenReturn(context("""
+                {"taskLevel":"COMPLEX","steps":[{"clientStepId":"draft","title":"资料整理","description":"整理用户给出的材料","requiredCapabilities":["general"],"acceptanceCriteria":"输出清晰初稿"}]}
+                """));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), contains("Review whether the Planner"), eq(false)))
+            .thenReturn(context("""
+                {"action":"CONTINUE","reason":"计划通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":""}
+                """));
+        when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
+            .thenReturn(context("执行输出"));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), contains("conflict-detector"), anyString(), eq(false)))
+            .thenReturn(context("""
+                {"hasConflict":false,"conflictFields":[],"affectedStepIds":[],"reason":"无冲突","normalizationAdvice":""}
+                """));
+
+        harness.service.executeRun("run-1");
+
+        assertThat(run.getStatus()).isEqualTo(TeamRunStatus.COMPLETED);
+        assertThat(run.getGlobalReviewJson()).contains("用户跳过 GlobalReview");
+        assertThat(run.getFinalOutput()).contains("执行输出");
+        verify(harness.orchestrator, never()).executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
+            contains("acting as GlobalReviewer"), eq(false));
+    }
+
+    @Test
+    void disabledSubReviewMarksHighRiskStepAsReviewSkipped() {
+        RuntimeHarness harness = new RuntimeHarness();
+        TeamRunEntity run = harness.run();
+        run.setSubReviewEnabled(false);
+        harness.wire(run);
+
+        when(harness.orchestrator.executeInternal(eq("planner"), eq("team-run-run-1-planner"), anyString(), eq(false)))
+            .thenReturn(context("""
+                {"taskLevel":"COMPLEX","steps":[{"clientStepId":"risk","title":"风险任务","description":"处理高风险材料","requiredCapabilities":["general"],"acceptanceCriteria":"输出可交付结果","riskLevel":"HIGH","riskReason":"需要人工质量闸门"}]}
+                """));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), contains("Review whether the Planner"), eq(false)))
+            .thenReturn(context("""
+                {"action":"CONTINUE","reason":"计划通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":""}
+                """));
+        when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
+            .thenReturn(context("高风险输出"));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), contains("acting as GlobalReviewer"), eq(false)))
+            .thenReturn(context("""
+                {"action":"CONTINUE","reason":"终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
+                """));
+
+        harness.service.executeRun("run-1");
+
+        assertThat(run.getStatus()).isEqualTo(TeamRunStatus.COMPLETED);
+        assertThat(harness.persistedSteps)
+            .singleElement()
+            .satisfies(step -> {
+                assertThat(step.getQualityStatus()).isEqualTo(TeamStepQualityStatus.REVIEW_SKIPPED);
+                assertThat(step.getSubReviewJson()).contains("用户跳过 SubReview");
+            });
+        verify(harness.orchestrator, never()).executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
+            contains("SubReviewer"), eq(false));
+    }
+
+    @Test
     void resultReplanPreservesOldStepsAndCompletesRun() {
         RuntimeHarness harness = new RuntimeHarness();
         TeamRunEntity run = harness.run();

@@ -360,16 +360,16 @@ Team 已演进为 MySQL 黑板驱动的异步协作：
 - `POST /api/teams/{teamId}/runs/{runId}/resume`：Reviewer 要求澄清后提交用户补充信息并继续 Run。
 - `GET /api/team-runs`：查询当前用户所有 Team Run 历史，与普通聊天会话历史分离。
 
-Team v2 的执行链路是 `Planner -> Reviewer 规划审查 -> TeamControlCenter DAG 调度 -> AgentSelector -> Executor -> SubReviewer(高风险) -> MergeAgent -> ConflictDetector -> PlannerArbitration(必要时) -> GlobalReviewer`。
+Team v2 的默认执行链路是 `Planner -> Reviewer 规划审查 -> TeamControlCenter DAG 调度 -> AgentSelector -> Executor -> SubReviewer(高风险) -> MergeAgent -> ConflictDetector -> PlannerArbitration(必要时) -> GlobalReviewer`。
 Planner 只输出 `taskLevel`、`requiredCapabilities`、`dependsOn`、`riskLevel` 等结构化约束，不在计划里硬指定 Agent；执行前 `AgentSelector` 会把候选 Executor、能力标签和能力匹配分交给模型自主选择，模型选择失败或返回无效候选时才按能力匹配分与 `sortOrder` 稳定兜底。`RiskPolicy` 统一裁决是否进入 SubReviewer，避免按任务名、Skill 名或 Agent 名硬编码。
-`taskLevel=SIMPLE` 时走快路径：创建 `simple-draft` Step 生成初稿，再进入 GlobalReviewer 简易终审；复杂任务继续进入 DAG 并发调度。
+每次 Run 可携带 `reviewOptions` 选择是否启用 PlanReview、SubReview、GlobalReview 和 SIMPLE 直返；默认保持质量优先，全审查开启且 SIMPLE 不直返。开启 SIMPLE 直返后，`taskLevel=SIMPLE` 且只有一个可执行 Step 时使用规则能力匹配选择单 Executor，执行后直接写最终结果；其他任务继续进入 DAG 并发调度。
 
 Reviewer 是状态机质量闸门：规划后审查 Planner 的 Step，执行后对照初始需求审查 Executor 原始结果。
 Reviewer 可返回 `CONTINUE`、`RETRY`、`PARTIAL_REPLAN`、`REPLAN`、`ASK_CLARIFICATION` 或 `FAILED`；
 `RETRY` 只重跑指定 Step，`PARTIAL_REPLAN` 会把局部 DAG 分支及其下游标记为 `SUPERSEDED` 并重规划替代子图，`REPLAN` 用于结果阶段发现 Step 结构缺失或拆解方向错误时重新规划，默认最多 2 次。
 每次重试必须把错误原因、修改意见和上一轮输出摘要写入 Step 的 `reflectionJson`，再放进下一轮 Executor prompt。
-MergeAgent 输出后先走 ConflictDetector；如 `conflictReportJson.hasConflict=true`，Planner 产出 `arbitrationJson`，MergeAgent 带仲裁结果二次聚合。仲裁仍无法消除冲突时交给 GlobalReviewer 判定重试、局部重规划、整体重规划或失败。
-Team 运行保护由 `echomind.team.runtime` 配置：默认 Planner 复审重试 2 次、结果重规划 2 次、Step 重试 2 次、Reviewer JSON 修复 3 次、仲裁 2 次、并发 Step 3 个、单 Step 180 秒、单 Run 1200 秒；属性类会对外部配置做上限钳制，避免误配成无限或过高重试。
+MergeAgent 输出后先走 ConflictDetector；如 `conflictReportJson.hasConflict=true`，Planner 产出 `arbitrationJson`，MergeAgent 带仲裁结果二次聚合。仲裁仍无法消除冲突时交给 GlobalReviewer 判定重试、局部重规划、整体重规划或失败；如果该 Run 关闭 GlobalReview，则直接使用 MergeAgent 输出完成。
+Team 运行保护由 `echomind.team.runtime` 配置：默认 Planner 复审重试 2 次、结果重规划 2 次、Step 重试 2 次、Reviewer JSON 修复 3 次、仲裁 2 次、并发 Step 7 个、单 Step 180 秒、单 Run 1200 秒；属性类会对外部配置做上限钳制，避免误配成无限或过高重试。
 
 不要让 Agent 之间直接互调。Team 协作上下文通过 Run / Step / Event 黑板传递，统一由 Team 运行时服务编排。
 Team 内部的 Planner / Executor / Reviewer / MergeAgent / ConflictDetector LLM 调用走 `AgentOrchestrator.executeInternal`，不读取或写入普通聊天会话历史；前端只通过 Team Run 看板展示黑板数据、管控中心事件和最终报告，轮询间隔为 0.25 秒，用户可下载最终 Markdown。Team 内部 LLM 用量通过 `TeamUsageRecorder` 端口由 console 层写入 `echomind_ai_call_usage`，归属 Team Run 创建者，并复用用户日/月 Token 配额；固定 operation 为 `echomind.team.planner/reviewer/executor/sub_reviewer/merge/conflict_detector/arbitration/repair`。Team 内部调用同样先预留用户 quota，真实 provider usage 返回后再结算 `echomind_token_quota_usage` 账本。

@@ -51,6 +51,7 @@
 - `echomind-llm` 已局部接入 Spring AI：OpenAI-compatible 与 DeepSeek Provider 收缩为 ChatModel adapter，DeepSeek 默认协议迁移到 Chat Completions，默认模型为 `deepseek-v4-flash`。
 - README、CLAUDE、AGENTS、docs/API 和 harness 文档已同步项目详解、运行步骤、整体架构图、工具路由边界和验证命令。
 - Agent Team v2 已合并 DAG 管控中心与 Reflexion 重试：Planner 输出 SIMPLE/COMPLEX 和 DAG，TeamControlCenter 按依赖调度可并发 Step，AgentSelector 将候选 Executor、能力/负载/健康度评分交给模型自主选择并保留规则兜底，RiskPolicy 触发 SubReviewer，MergeAgent 聚合，ConflictDetector 检测冲突，必要时 PlannerArbitration 仲裁，GlobalReviewer 负责终审、重试、局部重规划、整体重规划、澄清和最终报告。
+- Team Run 已支持按次选择质量/速度策略：默认保持 PlanReview、SubReview、GlobalReview 全开；用户可跳过指定 Review，或在 SIMPLE 单 Step 任务上启用直返以减少串行 LLM 调用。DAG 默认可并发 Step 从 3 提升到 7，Team 线程池随运行时并发配置扩容。
 - Team Run 已按当前用户隔离落 MySQL 黑板，并新增 `/api/team-runs` 与普通聊天历史分开查询；Team 内部调用继续走 `executeInternal`，不写普通聊天会话。
 - 前端 Team 看板已改为 0.25 秒轮询，用户可看到中文状态、完整管控流程图、管控中心、风险/质量/Reflexion、冲突/仲裁信息，并下载最终 Markdown。
 

@@ -213,15 +213,21 @@ public class TeamBlackboardService {
     @Transactional
     // 创建团队协作任务 参数1团队id 参数2任务描述
     public TeamRunSnapshot createRun(String teamId, String task) {
-        return createRun(teamId, "default", task);
+        return createRun(teamId, "default", task, TeamReviewOptions.QUALITY_FIRST);
     }
 
     @Transactional
     // 创建团队协作任务 参数1团队id 参数2用户id 参数3任务描述
     public TeamRunSnapshot createRun(String teamId, String userId, String task) {
+        return createRun(teamId, userId, task, TeamReviewOptions.QUALITY_FIRST);
+    }
+
+    @Transactional
+    public TeamRunSnapshot createRun(String teamId, String userId, String task, TeamReviewOptions reviewOptions) {
         if (task == null || task.isBlank()) {
             throw new IllegalArgumentException("task is required");
         }
+        TeamReviewOptions normalizedOptions = TeamReviewOptions.normalize(reviewOptions);
         // 根据团队id获取团队实体
         loadTeamForOwner(teamId, userId);
         // 创建团队协作任务实体
@@ -230,6 +236,10 @@ public class TeamBlackboardService {
         run.setTeamId(teamId);
         run.setUserId(normalizeUserId(userId));
         run.setTask(task.trim());
+        run.setPlanReviewEnabled(normalizedOptions.planReviewEnabled());
+        run.setSubReviewEnabled(normalizedOptions.subReviewEnabled());
+        run.setGlobalReviewEnabled(normalizedOptions.globalReviewEnabled());
+        run.setSimpleFastPathEnabled(normalizedOptions.simpleFastPathEnabled());
         run.setStatus(TeamRunStatus.PENDING);
         runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.RUN_CREATED, null, null, "Run created", null);
@@ -487,7 +497,7 @@ public class TeamBlackboardService {
             // 没有步骤，需要先规划
             planAndReview(run, team);
             // 规划后检查状态：可能需要澄清或失败
-            if (run.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION || run.getStatus() == TeamRunStatus.FAILED) {
+            if (isTerminal(run.getStatus())) {
                 return;
             }
         }
@@ -548,6 +558,21 @@ public class TeamBlackboardService {
             // 记录计划创建事件
             recordEvent(run.getRunId(), null, TeamEventType.PLAN_CREATED, TeamRole.PLANNER,
                 planner(team).agentId(), "Planner created " + planned.size() + " step(s)", planned);
+
+            if (shouldUseSimpleFastPath(run)) {
+                executeSimpleFastPath(run, team);
+                return;
+            }
+
+            if (!reviewOptions(run).planReviewEnabled()) {
+                ReviewerDecision skipped = skippedReviewDecision("用户跳过 PlanReview，使用 Planner 计划继续执行", "");
+                run.setPlanReviewJson(json.toJson(skipped));
+                runMapper.upsertById(run);
+                recordEvent(run.getRunId(), null, TeamEventType.PLAN_REVIEWED, TeamRole.REVIEWER,
+                    reviewer(team).agentId(), skipped.reason(), skipped);
+                approved = true;
+                continue;
+            }
 
             // 4. 设置状态为 PLAN_REVIEWING，开始审核阶段
             run.setStatus(TeamRunStatus.PLAN_REVIEWING);
@@ -621,6 +646,80 @@ public class TeamBlackboardService {
     private ReviewerDecision callReviewerForPlan(TeamRunEntity run, TeamSnapshot team, List<PlannedStep> planned) {
         TeamMember reviewer = reviewer(team);
         return executeReviewerDecision(reviewer, run, TeamPromptFactory.planReviewer(run, planned, json), false);
+    }
+
+    private boolean shouldUseSimpleFastPath(TeamRunEntity run) {
+        if (!reviewOptions(run).simpleFastPathEnabled() || run.getTaskLevel() != TeamTaskLevel.SIMPLE) {
+            return false;
+        }
+        return activeSteps(run.getRunId()).size() == 1;
+    }
+
+    private List<TeamStepEntity> activeSteps(String runId) {
+        return stepMapper.selectByRunIdOrderByStepIndexAsc(runId).stream()
+            .filter(step -> step.getStatus() != TeamStepStatus.SUPERSEDED)
+            .toList();
+    }
+
+    private void executeSimpleFastPath(TeamRunEntity run, TeamSnapshot team) {
+        List<TeamStepEntity> steps = activeSteps(run.getRunId());
+        if (steps.size() != 1) {
+            return;
+        }
+        TeamStepEntity step = steps.get(0);
+        run.setStatus(TeamRunStatus.EXECUTING);
+        runMapper.upsertById(run);
+        recordEvent(run.getRunId(), null, TeamEventType.TEAM_CONTROL_STARTED, null, null,
+            "SIMPLE 快路径启动：单 Executor 执行后直接返回结果", Map.of(
+                "simpleFastPath", true,
+                "reviewOptions", reviewOptions(run)
+            ));
+
+        List<String> requiredCapabilities = json.stringList(step.getRequiredCapabilitiesJson());
+        TeamAgentSelection selection = agentSelector.selectExecutor(team.members(), requiredCapabilities);
+        TeamMember executor = executorBySelection(team, selection);
+        if (executor == null) {
+            throw new IllegalStateException("No executor configured");
+        }
+        TeamAgentSelection auditedSelection = selection == null ? null : selection.withDecision("RULE_FAST_PATH",
+            "SIMPLE 快路径使用能力匹配规则选择 Executor；" + selection.reason());
+        recordEvent(run.getRunId(), step.getStepId(), TeamEventType.AGENT_SELECTED, TeamRole.PLANNER,
+            planner(team).agentId(), "SIMPLE 快路径选择 Executor " + executor.agentName(), auditedSelection);
+
+        step.setAssignedAgentId(executor.agentId());
+        step.setStatus(TeamStepStatus.ASSIGNED);
+        step.setStartedAt(Instant.now());
+        stepMapper.upsertById(step);
+        recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_ASSIGNED, TeamRole.EXECUTOR,
+            executor.agentId(), "Step assigned to " + executor.agentName(), Map.of(
+                "requiredCapabilities", requiredCapabilities,
+                "selection", auditedSelection
+            ));
+
+        step.setStatus(TeamStepStatus.RUNNING);
+        stepMapper.upsertById(step);
+        recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_STARTED, TeamRole.EXECUTOR,
+            executor.agentId(), "Executor started SIMPLE fast-path step", null);
+
+        String prompt = TeamPromptFactory.executor(run, step, "");
+        step.setInputJson(json.toJson(Map.of("prompt", prompt, "selection", auditedSelection)));
+        stepMapper.upsertById(step);
+
+        PipelineContext result = executeTeamInternal(run, OP_EXECUTOR, executor.agentId(), stepSession(run, step),
+            prompt);
+        String output = result == null ? null : result.getFinalResponse();
+        if (output != null && output.startsWith("[Error]")) {
+            if (isToolBudgetLimit(output)) {
+                output = executorToolBudgetFallback(run, step, executor, output);
+            } else {
+                throw new IllegalStateException(output);
+            }
+        }
+        requireRunWritable(run.getRunId());
+        step.setRawOutput(output);
+        completeStep(run.getRunId(), step, executor.agentId(), false, TeamStepQualityStatus.PASSED);
+        completeRunWithFinalOutput(run, team, nullToBlank(output), TeamRole.EXECUTOR, executor.agentId(),
+            "SIMPLE 快路径完成，直接返回 Executor 输出");
     }
 
     /**
@@ -1099,6 +1198,15 @@ public class TeamBlackboardService {
     }
 
     private void reviewHighRiskStep(TeamRunEntity run, TeamSnapshot team, TeamStepEntity step, boolean retrying) {
+        if (!reviewOptions(run).subReviewEnabled()) {
+            ReviewerDecision skipped = skippedReviewDecision("用户跳过 SubReview，高风险 Step 未经子评审直接放行", "");
+            step.setSubReviewJson(json.toJson(skipped));
+            step.setLastReviewReason(skipped.reason());
+            recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_SUB_REVIEWED, TeamRole.SUB_REVIEWER,
+                subReviewer(team).agentId(), skipped.reason(), skipped);
+            completeStep(run.getRunId(), step, step.getAssignedAgentId(), retrying, TeamStepQualityStatus.REVIEW_SKIPPED);
+            return;
+        }
         // 获取reviewer成员
         TeamMember reviewer = subReviewer(team);
         // 事件
@@ -1199,6 +1307,18 @@ public class TeamBlackboardService {
             recordEvent(run.getRunId(), null, TeamEventType.CONFLICT_DETECTED, null, null,
                 secondReport.hasConflict() ? "ConflictDetector 二次检测仍有冲突" : "ConflictDetector 二次检测无冲突", secondReport);
         }
+        if (!reviewOptions(run).globalReviewEnabled()) {
+            ReviewerDecision skipped = skippedReviewDecision("用户跳过 GlobalReview，直接使用 MergeAgent 输出作为最终结果",
+                mergeOutput);
+            run.setResultReviewJson(json.toJson(skipped));
+            run.setGlobalReviewJson(json.toJson(skipped));
+            runMapper.upsertById(run);
+            recordEvent(run.getRunId(), null, TeamEventType.GLOBAL_REVIEWED, TeamRole.REVIEWER,
+                reviewer(team).agentId(), skipped.reason(), skipped);
+            completeRunWithFinalOutput(run, team, mergeOutput, TeamRole.MERGER, merger.agentId(),
+                "GlobalReview 已跳过，Run 使用 MergeAgent 输出完成");
+            return;
+        }
         reviewResults(run, team);
     }
 
@@ -1263,18 +1383,9 @@ public class TeamBlackboardService {
             reviewer(team).agentId(), decision.reason(), decision);
 
         if (decision.action() == ReviewerAction.CONTINUE) {
-            run.setFinalOutput(decision.finalReport().isBlank() ? synthesizeFallbackReport(run) : decision.finalReport());
-            run.setStatus(TeamRunStatus.COMPLETED);
-            run.setMermaidDiagram(MermaidGenerator.generateFromSnapshots(
-                getTeam(run.getTeamId()).name(),
-                TeamRunStatus.COMPLETED,
-                run.getTaskLevel() == null ? TeamTaskLevel.COMPLEX.name() : run.getTaskLevel().name(),
-                toRunSnapshot(run, true, true).steps(),
-                toRunSnapshot(run, true, true).events()
-            ));
-            runMapper.upsertById(run);
-            recordEvent(run.getRunId(), null, TeamEventType.RUN_COMPLETED, TeamRole.REVIEWER,
-                reviewer(team).agentId(), "Reviewer completed final report", null);
+            completeRunWithFinalOutput(run, team,
+                decision.finalReport().isBlank() ? synthesizeFallbackReport(run) : decision.finalReport(),
+                TeamRole.REVIEWER, reviewer(team).agentId(), "Reviewer completed final report");
             return;
         }
 
@@ -1429,9 +1540,14 @@ public class TeamBlackboardService {
         recordEvent(run.getRunId(), null, TeamEventType.PLAN_CREATED, TeamRole.PLANNER,
             planner(team).agentId(), "Planner created " + planned.size() + " replacement step(s)", planned);
 
-        run.setStatus(TeamRunStatus.PLAN_REVIEWING);
-        runMapper.upsertById(run);
-        ReviewerDecision planDecision = callReviewerForPlan(run, team, planned);
+        ReviewerDecision planDecision;
+        if (reviewOptions(run).planReviewEnabled()) {
+            run.setStatus(TeamRunStatus.PLAN_REVIEWING);
+            runMapper.upsertById(run);
+            planDecision = callReviewerForPlan(run, team, planned);
+        } else {
+            planDecision = skippedReviewDecision("用户跳过 PlanReview，局部重规划计划直接继续执行", "");
+        }
         run.setPlanReviewJson(json.toJson(planDecision));
         runMapper.upsertById(run);
         recordEvent(run.getRunId(), null, TeamEventType.PLAN_REVIEWED, TeamRole.REVIEWER,
@@ -2211,6 +2327,7 @@ public class TeamBlackboardService {
             run.getTask(),
             run.getStatus(),
             run.getTaskLevel() == null ? TeamTaskLevel.COMPLEX.name() : run.getTaskLevel().name(),
+            reviewOptions(run),
             run.getClarificationQuestion(),
             run.getClarificationAnswer(),
             run.getClarificationStage() == null ? null : run.getClarificationStage().name(),
@@ -2344,6 +2461,37 @@ public class TeamBlackboardService {
             .filter(item -> item.role() == role)
             .findFirst()
             .orElseGet(() -> reviewer(team));
+    }
+
+    private TeamReviewOptions reviewOptions(TeamRunEntity run) {
+        if (run == null) {
+            return TeamReviewOptions.QUALITY_FIRST;
+        }
+        return new TeamReviewOptions(
+            run.isPlanReviewEnabled(),
+            run.isSubReviewEnabled(),
+            run.isGlobalReviewEnabled(),
+            run.isSimpleFastPathEnabled()
+        );
+    }
+
+    private ReviewerDecision skippedReviewDecision(String reason, String finalReport) {
+        return ReviewerDecision.continueWith(reason, finalReport);
+    }
+
+    private void completeRunWithFinalOutput(TeamRunEntity run, TeamSnapshot team, String finalOutput,
+                                            TeamRole actorRole, String actorAgentId, String eventMessage) {
+        run.setFinalOutput(finalOutput == null || finalOutput.isBlank() ? synthesizeFallbackReport(run) : finalOutput);
+        run.setStatus(TeamRunStatus.COMPLETED);
+        run.setMermaidDiagram(MermaidGenerator.generateFromSnapshots(
+            team.name(),
+            TeamRunStatus.COMPLETED,
+            run.getTaskLevel() == null ? TeamTaskLevel.COMPLEX.name() : run.getTaskLevel().name(),
+            toRunSnapshot(run, true, true).steps(),
+            toRunSnapshot(run, true, true).events()
+        ));
+        runMapper.upsertById(run);
+        recordEvent(run.getRunId(), null, TeamEventType.RUN_COMPLETED, actorRole, actorAgentId, eventMessage, null);
     }
 
     private String synthesizeFallbackReport(TeamRunEntity run) {

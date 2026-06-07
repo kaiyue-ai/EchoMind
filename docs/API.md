@@ -376,7 +376,15 @@ Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进
 ### POST `/api/teams/{teamId}/runs` — 创建异步团队 Run
 ```json
 // 请求
-{ "task": "策划一场60人户外团建活动" }
+{
+  "task": "策划一场60人户外团建活动",
+  "reviewOptions": {
+    "planReviewEnabled": true,
+    "subReviewEnabled": true,
+    "globalReviewEnabled": true,
+    "simpleFastPathEnabled": false
+  }
+}
 
 // 响应
 {
@@ -386,10 +394,20 @@ Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进
   "task": "策划一场60人户外团建活动",
   "status": "PENDING",
   "taskLevel": "COMPLEX",
+  "reviewOptions": {
+    "planReviewEnabled": true,
+    "subReviewEnabled": true,
+    "globalReviewEnabled": true,
+    "simpleFastPathEnabled": false
+  },
   "steps": [],
   "events": []
 }
 ```
+
+`reviewOptions` 可省略，默认是质量优先：PlanReview、SubReview、GlobalReview 全开，SIMPLE 直返关闭。
+关闭某个 Review 会跳过对应 LLM 审查并写入审计 JSON；开启 `simpleFastPathEnabled` 后，Planner 判定
+`SIMPLE` 且只有一个可执行 Step 时直接由单 Executor 输出最终结果。
 
 ### GET `/api/teams/{teamId}/runs` — 查询当前用户在该团队下的 Run
 ```json
@@ -413,6 +431,12 @@ Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进
   "runId": "uuid",
   "status": "EXECUTING",
   "taskLevel": "COMPLEX",
+  "reviewOptions": {
+    "planReviewEnabled": true,
+    "subReviewEnabled": true,
+    "globalReviewEnabled": true,
+    "simpleFastPathEnabled": false
+  },
   "clarificationStage": null,
   "planReviewJson": "{\"action\":\"CONTINUE\"}",
   "resultReviewJson": null,

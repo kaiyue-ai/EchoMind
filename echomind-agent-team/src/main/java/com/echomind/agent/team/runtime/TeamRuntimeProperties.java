@@ -22,7 +22,7 @@ public class TeamRuntimeProperties {
     private int maxStepRetries = 2;
     private int maxReviewerFormatRepairs = 3;
     private int maxArbitrations = 2;
-    private int maxConcurrentSteps = 3;
+    private int maxConcurrentSteps = 7;
     private int stepTimeoutSeconds = 180;
     private int runTimeoutSeconds = 1200;
     private int stepPollIntervalMs = 2000;

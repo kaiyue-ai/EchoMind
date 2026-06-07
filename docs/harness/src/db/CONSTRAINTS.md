@@ -144,7 +144,7 @@ Team 协作不能长期只放内存。当前 Team v2 表结构方向：
 
 - `echomind_agent_teams`：团队定义，全局资源。
 - `echomind_agent_team_members`：成员 Agent、角色、能力标签、排序；可配置 `PLANNER`、多个 `EXECUTOR`、必选 `REVIEWER`，可选 `SUB_REVIEWER` / `MERGER`。
-- `echomind_agent_team_runs`：一次任务执行，也是 Team 黑板首页；按 `user_id` 隔离；保存 `task_level`、`merge_output`、`global_review_json`、`conflict_report_json`、`arbitration_json`、最终报告、澄清字段、规划重试、局部重规划、整体重规划和仲裁次数。
+- `echomind_agent_team_runs`：一次任务执行，也是 Team 黑板首页；按 `user_id` 隔离；保存 `task_level`、每次 Run 的 `plan_review_enabled` / `sub_review_enabled` / `global_review_enabled` / `simple_fast_path_enabled` 审查策略、`merge_output`、`global_review_json`、`conflict_report_json`、`arbitration_json`、最终报告、澄清字段、规划重试、局部重规划、整体重规划和仲裁次数。
 - `echomind_agent_team_steps`：Planner 拆出的 DAG 子任务、`client_step_id`、依赖 Step、风险等级、质量状态、分配 Agent、输入、原始输出、SubReviewer 审查、Reflexion 重试上下文。
 - `echomind_agent_team_events`：协作事件流，前端时间线和 Mermaid 从这里恢复。
 

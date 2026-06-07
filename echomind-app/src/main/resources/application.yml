@@ -122,7 +122,7 @@ echomind:
       max-step-retries: ${ECHOMIND_TEAM_MAX_STEP_RETRIES:3}
       max-reviewer-format-repairs: ${ECHOMIND_TEAM_MAX_REVIEWER_FORMAT_REPAIRS:3}
       max-arbitrations: ${ECHOMIND_TEAM_MAX_ARBITRATIONS:2}
-      max-concurrent-steps: ${ECHOMIND_TEAM_MAX_CONCURRENT_STEPS:3}
+      max-concurrent-steps: ${ECHOMIND_TEAM_MAX_CONCURRENT_STEPS:7}
       step-timeout-seconds: ${ECHOMIND_TEAM_STEP_TIMEOUT_SECONDS:300}
       run-timeout-seconds: ${ECHOMIND_TEAM_RUN_TIMEOUT_SECONDS:1800}
       step-poll-interval-ms: ${ECHOMIND_TEAM_STEP_POLL_INTERVAL_MS:2000}

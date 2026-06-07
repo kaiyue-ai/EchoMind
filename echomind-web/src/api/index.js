@@ -264,8 +264,8 @@ export default {
     /** 硬删除团队及其黑板记录 */
     delete: (teamId) => api.delete(`/teams/${teamId}`),
     /** 创建异步团队Run */
-    createRun: (teamId, task) =>
-      api.post(`/teams/${teamId}/runs`, { task }).then(r => r.data),
+    createRun: (teamId, task, reviewOptions) =>
+      api.post(`/teams/${teamId}/runs`, { task, reviewOptions }).then(r => r.data),
     /** 查询团队Run */
     getRun: (teamId, runId) =>
       api.get(`/teams/${teamId}/runs/${runId}`).then(r => r.data),

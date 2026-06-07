@@ -11,6 +11,7 @@ import com.echomind.agent.pipeline.budget.ProviderTokenBudgetGuard;
 import com.echomind.agent.pipeline.composing.PromptBudget;
 import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.agent.pipeline.stages.*;
+import com.echomind.agent.team.runtime.TeamRuntimeProperties;
 import com.echomind.agent.store.AgentPersistenceService;
 import com.echomind.agent.store.AgentMapper;
 import com.echomind.agent.tool.router.CapabilityRegistry;
@@ -717,12 +718,14 @@ public class EchoMindAutoConfiguration {
     // --- Agent Team 装配 ---
 
     @Bean
-    public org.springframework.core.task.TaskExecutor teamTaskExecutor() {
+    public org.springframework.core.task.TaskExecutor teamTaskExecutor(TeamRuntimeProperties runtimeProperties) {
         org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor executor =
             new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
+        int stepConcurrency = runtimeProperties == null ? 7 : runtimeProperties.getMaxConcurrentSteps();
+        int poolSize = Math.max(8, stepConcurrency + 1);
         executor.setThreadNamePrefix("team-run-");
-        executor.setCorePoolSize(4);
-        executor.setMaxPoolSize(8);
+        executor.setCorePoolSize(poolSize);
+        executor.setMaxPoolSize(Math.max(poolSize, 8));
         executor.setQueueCapacity(100);
         executor.initialize();
         return executor;

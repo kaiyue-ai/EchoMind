@@ -15,7 +15,7 @@ class TeamRuntimePropertiesTest {
         assertThat(properties.getMaxStepRetries()).isEqualTo(2);
         assertThat(properties.getMaxReviewerFormatRepairs()).isEqualTo(3);
         assertThat(properties.getMaxArbitrations()).isEqualTo(2);
-        assertThat(properties.getMaxConcurrentSteps()).isEqualTo(3);
+        assertThat(properties.getMaxConcurrentSteps()).isEqualTo(7);
         assertThat(properties.getStepTimeoutSeconds()).isEqualTo(180);
         assertThat(properties.getRunTimeoutSeconds()).isEqualTo(1200);
     }

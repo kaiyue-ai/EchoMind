@@ -95,6 +95,15 @@
                   启动 Run
                 </el-button>
               </div>
+              <div class="review-options-panel">
+                <el-segmented v-model="reviewPreset" :options="reviewPresetOptions" @change="applyReviewPreset" />
+                <div class="review-toggle-grid">
+                  <el-checkbox v-model="reviewOptions.planReviewEnabled">PlanReview</el-checkbox>
+                  <el-checkbox v-model="reviewOptions.subReviewEnabled">SubReview</el-checkbox>
+                  <el-checkbox v-model="reviewOptions.globalReviewEnabled">GlobalReview</el-checkbox>
+                  <el-checkbox v-model="reviewOptions.simpleFastPathEnabled">SIMPLE 直返</el-checkbox>
+                </div>
+              </div>
               <div class="team-run-history" v-loading="loadingRuns">
                 <div class="section-head compact">
                   <div>
@@ -141,6 +150,7 @@
             <div class="detail-list">
               <span>ID: {{ currentRun.runId }}</span>
               <span>任务等级: {{ taskLevelLabel(currentRun.taskLevel) }}</span>
+              <span>审查策略: {{ reviewOptionsLabel(currentRun.reviewOptions) }}</span>
               <span>当前状态: {{ runStatusLabel(currentRun.status) }}</span>
               <span>整体重规划: {{ currentRun.fullReplanCount || 0 }} 次</span>
               <span>局部重规划: {{ currentRun.partialReplanCount || 0 }} 次</span>
@@ -375,6 +385,8 @@ const {
   teams,
   selectedTeam,
   taskInput,
+  reviewPreset,
+  reviewOptions,
   currentRun,
   loading,
   creating,
@@ -394,6 +406,12 @@ const finalReportRef = ref(null)
 const clarificationAnswer = ref('')
 const stepClarificationAnswers = ref({})
 const capabilityOptions = ['planning', 'search', 'weather', 'venue', 'budget', 'coordination', 'review', 'report', 'general']
+const reviewPresetOptions = [
+  { label: '质量优先', value: 'quality' },
+  { label: '平衡', value: 'balanced' },
+  { label: '最快', value: 'fastest' },
+  { label: '自定义', value: 'custom' }
+]
 const newTeam = ref(defaultTeam())
 const teamList = computed(() => teams.value || [])
 const teamRunList = computed(() => teamRuns.value || [])
@@ -465,6 +483,10 @@ watch(stepClarificationSteps, (steps) => {
   }
   stepClarificationAnswers.value = nextAnswers
 })
+
+watch(reviewOptions, (options) => {
+  reviewPreset.value = reviewPresetFor(options)
+}, { deep: true })
 
 function defaultTeam() {
   return {
@@ -540,11 +562,69 @@ async function confirmDeleteTeam(team) {
 
 async function executeTask() {
   try {
-    await teamStore.executeTask(taskInput.value)
+    await teamStore.executeTask(taskInput.value, reviewOptions.value)
     await teamStore.loadTeamRuns(selectedTeam.value.teamId).catch(() => {})
     ElMessage.success('Run 已启动')
   } catch (e) {
     ElMessage.error('执行失败: ' + (e.response?.data?.error || e.message))
+  }
+}
+
+function applyReviewPreset(value = reviewPreset.value) {
+  const presets = {
+    quality: {
+      planReviewEnabled: true,
+      subReviewEnabled: true,
+      globalReviewEnabled: true,
+      simpleFastPathEnabled: false
+    },
+    balanced: {
+      planReviewEnabled: false,
+      subReviewEnabled: true,
+      globalReviewEnabled: true,
+      simpleFastPathEnabled: true
+    },
+    fastest: {
+      planReviewEnabled: false,
+      subReviewEnabled: false,
+      globalReviewEnabled: false,
+      simpleFastPathEnabled: true
+    }
+  }
+  if (value === 'custom') return
+  reviewOptions.value = { ...(presets[value] || presets.quality) }
+}
+
+function reviewPresetFor(options) {
+  const normalized = normalizeReviewOptions(options)
+  if (normalized.planReviewEnabled
+    && normalized.subReviewEnabled
+    && normalized.globalReviewEnabled
+    && !normalized.simpleFastPathEnabled) {
+    return 'quality'
+  }
+  if (!normalized.planReviewEnabled
+    && normalized.subReviewEnabled
+    && normalized.globalReviewEnabled
+    && normalized.simpleFastPathEnabled) {
+    return 'balanced'
+  }
+  if (!normalized.planReviewEnabled
+    && !normalized.subReviewEnabled
+    && !normalized.globalReviewEnabled
+    && normalized.simpleFastPathEnabled) {
+    return 'fastest'
+  }
+  return 'custom'
+}
+
+function normalizeReviewOptions(options) {
+  return {
+    planReviewEnabled: true,
+    subReviewEnabled: true,
+    globalReviewEnabled: true,
+    simpleFastPathEnabled: false,
+    ...(options || {})
   }
 }
 
@@ -660,8 +740,37 @@ function qualityLabel(status) {
     PENDING: '待校验',
     PASSED: '已通过',
     RETRY_REQUESTED: '要求重试',
+    REVIEW_SKIPPED: '已跳过审查',
     FLAWED_ACCEPTED: '瑕疵放行'
   }[status] || status || '待校验'
+}
+
+function reviewOptionsLabel(options) {
+  const normalized = normalizeReviewOptions(options)
+  if (normalized.planReviewEnabled
+    && normalized.subReviewEnabled
+    && normalized.globalReviewEnabled
+    && !normalized.simpleFastPathEnabled) {
+    return '质量优先'
+  }
+  if (!normalized.planReviewEnabled
+    && normalized.subReviewEnabled
+    && normalized.globalReviewEnabled
+    && normalized.simpleFastPathEnabled) {
+    return '平衡'
+  }
+  if (!normalized.planReviewEnabled
+    && !normalized.subReviewEnabled
+    && !normalized.globalReviewEnabled
+    && normalized.simpleFastPathEnabled) {
+    return '最快'
+  }
+  const enabled = []
+  if (normalized.planReviewEnabled) enabled.push('PlanReview')
+  if (normalized.subReviewEnabled) enabled.push('SubReview')
+  if (normalized.globalReviewEnabled) enabled.push('GlobalReview')
+  if (normalized.simpleFastPathEnabled) enabled.push('SIMPLE 直返')
+  return enabled.length ? enabled.join(' / ') : '自定义'
 }
 
 function actionLabel(action) {
@@ -746,7 +855,8 @@ function selectionSourceLabel(source) {
   return {
     MODEL: '模型自主决策',
     RULE_FALLBACK: '规则兜底',
-    RULE_SCORE: '规则候选'
+    RULE_SCORE: '规则候选',
+    RULE_FAST_PATH: '快路径规则'
   }[source] || '模型决策'
 }
 
