@@ -46,7 +46,7 @@ Controller / CLI
 - Application Service 负责校验、持久化顺序和运行时同步。
 - `AgentFactory`、`SkillRegistry`、`CapabilityRegistry` 只是运行时索引。
 - MySQL 保存业务事实和完整会话历史；Redis 保存短期上下文和用户画像快照；Milvus 保存用户长期事实向量以及 Agent 知识库切片正文和向量。
-- RabbitMQ 只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat.stream-events` SSE 事件、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件。
+- RabbitMQ 只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件；聊天 token、tool、result、failure 事件由消费端直接交给 SSE 推送服务。
 - `ToolRouter` 只作为工具路由入口；`ToolMatchScorer` 只基于工具显式 `keywords`、`aliases`、`tags` 和工具名做预匹配，参数由模型正式 tool call 生成并按 schema 校验。
 - LLM Provider 只处理模型协议；Spring AI 只放在 Provider adapter 边界内，不接管 Agent、Skill、MCP 或 Memory。Provider 不按具体 Skill 名称硬编码参数、工具选择或最终答案策略；工具输出统一回到 LLM 生成最终答复。
 - 主项目只接入外部 MCP Server，不暴露自身 MCP Server。

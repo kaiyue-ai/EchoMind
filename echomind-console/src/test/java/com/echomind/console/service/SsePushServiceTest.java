@@ -36,10 +36,10 @@ class SsePushServiceTest {
     void streamEventsCanArriveBeforeEmitterSubscribes() {
         SsePushService service = new SsePushService();
         service.registerRequest("req-1", "user-a");
-        service.onChatStreamEvent(ChatStreamEvent.meta("req-1", "session-a", "trace-a"));
-        service.onChatStreamEvent(ChatStreamEvent.token("req-1", "你"));
-        service.onChatStreamEvent(ChatStreamEvent.toolStart("req-1", "calculator"));
-        service.onChatStreamEvent(ChatStreamEvent.toolEnd("req-1", "calculator", 12));
+        service.pushEvent(ChatStreamEvent.meta("req-1", "session-a", "trace-a"));
+        service.pushEvent(ChatStreamEvent.token("req-1", "你"));
+        service.pushEvent(ChatStreamEvent.toolStart("req-1", "calculator"));
+        service.pushEvent(ChatStreamEvent.toolEnd("req-1", "calculator", 12));
 
         assertThatCode(() -> service.createEmitter("req-1", "user-a"))
             .doesNotThrowAnyException();
@@ -49,7 +49,7 @@ class SsePushServiceTest {
     void terminalResultKeepsOwnerBrieflyForLateSubscriber() {
         SsePushService service = new SsePushService();
         service.registerRequest("req-1", "user-a");
-        service.onChatStreamEvent(ChatStreamEvent.result(ChatResponse.success(
+        service.pushEvent(ChatStreamEvent.result(ChatResponse.success(
             "req-1", "session-a", "default", "mock:model", "你好", java.util.List.of(), "trace-a"
         )));
 

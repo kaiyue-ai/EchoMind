@@ -41,8 +41,8 @@
 - 已新增告警治理：调用错误、错误率、Provider Token 预算超限/预警和敏感数据事件进入告警事件表，支持飞书自定义机器人 Webhook、静默期、静默累计升级和管理端规则配置；Provider budget 也使用 Redis 预留和 `echomind_provider_token_budget_usage` 日/周/月真实已用账本；用户日/月 Token quota 不再保留单用户百分比预警。
 - 管理端已新增脱敏治理和告警中心页面，仪表盘增加错误率、脱敏事件数和告警事件数。
 - 聊天入口已进一步解耦：`ChatGovernanceService` 统一收口配额、脱敏、用量和调用错误告警；流式聊天改为 `POST /api/chat` 入队、`GET /api/chat/stream/{requestId}` 订阅 token 事件；`MemoryApplicationService` 统一会话摘要、历史读取和附件展示 URL 刷新。
-- RabbitMQ 使用面已梳理：当前只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat.stream-events` SSE 事件、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件；Agent Team 仍由 `TaskExecutor` 推进 MySQL 黑板状态机。
-- RabbitMQ stream-events 消费者配置已统一为 `echomind.rabbitmq.chat-stream-event.*` / `ECHOMIND_RABBITMQ_CHAT_STREAM_EVENT_*`，并保留旧 `chat-response` 配置和环境变量作为兼容兜底。
+- RabbitMQ 使用面已梳理：当前只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件；聊天 token、tool、result、failure 事件由消费端直接交给 SSE 推送服务；Agent Team 仍由 `TaskExecutor` 推进 MySQL 黑板状态机。
+- SSE token 级 RabbitMQ 中转及其消费者配置已移除。
 - 已新增 Docker MySQL 迁移入口：`scripts/apply-mysql-migrations.ps1` 和 harness `make migrate` 会按顺序执行 `docker/mysql/migrations/*.sql`，`make deploy` 在重启后端前自动应用迁移。
 - 已补齐 Agent 知识库 HTTP 编排层：`AgentController` 只处理 HTTP 适配，上传校验和 `MultipartFile` 参数整理进入 `AgentKnowledgeApplicationService`。
 - 启动恢复逻辑已从 `EchoMindAutoConfiguration` 下沉到 `AgentRuntimeBootstrapper`；默认 Skill 补齐、旧模型迁移、fallback Agent 和退役 Skill 清理已由 `echomind.runtime` 配置驱动，避免启动流程继续硬编码具体 Skill 或旧模型。

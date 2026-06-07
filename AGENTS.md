@@ -24,7 +24,7 @@ EchoMind 是一个 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 - 工具路由：`ToolRouter` 只做入口；`ToolMatchScorer` 只基于工具显式 `keywords`、`aliases`、`tags` 和工具名做预匹配，参数由模型正式 tool call 生成并按 schema 校验。
 - 模型协议：`echomind-llm` 通过 Spring AI adapter 接入 OpenAI-compatible 和 DeepSeek Chat Completions；EchoMind 的 Agent、Skill、MCP、Memory 边界不交给 Spring AI 接管。
 - 记忆和知识库：MySQL 保存普通聊天历史和知识库文档元数据；Redis 做近期上下文和用户画像快照；Milvus 做用户长期事实向量以及知识库切片正文和向量。
-- RabbitMQ：只用于异步聊天请求、聊天 SSE 事件、普通聊天记忆分片写入和用户长期记忆事件；Team Run 当前仍由 `TaskExecutor` 推进 MySQL 黑板，不走 RabbitMQ。
+- RabbitMQ：只用于异步聊天请求、普通聊天记忆分片写入和用户长期记忆事件；聊天 token/tool/result/failure 事件由消费者直接交给 SSE 推送服务；Team Run 当前仍由 `TaskExecutor` 推进 MySQL 黑板，不走 RabbitMQ。
 - 前端：Vue 3 + Pinia，跨页面状态必须放 store，不要只放组件局部变量。
 
 ## 最高优先级规则

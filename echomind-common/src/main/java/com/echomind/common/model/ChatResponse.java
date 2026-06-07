@@ -5,8 +5,7 @@ import java.util.List;
 /**
  * 聊天响应消息体。
  *
- * <p>由异步消费者作为 {@link ChatStreamEvent#TYPE_RESULT} 载荷发布到
- * {@code echomind.chat.stream-events} 队列，SSE 推送服务按 requestId 转发给订阅方。</p>
+ * <p>由异步消费者作为 {@link ChatStreamEvent#TYPE_RESULT} 载荷交给 SSE 推送服务。</p>
  */
 public record ChatResponse(
     String requestId,

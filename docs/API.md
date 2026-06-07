@@ -30,8 +30,7 @@
 `GET /api/chat/stream/{requestId}` 订阅 `meta`、`token`、`tool_start`、`tool_end`、`result`
 或 `failure` SSE 事件。
 后端实际链路是 `ChatRabbitProducer -> echomind.chat.requests -> ChatRabbitConsumer`；
-消费者执行流式 Agent 后，再把事件发布到 `echomind.chat.stream-events`，由 `SsePushService`
-消费并转发给 SSE 订阅方。
+消费者执行流式 Agent 后，直接把事件交给 `SsePushService` 转发给 SSE 订阅方。
 公开聊天不提供同步执行 HTTP 入口。
 
 ### GET `/api/chat/stream/{requestId}` — 订阅异步聊天事件

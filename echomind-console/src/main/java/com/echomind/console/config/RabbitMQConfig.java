@@ -28,13 +28,11 @@ import java.util.Map;
 public class RabbitMQConfig {
 
     public static final String QUEUE_CHAT_REQUESTS = "echomind.chat.requests";
-    public static final String QUEUE_CHAT_STREAM_EVENTS = "echomind.chat.stream-events";
     public static final String QUEUE_CHAT_MEMORY_PERSIST_REQUESTS = "echomind.chat-memory.persist.requests";
     public static final String CHAT_MEMORY_PERSIST_QUEUE_PROPERTY =
         "${echomind.memory.persist-queue-name:" + QUEUE_CHAT_MEMORY_PERSIST_REQUESTS + "}";
     public static final String CHAT_MEMORY_PERSIST_SHARDS_PROPERTY = "${echomind.memory.persist-shards:8}";
     public static final String CHAT_REQUEST_LISTENER_FACTORY = "chatRequestRabbitListenerContainerFactory";
-    public static final String CHAT_STREAM_EVENT_LISTENER_FACTORY = "chatStreamEventRabbitListenerContainerFactory";
     public static final String CHAT_MEMORY_PERSIST_LISTENER_FACTORY = "chatMemoryPersistRabbitListenerContainerFactory";
     public static final String CHAT_MEMORY_PERSIST_QUEUE_NAMES_BEAN = "chatMemoryPersistQueueNames";
 
@@ -57,10 +55,6 @@ public class RabbitMQConfig {
         return new Declarables(declarables);
     }
 
-    @Bean
-    public Queue chatStreamEventsQueue() {
-        return new Queue(QUEUE_CHAT_STREAM_EVENTS, true);
-    }
 
     @Bean(name = CHAT_MEMORY_PERSIST_QUEUE_NAMES_BEAN)
     public String[] chatMemoryPersistQueueNames(@Value(CHAT_MEMORY_PERSIST_QUEUE_PROPERTY) String queueName,
@@ -97,15 +91,6 @@ public class RabbitMQConfig {
             retryAdvice(rabbitTemplate, retry, RabbitReliableMessaging.CHAT_REQUESTS_DLQ));
     }
 
-    @Bean(name = CHAT_STREAM_EVENT_LISTENER_FACTORY)
-    public SimpleRabbitListenerContainerFactory chatStreamEventRabbitListenerContainerFactory(
-            ConnectionFactory connectionFactory,
-            Jackson2JsonMessageConverter converter,
-            @Value("${echomind.rabbitmq.chat-stream-event.concurrent-consumers:${echomind.rabbitmq.chat-response.concurrent-consumers:4}}") int concurrentConsumers,
-            @Value("${echomind.rabbitmq.chat-stream-event.max-concurrent-consumers:${echomind.rabbitmq.chat-response.max-concurrent-consumers:4}}") int maxConcurrentConsumers,
-            @Value("${echomind.rabbitmq.chat-stream-event.prefetch:${echomind.rabbitmq.chat-response.prefetch:50}}") int prefetchCount) {
-        return listenerFactory(connectionFactory, converter, concurrentConsumers, maxConcurrentConsumers, prefetchCount);
-    }
 
     @Bean(name = CHAT_MEMORY_PERSIST_LISTENER_FACTORY)
     public SimpleRabbitListenerContainerFactory chatMemoryPersistRabbitListenerContainerFactory(

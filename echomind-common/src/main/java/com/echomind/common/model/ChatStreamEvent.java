@@ -5,9 +5,9 @@ package com.echomind.common.model;
  *      ↓
  * Controller 把请求投递到 RabbitMQ
  *      ↓ (异步)
- * 消费者执行 Agent → 流式输出 token → 逐条发布 ChatStreamEvent
+ * 消费者执行 Agent → 流式输出 token → 逐条产生 ChatStreamEvent
  *      ↓
- * SSE 层按 requestId 过滤事件 → 直接推送给前端
+ * SSE 推送服务按 requestId 过滤事件 → 直接推送给前端
  *      ↓
  * 前端收到 result/failure → 关闭 SSE
  */

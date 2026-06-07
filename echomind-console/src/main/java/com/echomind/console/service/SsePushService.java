@@ -2,11 +2,9 @@ package com.echomind.console.service;
 
 import com.echomind.common.model.ChatStreamEvent;
 import com.echomind.common.observability.EchoMindTrace;
-import com.echomind.console.config.RabbitMQConfig;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -56,14 +54,6 @@ public class SsePushService {
             log.warn("SSE emitter error for request {}: {}", requestId, e.getMessage());
         });
         return emitter;
-    }
-
-    @RabbitListener(
-        queues = RabbitMQConfig.QUEUE_CHAT_STREAM_EVENTS,
-        containerFactory = RabbitMQConfig.CHAT_STREAM_EVENT_LISTENER_FACTORY
-    )
-    public void onChatStreamEvent(ChatStreamEvent event) {
-        pushEvent(event);
     }
 
     public void pushEvent(ChatStreamEvent event) {

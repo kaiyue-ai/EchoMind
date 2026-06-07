@@ -160,7 +160,6 @@ POST /api/chat
   -> ChatApplicationService.executeQueuedStream
   -> AgentOrchestrator.executeStreamContext
   -> Agent.chatStream
-  -> RabbitMQ chat.stream-events
   -> SsePushService
   -> GET /api/chat/stream/{requestId} 推送 meta/token/tool/result/failure
 ```
@@ -243,9 +242,8 @@ MySQL 分片表或 MySQL 关键词候选。
 RabbitMQ 的实际使用面保持收敛：
 
 - `echomind.chat.requests`：异步聊天请求队列。`ChatRabbitProducer` 发布，`ChatRabbitConsumer`
-  消费并调用 `ChatApplicationService.executeQueuedStream`。
-- `echomind.chat.stream-events`：异步聊天 SSE 事件队列。`ChatRabbitConsumer` 发布 meta/token/result/failure，
-  `SsePushService` 消费并转发给 `GET /api/chat/stream/{requestId}`。
+  消费并调用 `ChatApplicationService.executeQueuedStream`，再把 meta/token/tool/result/failure
+  事件直接交给 `SsePushService` 推送给 `GET /api/chat/stream/{requestId}`。
 - `echomind.chat-memory.persist.exchange`：普通聊天记忆 direct exchange。发布端按 `sessionId`
   hash 出 `shard.N` routing key，消费端监听 `echomind.chat-memory.persist.requests.shard.N`。
 - `echomind.user-memory.requests`：用户长期记忆事件队列。主应用发布，独立 `echomind-user-memory`
@@ -254,8 +252,8 @@ RabbitMQ 的实际使用面保持收敛：
 RabbitMQ 可靠性边界：`echomind.chat.requests`、普通聊天记忆分片队列和
 `echomind.user-memory.requests` 是核心消息，发布端使用 publisher confirm、publisher return、
 `mandatory=true` 和 persistent delivery mode；消费端有限重试后进入 `echomind.dlx` 下的对应
-DLQ。`echomind.chat.stream-events` 只承载在线 SSE token/result 体验，不进入强可靠 DLQ；断线恢复
-仍依赖 `SsePushService` 的短期内存 buffer 和终态事件。
+DLQ。在线 SSE token/result 体验不进入 RabbitMQ 强可靠队列；断线恢复仍依赖
+`SsePushService` 的短期内存 buffer 和终态事件。
 
 Agent Team 当前不使用 RabbitMQ；Team Run 由 `TaskExecutor` 在单体进程内异步推进 MySQL 黑板状态。
 
