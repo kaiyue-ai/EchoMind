@@ -1,8 +1,19 @@
 <template>
   <div class="message-list-shell">
-    <div ref="containerRef" class="message-list" @scroll.passive="handleScroll">
+    <div
+      ref="containerRef"
+      class="message-list"
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions text"
+      @scroll.passive="handleScroll"
+    >
       <div v-if="loadingHistory" class="message-history-skeleton" aria-hidden="true">
-        <article v-for="item in 3" :key="item" class="message-row">
+        <article
+          v-for="item in 4"
+          :key="item"
+          :class="['message-row', item % 3 === 0 ? 'message-user' : 'message-assistant']"
+        >
           <div class="message-avatar skeleton-avatar"></div>
           <div class="message-content">
             <el-skeleton animated :rows="item === 1 ? 2 : 4" />
@@ -16,51 +27,80 @@
         <p>选择 Agent 和模型，直接把问题交给 EchoMind。</p>
       </div>
 
-      <article
-        v-for="(message, index) in displayMessages"
-        :key="index"
-        :class="['message-row', `message-${message.role}`]"
-      >
-        <div class="message-avatar">
-          <img v-if="message.role === 'user' && authStore.user?.avatarUrl" :src="authStore.user.avatarUrl" alt="用户头像" />
-          <span v-else>{{ roleLabel(message.role) }}</span>
-        </div>
-        <div class="message-content">
-          <MarkdownRenderer v-if="message.role === 'assistant'" :content="message.content" />
-          <div v-else class="plain-message">{{ message.content }}</div>
-          <div v-if="message.attachments?.length" class="message-attachments">
-            <img
-              v-for="att in message.attachments"
-              :key="att.uri || att.url"
-              v-show="att.type === 'image'"
-              :src="att.url"
-              :alt="att.fileName || '聊天图片'"
-              class="message-image"
+      <TransitionGroup v-else name="message-soft" tag="div" class="message-flow">
+        <article
+          v-for="(message, index) in displayMessages"
+          :key="messageKey(message, index)"
+          :class="[
+            'message-row',
+            `message-${message.role}`,
+            {
+              'message-pending': message.pending,
+              'message-streaming': message.streaming,
+              'message-variant-error': message.variant === 'error'
+            }
+          ]"
+        >
+          <div class="message-avatar">
+            <img v-if="message.role === 'user' && authStore.user?.avatarUrl" :src="authStore.user.avatarUrl" alt="用户头像" />
+            <span v-else>{{ roleLabel(message.role) }}</span>
+          </div>
+          <div class="message-content">
+            <div v-if="message.role === 'assistant' && message.pending" class="thinking-pill" aria-live="polite">
+              <span class="thinking-orbit" aria-hidden="true">
+                <span class="thinking-dot"></span>
+                <span class="thinking-dot"></span>
+                <span class="thinking-dot"></span>
+              </span>
+              <span>{{ message.toolStatus || thinkingLabel }}</span>
+            </div>
+            <MarkdownRenderer
+              v-else-if="message.role === 'assistant'"
+              :content="message.content"
+              :streaming="message.streaming"
             />
+            <div v-else class="plain-message">{{ message.content }}</div>
+            <div v-if="message.attachments?.length" class="message-attachments">
+              <img
+                v-for="att in message.attachments"
+                :key="att.uri || att.url"
+                v-show="att.type === 'image'"
+                :src="att.url"
+                :alt="att.fileName || '聊天图片'"
+                class="message-image"
+                @load="followIfNearBottom('auto')"
+              />
+            </div>
+            <div v-if="message.skillResults?.length" class="skill-result-line">
+              <span
+                v-for="skill in message.skillResults"
+                :key="skill"
+                class="skill-result-chip"
+              >
+                {{ skill }}
+              </span>
+            </div>
+            <div v-if="message.toolStatus && !message.pending" class="tool-status-line">
+              {{ message.toolStatus }}
+            </div>
           </div>
-          <div v-if="message.skillResults?.length" class="skill-result-line">
-            Skills: {{ message.skillResults.join(', ') }}
-          </div>
-          <div v-if="message.toolStatus" class="tool-status-line">
-            {{ message.toolStatus }}
-          </div>
-        </div>
-      </article>
+        </article>
+      </TransitionGroup>
     </div>
 
     <button
       v-if="showJumpButton"
       type="button"
-      class="message-jump-button"
+      :class="['message-jump-button', { 'has-new-activity': hasNewActivity }]"
       @click="jumpToBottom"
     >
-      回到底部
+      {{ hasNewActivity ? '查看新回复' : '回到底部' }}
     </button>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import { useAuthStore } from '../../stores/auth'
 
@@ -75,8 +115,14 @@ const authStore = useAuthStore()
 const displayMessages = computed(() => props.messages.filter(message => DISPLAY_ROLES.has(message?.role)))
 const isNearBottom = ref(true)
 const showJumpButton = ref(false)
+const hasNewActivity = ref(false)
+const thinkingStep = ref(0)
 let scrollFrame = 0
 let queuedScrollBehavior = 'auto'
+let thinkingTimer = 0
+
+const thinkingLabels = ['理解问题', '组织上下文', '生成回复']
+const thinkingLabel = computed(() => thinkingLabels[thinkingStep.value % thinkingLabels.length])
 
 watch(() => displayMessages.value.length, (count, previousCount = 0) => {
   if (!props.loadingHistory) {
@@ -89,6 +135,7 @@ watch(() => displayMessages.value.length, (count, previousCount = 0) => {
       nextTick(() => scrollToBottom('auto'))
     } else if (count > previousCount) {
       showJumpButton.value = true
+      hasNewActivity.value = true
     }
   }
 })
@@ -110,6 +157,7 @@ function scrollToBottom(behavior = 'auto') {
     containerRef.value.scrollTop = containerRef.value.scrollHeight
     isNearBottom.value = true
     showJumpButton.value = false
+    hasNewActivity.value = false
     queuedScrollBehavior = 'auto'
     requestAnimationFrame(() => {
       if (containerRef.value) {
@@ -124,6 +172,7 @@ function followIfNearBottom(behavior = 'auto') {
     scrollToBottom(behavior)
   } else {
     showJumpButton.value = true
+    hasNewActivity.value = true
   }
 }
 
@@ -133,6 +182,7 @@ function handleScroll() {
   isNearBottom.value = scrollHeight - scrollTop - clientHeight < 96
   if (isNearBottom.value) {
     showJumpButton.value = false
+    hasNewActivity.value = false
   }
 }
 
@@ -146,10 +196,23 @@ function roleLabel(role) {
   return 'AI'
 }
 
+function messageKey(message, index) {
+  return message?.clientId || message?.id || message?.messageId || `${message?.role || 'message'}-${index}`
+}
+
 onBeforeUnmount(() => {
   if (scrollFrame) {
     cancelAnimationFrame(scrollFrame)
   }
+  if (thinkingTimer) {
+    window.clearInterval(thinkingTimer)
+  }
+})
+
+onMounted(() => {
+  thinkingTimer = window.setInterval(() => {
+    thinkingStep.value += 1
+  }, 1400)
 })
 
 defineExpose({ followIfNearBottom, scrollToBottom })

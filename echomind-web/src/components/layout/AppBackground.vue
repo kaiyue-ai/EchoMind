@@ -1,5 +1,5 @@
 <template>
-  <div class="app-background" aria-hidden="true">
+  <div class="app-background" :style="ambientStyle" aria-hidden="true">
     <div
       v-if="hasImageBackground"
       class="app-background-image"
@@ -10,15 +10,23 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { renderableImageUrl, useUiStore } from '../../stores/ui'
 
 const uiStore = useUiStore()
 const { background } = storeToRefs(uiStore)
+const ambientX = ref(0)
+const ambientY = ref(0)
+let ambientFrame = 0
+let reduceMotionQuery = null
 
 const imageUrl = computed(() => renderableImageUrl(background.value.imageUrl))
 const hasImageBackground = computed(() => background.value.mode === 'image' && Boolean(imageUrl.value))
+const ambientStyle = computed(() => ({
+  '--ambient-shift-x': `${ambientX.value}px`,
+  '--ambient-shift-y': `${ambientY.value}px`
+}))
 const imageStyle = computed(() => ({
   opacity: background.value.opacity / 100,
   backgroundImage: `url("${imageUrl.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`,
@@ -26,4 +34,31 @@ const imageStyle = computed(() => ({
   backgroundSize: background.value.imageFit === 'repeat' ? 'auto' : background.value.imageFit,
   backgroundPosition: 'center center'
 }))
+
+function updateAmbient(event) {
+  if (reduceMotionQuery?.matches || ambientFrame) return
+  const { innerWidth = 1, innerHeight = 1 } = window
+  const nextX = ((event.clientX / innerWidth) - 0.5) * 28
+  const nextY = ((event.clientY / innerHeight) - 0.5) * 22
+  ambientFrame = requestAnimationFrame(() => {
+    ambientFrame = 0
+    ambientX.value = Math.round(nextX)
+    ambientY.value = Math.round(nextY)
+  })
+}
+
+onMounted(() => {
+  if (typeof window === 'undefined') return
+  reduceMotionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)')
+  window.addEventListener('pointermove', updateAmbient, { passive: true })
+})
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('pointermove', updateAmbient)
+  }
+  if (ambientFrame) {
+    cancelAnimationFrame(ambientFrame)
+  }
+})
 </script>

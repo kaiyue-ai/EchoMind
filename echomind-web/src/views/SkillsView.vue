@@ -35,8 +35,13 @@
     </section>
 
     <ResourceGridSkeleton v-if="showInitialSkeleton" />
-    <div v-else class="resource-grid" :class="{ 'is-refreshing': loading }">
-      <ResourceCard v-for="skill in skills" :key="skill.skillId" :meta="`v${skill.metadata?.version || '-'}`">
+    <TransitionGroup v-else name="resource-soft" tag="div" class="resource-grid" :class="{ 'is-refreshing': loading }">
+      <ResourceCard
+        v-for="(skill, index) in skills"
+        :key="skill.skillId"
+        :meta="`v${skill.metadata?.version || '-'}`"
+        :style="{ '--item-index': index }"
+      >
         <template #title>{{ skill.metadata?.name || skill.skillId }}</template>
         <template #actions>
           <StatusBadge :tone="skill.state === 'ENABLED' ? 'success' : 'neutral'">
@@ -76,7 +81,7 @@
         </template>
       </ResourceCard>
       <el-empty v-if="!loading && skills.length === 0" description="暂无 Skill" />
-    </div>
+    </TransitionGroup>
   </div>
 </template>
 

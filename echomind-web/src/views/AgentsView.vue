@@ -18,8 +18,13 @@
     </el-alert>
 
     <ResourceGridSkeleton v-if="showInitialSkeleton" />
-    <div v-else class="resource-grid" :class="{ 'is-refreshing': loading }">
-      <ResourceCard v-for="agent in agents" :key="agent.agentId" :meta="agent.agentId">
+    <TransitionGroup v-else name="resource-soft" tag="div" class="resource-grid" :class="{ 'is-refreshing': loading }">
+      <ResourceCard
+        v-for="(agent, index) in agents"
+        :key="agent.agentId"
+        :meta="agent.agentId"
+        :style="{ '--item-index': index }"
+      >
         <template #title>
           <div class="agent-title">
             <span class="avatar-token">{{ agent.name?.charAt(0) || 'A' }}</span>
@@ -44,7 +49,7 @@
         </template>
       </ResourceCard>
       <el-empty v-if="!loading && agents.length === 0" description="暂无 Agent" />
-    </div>
+    </TransitionGroup>
 
     <DrawerForm v-model="showCreateDrawer" title="创建 Agent" size="640px">
       <el-form label-position="top" class="stack-form">

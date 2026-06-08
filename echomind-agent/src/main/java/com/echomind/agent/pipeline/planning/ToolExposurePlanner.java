@@ -89,7 +89,7 @@ public class ToolExposurePlanner {
         if (!keywordMatched.isEmpty()) {
             // 同时尝试上下文匹配作为补充（处理追问场景）
             List<Tool> contextMatched = contextMatchedTools(ctx, allowedTools, keywordMatched);
-            List<Tool> exposedTools = merge(keywordMatched, contextMatched);
+            List<Tool> exposedTools = expandMcpCompanionTools(allowedTools, merge(keywordMatched, contextMatched));
 
             // 记录匹配模式和结果到上下文属性
             ctx.getAttributes().put(PipelineContext.ATTR_TOOL_MATCH_MODE, PipelineContext.TOOL_MATCH_KEYWORD);
@@ -116,7 +116,7 @@ public class ToolExposurePlanner {
                 contextMatched.stream().map(Tool::name).toList());
             log.debug("Follow-up context matched {} tool(s): {}", contextMatched.size(),
                 contextMatched.stream().map(Tool::name).toList());
-            return contextMatched;
+            return expandMcpCompanionTools(allowedTools, contextMatched);
         }
 
         // 5. 策略三：模型自主决策（兜底策略）
@@ -286,5 +286,33 @@ public class ToolExposurePlanner {
         first.forEach(tool -> merged.put(tool.name(), tool));
         second.forEach(tool -> merged.putIfAbsent(tool.name(), tool));
         return List.copyOf(merged.values());
+    }
+
+    /**
+     * MCP Server 往往把搜索、读取网页、读取特定站点文章拆成多个工具。
+     * 关键词命中其中一个时，模型在同一轮调用里可能需要继续调用同一 MCP source 下的伴随工具。
+     */
+    private List<Tool> expandMcpCompanionTools(List<Tool> allowedTools, List<Tool> selectedTools) {
+        if (allowedTools == null || allowedTools.isEmpty() || selectedTools == null || selectedTools.isEmpty()) {
+            return selectedTools == null ? List.of() : selectedTools;
+        }
+
+        List<String> selectedMcpSourceIds = selectedTools.stream()
+            .filter(tool -> Tool.SOURCE_MCP.equals(tool.sourceType()))
+            .map(Tool::sourceId)
+            .filter(sourceId -> sourceId != null && !sourceId.isBlank())
+            .distinct()
+            .toList();
+        if (selectedMcpSourceIds.isEmpty()) {
+            return selectedTools;
+        }
+
+        Map<String, Tool> expanded = new LinkedHashMap<>();
+        selectedTools.forEach(tool -> expanded.put(tool.name(), tool));
+        allowedTools.stream()
+            .filter(tool -> Tool.SOURCE_MCP.equals(tool.sourceType()))
+            .filter(tool -> selectedMcpSourceIds.contains(tool.sourceId()))
+            .forEach(tool -> expanded.putIfAbsent(tool.name(), tool));
+        return List.copyOf(expanded.values());
     }
 }

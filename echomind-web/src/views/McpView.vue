@@ -38,8 +38,13 @@
 
       <ResourceGridSkeleton v-if="loading && servers.length === 0" :count="4" :rows="4" class="mcp-service-grid" />
 
-      <div v-else class="resource-grid mcp-service-grid" :class="{ 'is-refreshing': loading }">
-        <ResourceCard v-for="server in servers" :key="server.id" :meta="formatConnection(server)">
+      <TransitionGroup v-else name="resource-soft" tag="div" class="resource-grid mcp-service-grid" :class="{ 'is-refreshing': loading }">
+        <ResourceCard
+          v-for="(server, index) in servers"
+          :key="server.id"
+          :meta="formatConnection(server)"
+          :style="{ '--item-index': index }"
+        >
           <template #title>{{ server.id }}</template>
           <template #actions>
             <StatusBadge :tone="server.running ? 'success' : 'danger'">
@@ -76,7 +81,7 @@
             </el-button>
           </template>
         </ResourceCard>
-      </div>
+      </TransitionGroup>
 
       <el-empty
         v-if="!loading && servers.length === 0"

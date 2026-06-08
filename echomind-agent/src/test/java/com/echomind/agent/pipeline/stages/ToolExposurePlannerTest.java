@@ -179,6 +179,30 @@ class ToolExposurePlannerTest {
     }
 
     @Test
+    void keywordMatchedMcpToolAlsoExposesCompanionToolsFromSameServer() {
+        ToolRouter router = new ToolRouter();
+        router.register(tool("open_web_search", Tool.SOURCE_MCP, "mcp:open-websearch",
+            List.of("search", "web", "internet"), List.of("搜索", "搜一下", "联网搜索")));
+        router.register(tool("open_web_fetch_content", Tool.SOURCE_MCP, "mcp:open-websearch",
+            List.of("web", "fetch", "url", "article"), List.of("读取网页", "打开链接")));
+        router.register(tool("fetch_nowcoder_java_interview_article", Tool.SOURCE_MCP, "mcp:nowcoder-java-interview",
+            List.of("interview"), List.of("牛客", "面经")));
+        ToolExposurePlanner planner = new ToolExposurePlanner(router);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setUserMessage("你搜一下今天有什么新闻");
+
+        ToolExposure exposure = planner.plan(ctx);
+
+        assertThat(exposure.tools()).extracting(Tool::name)
+            .containsExactlyInAnyOrder("open_web_search", "open_web_fetch_content");
+        assertThat(exposure.tools()).extracting(Tool::name)
+            .doesNotContain("fetch_nowcoder_java_interview_article");
+        assertThat(ctx.getAttributes())
+            .containsEntry(PipelineContext.ATTR_TOOL_MATCH_MODE, PipelineContext.TOOL_MATCH_KEYWORD);
+    }
+
+    @Test
     void followUpDateQueryAlsoExposesRailwayToolFromRecentHistory() {
         ToolRouter router = new ToolRouter();
         router.register(tool("12306", "skill", "12306@1.0.0",

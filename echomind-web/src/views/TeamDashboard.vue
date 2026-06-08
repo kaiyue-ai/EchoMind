@@ -112,7 +112,7 @@
                   </div>
                   <span class="count-pill">{{ teamRunList.length }}</span>
                 </div>
-                <div v-if="teamRunList.length" class="team-run-list">
+                <TransitionGroup v-if="teamRunList.length" name="list-soft" tag="div" class="team-run-list">
                   <button
                     v-for="run in teamRunList"
                     :key="run.runId"
@@ -125,14 +125,14 @@
                       {{ runStatusLabel(run.status) }} · {{ taskLevelLabel(run.taskLevel) }} · {{ formatTime(run.updatedAt || run.createdAt) }}
                     </span>
                   </button>
-                </div>
+                </TransitionGroup>
                 <div v-else class="empty-note">当前用户在该团队下还没有 Run</div>
               </div>
             </div>
           </div>
         </section>
 
-        <section v-if="currentRun" class="run-board">
+        <section v-if="currentRun" :class="['run-board', { 'is-live': runIsLive }]">
           <div class="run-board-head">
             <div>
               <span class="eyebrow">Current Run</span>
@@ -316,7 +316,12 @@
 
             <ResourceCard title="事件时间线" class="timeline-card">
               <el-timeline>
-                <el-timeline-item v-for="event in currentRun.events || []" :key="event.id" :timestamp="formatTime(event.createdAt)">
+                <el-timeline-item
+                  v-for="event in currentRun.events || []"
+                  :key="event.id"
+                  class="timeline-event"
+                  :timestamp="formatTime(event.createdAt)"
+                >
                   <div class="event-title">{{ eventTypeLabel(event.type) }}</div>
                   <div class="event-msg">{{ event.message }}</div>
                 </el-timeline-item>
@@ -442,6 +447,10 @@ const stepRetryText = computed(() => {
 })
 const reflectedSteps = computed(() => (currentRun.value?.steps || []).filter(step => step.reflectionJson || step.lastReviewReason))
 const hasReflections = computed(() => reflectedSteps.value.length > 0)
+const runIsLive = computed(() => {
+  return ['PENDING', 'PLANNING', 'PLAN_REVIEWING', 'EXECUTING', 'MERGING', 'GLOBAL_REVIEWING']
+    .includes(currentRun.value?.status)
+})
 const stepClarificationSteps = computed(() => (currentRun.value?.steps || []).filter(isStepClarificationRequested))
 const stepClarificationSubmitDisabled = computed(() => {
   return stepClarificationSteps.value.some(step => !stepClarificationAnswers.value[step.stepId]?.trim())
@@ -893,7 +902,9 @@ function formatTime(value) {
 }
 
 function scrollToFinalReport() {
-  finalReportRef.value?.$el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const reduceMotion = typeof window !== 'undefined'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  finalReportRef.value?.$el?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
 }
 
 function downloadFinalReport() {

@@ -1,5 +1,5 @@
 <template>
-  <div class="markdown-body" v-html="html" @click="handleClick"></div>
+  <div :class="['markdown-body', { 'markdown-streaming': streaming }]" v-html="html" @click="handleClick"></div>
 </template>
 
 <script setup>
@@ -8,7 +8,8 @@ import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
 
 const props = defineProps({
-  content: { type: String, default: '' }
+  content: { type: String, default: '' },
+  streaming: { type: Boolean, default: false }
 })
 
 const renderer = new marked.Renderer()
@@ -44,7 +45,22 @@ renderer.code = (code, language) => {
 
 marked.setOptions({ breaks: true, gfm: true, renderer, tokenizer })
 
-const html = computed(() => props.content ? marked.parse(props.content) : '')
+const htmlCache = new Map()
+const MAX_HTML_CACHE_SIZE = 120
+
+const html = computed(() => {
+  const content = props.content || ''
+  if (!content) return ''
+  const cacheKey = `${props.streaming ? 's' : 'f'}:${content}`
+  const cached = htmlCache.get(cacheKey)
+  if (cached) return cached
+  const parsed = marked.parse(content)
+  htmlCache.set(cacheKey, parsed)
+  if (htmlCache.size > MAX_HTML_CACHE_SIZE) {
+    htmlCache.delete(htmlCache.keys().next().value)
+  }
+  return parsed
+})
 
 async function handleClick(event) {
   const button = event.target?.closest?.('.code-copy-btn')

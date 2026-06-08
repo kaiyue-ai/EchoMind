@@ -38,7 +38,7 @@ public class TeamUsageRecorderAdapter implements TeamUsageRecorder {
     @Override
     public List<String> reserveUserQuota(String userId, String agentId, String sessionId) {
         try {
-            return quotaService.reserveUsage(authUser(userId), sessionId);
+            return quotaService.reserveUsage(authUser(userId), sessionId, 0L);
         } catch (TokenQuotaExceededException e) {
             throw new TeamUsageQuotaExceededException(e.getMessage(), e);
         }

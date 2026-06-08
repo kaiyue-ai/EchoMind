@@ -1,16 +1,19 @@
 <template>
-  <router-view v-if="route.path === '/login'" />
-  <WorkbenchShell
-    v-else
-    :sessions="sessions"
-    :sessions-loading="sessionsLoading"
-    :deleting-session-id="deletingId"
-    :active-session-id="activeSessionId"
-    @refresh-sessions="loadSessions"
-    @new-session="newSession"
-    @open-session="openSession"
-    @delete-session="deleteSession"
-  />
+  <Transition name="app-shell" mode="out-in">
+    <router-view v-if="route.path === '/login'" key="login" />
+    <WorkbenchShell
+      v-else
+      key="workbench"
+      :sessions="sessions"
+      :sessions-loading="sessionsLoading"
+      :deleting-session-id="deletingId"
+      :active-session-id="activeSessionId"
+      @refresh-sessions="loadSessions"
+      @new-session="newSession"
+      @open-session="openSession"
+      @delete-session="deleteSession"
+    />
+  </Transition>
 </template>
 
 <script setup>

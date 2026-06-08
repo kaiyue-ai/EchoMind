@@ -92,13 +92,13 @@ class TeamUsageRecorderAdapterTest {
         TokenQuotaService quotaService = mock(TokenQuotaService.class);
         AlertService alertService = mock(AlertService.class);
         TeamUsageRecorderAdapter adapter = new TeamUsageRecorderAdapter(usageService, quotaService, alertService);
-        when(quotaService.reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a")))
+        when(quotaService.reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a"), eq(0L)))
             .thenReturn(List.of("reservation-a"));
 
         List<String> reservations = adapter.reserveUserQuota("user-a", "planner", "session-a");
 
         assertThat(reservations).containsExactly("reservation-a");
-        verify(quotaService).reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a"));
+        verify(quotaService).reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a"), eq(0L));
     }
 
     @Test

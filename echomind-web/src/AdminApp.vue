@@ -1,6 +1,8 @@
 <template>
-  <router-view v-if="route.path === '/login'" />
-  <AdminShell v-else />
+  <Transition name="app-shell" mode="out-in">
+    <router-view v-if="route.path === '/login'" key="login" />
+    <AdminShell v-else key="admin-shell" />
+  </Transition>
 </template>
 
 <script setup>

@@ -17,11 +17,12 @@
           <el-skeleton animated :rows="2" />
         </div>
       </div>
-      <template v-else>
+      <TransitionGroup v-else name="list-soft" tag="div" class="session-transition-list">
         <div
-          v-for="session in sessions"
+          v-for="(session, index) in sessions"
           :key="session.sessionId"
           :class="['session-item', { active: activeSessionId === session.sessionId }]"
+          :style="{ '--item-index': index }"
         >
           <button
             class="session-main"
@@ -46,7 +47,7 @@
             <el-icon><Delete /></el-icon>
           </el-button>
         </div>
-      </template>
+      </TransitionGroup>
       <div v-if="!loading && sessions.length === 0" class="session-empty">
         暂无会话
       </div>
