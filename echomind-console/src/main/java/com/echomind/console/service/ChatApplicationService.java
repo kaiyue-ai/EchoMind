@@ -7,6 +7,7 @@ import com.echomind.common.observability.EchoMindTrace;
 import com.echomind.console.auth.AuthContext;
 import com.echomind.console.dto.ChatMessageRequest;
 import com.echomind.console.dto.ChatSubmitResponse;
+import com.echomind.console.reservation.TokenEstimator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,6 +36,7 @@ public class ChatApplicationService {
     private final ChatGovernanceService governanceService;
     private final QueuedChatStreamExecutor queuedChatStreamExecutor;
     private final ChatSessionCleanupService sessionCleanupService;
+    private final ChatProviderResolver providerResolver;
 
     private final ChatRequestNormalizer requestNormalizer = new ChatRequestNormalizer();
 
@@ -67,10 +69,9 @@ public class ChatApplicationService {
             // 5. 生成请求ID：唯一标识本次请求，用于SSE推送关联
             String requestId = UUID.randomUUID().toString();
 
-            // 6. 注册SSE请求：建立客户端连接关联(将结果推送给指定的用户的的请求)
-            ssePushService.registerRequest(requestId, normalized.userId());
-
             if (requestInspection.shortCircuited()) {
+                // 6. 注册SSE请求：建立客户端连接关联(将结果推送给指定的用户的的请求)
+                ssePushService.registerRequest(requestId, normalized.userId());
                 ssePushService.pushEvent(ChatStreamEvent.result(ChatResponse.success(
                     requestId,
                     normalized.sessionId(),
@@ -89,11 +90,21 @@ public class ChatApplicationService {
             normalized = normalized.withMessage(requestInspection.governedMessage());
 
             List<String> userReservationIds = List.of();
+            List<String> providerReservationIds = List.of();
+            boolean sseRegistered = false;
             try {
-                userReservationIds = governanceService.reserveUserQuota(normalized.authUser(), requestId);
-                if (userReservationIds == null) {
-                    userReservationIds = List.of();
-                }
+                long estimatedTokens = TokenEstimator.estimate(normalized.message());
+                userReservationIds = safeReservations(
+                    governanceService.reserveUserQuota(normalized.authUser(), requestId, estimatedTokens));
+                providerReservationIds = providerResolver.resolveProviderId(normalized.agentId(), normalized.modelId())
+                    .map(providerId -> safeReservations(
+                        governanceService.reserveProviderBudget(providerId, requestId, estimatedTokens)))
+                    .orElse(List.of());
+
+                // 7. 注册SSE请求：只有可执行请求才进入在线流式请求索引。
+                ssePushService.registerRequest(requestId, normalized.userId());
+                sseRegistered = true;
+
                 // 7. 发布消息到RabbitMQ：异步处理核心，解耦请求提交与处理
                 rabbitProducer.publish(new ChatRequest(
                     requestId,           // 请求唯一标识
@@ -105,12 +116,16 @@ public class ChatApplicationService {
                     traceId,              // 追踪ID
                     EchoMindTrace.injectContext().get("traceparent"), // 追踪上下文（用于跨服务追踪）
                     normalized.attachments(), // 附件
-                    userReservationIds
+                    userReservationIds,
+                    providerReservationIds
                 ));
             } catch (RuntimeException e) {
                 // 发布失败：清理SSE注册，避免无效连接泄漏
-                ssePushService.discardRequest(requestId);
+                if (sseRegistered) {
+                    ssePushService.discardRequest(requestId);
+                }
                 governanceService.releaseReservations(userReservationIds);
+                governanceService.releaseReservations(providerReservationIds);
                 throw e;
             }
 
@@ -151,5 +166,9 @@ public class ChatApplicationService {
     /** 安全获取字符串，避免空指针。 */
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private List<String> safeReservations(List<String> reservationIds) {
+        return reservationIds == null ? List.of() : reservationIds;
     }
 }

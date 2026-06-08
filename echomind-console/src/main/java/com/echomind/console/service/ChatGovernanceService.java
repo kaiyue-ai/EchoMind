@@ -3,6 +3,7 @@ package com.echomind.console.service;
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.console.alerts.AlertService;
 import com.echomind.console.auth.AuthUser;
+import com.echomind.console.budget.ProviderTokenBudgetService;
 import com.echomind.console.quota.TokenQuotaExceededException;
 import com.echomind.console.quota.TokenQuotaService;
 import com.echomind.console.sensitive.SensitiveDataService;
@@ -10,8 +11,9 @@ import com.echomind.console.usage.AiCallUsageEntity;
 import com.echomind.console.usage.AiCallUsageService;
 import com.echomind.common.observability.EchoMindTrace;
 import io.opentelemetry.api.trace.Span;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -31,7 +33,6 @@ import java.util.List;
  * <p>作为聊天请求的治理入口，在请求处理的各个阶段进行合规检查和记录。</p>
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class ChatGovernanceService {
 
@@ -46,6 +47,29 @@ public class ChatGovernanceService {
     
     /** 告警服务（用于触发告警） */
     private final AlertService alertService;
+
+    /** Provider预算服务（用于入队前预算预留） */
+    private final ObjectProvider<ProviderTokenBudgetService> providerBudgetService;
+
+    public ChatGovernanceService(AiCallUsageService usageService,
+                                 TokenQuotaService quotaService,
+                                 SensitiveDataService sensitiveDataService,
+                                 AlertService alertService) {
+        this(usageService, quotaService, sensitiveDataService, alertService, null);
+    }
+
+    @Autowired
+    public ChatGovernanceService(AiCallUsageService usageService,
+                                 TokenQuotaService quotaService,
+                                 SensitiveDataService sensitiveDataService,
+                                 AlertService alertService,
+                                 ObjectProvider<ProviderTokenBudgetService> providerBudgetService) {
+        this.usageService = usageService;
+        this.quotaService = quotaService;
+        this.sensitiveDataService = sensitiveDataService;
+        this.alertService = alertService;
+        this.providerBudgetService = providerBudgetService;
+    }
 
     /**
      * 检查请求合规性
@@ -84,8 +108,16 @@ public class ChatGovernanceService {
         return RequestInspection.continueWith(governed.text());
     }
 
-    public List<String> reserveUserQuota(AuthUser authUser, String requestId) {
-        return quotaService.reserveUsage(authUser, requestId);
+    public List<String> reserveUserQuota(AuthUser authUser, String requestId, long estimatedTokens) {
+        return quotaService.reserveUsage(authUser, requestId, estimatedTokens);
+    }
+
+    public List<String> reserveProviderBudget(String providerId, String requestId, long estimatedTokens) {
+        ProviderTokenBudgetService service = providerBudgetService == null ? null : providerBudgetService.getIfAvailable();
+        if (service == null || providerId == null || providerId.isBlank()) {
+            return List.of();
+        }
+        return service.reserveProviderBudget(providerId, requestId, estimatedTokens);
     }
 
     public void releaseReservations(List<String> reservationIds) {

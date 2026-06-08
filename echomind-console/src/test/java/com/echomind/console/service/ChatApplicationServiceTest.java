@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -103,7 +104,7 @@ class ChatApplicationServiceTest {
     void submitAsyncPublishesUserReservationIds() {
         ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
         ChatGovernanceService governanceService = passthroughGovernanceService();
-        when(governanceService.reserveUserQuota(any(), anyString())).thenReturn(List.of("reservation-a"));
+        when(governanceService.reserveUserQuota(any(), anyString(), anyLong())).thenReturn(List.of("reservation-a"));
         ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer, mock(MemoryManager.class),
             mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
 
@@ -119,13 +120,37 @@ class ChatApplicationServiceTest {
     }
 
     @Test
+    void submitAsyncPublishesProviderReservationIds() {
+        ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        when(governanceService.reserveProviderBudget(eq("deepseek"), anyString(), anyLong()))
+            .thenReturn(List.of("provider-reservation"));
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        when(providerResolver.resolveProviderId(eq("default"), eq("deepseek:model")))
+            .thenReturn(Optional.of("deepseek"));
+        ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer,
+            mock(MemoryManager.class), mock(ObjectStorageService.class), mock(SsePushService.class),
+            governanceService, providerResolver);
+
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        try {
+            service.submitAsync(new ChatMessageRequest("default", "hello", "session-a", "deepseek:model", List.of()));
+        } finally {
+            AuthContext.clear();
+        }
+
+        verify(rabbitProducer).publish(argThat((ChatRequest request) ->
+            request.providerReservationIds().equals(List.of("provider-reservation"))));
+    }
+
+    @Test
     void submitAsyncReleasesReservationsWhenPublishFails() {
         ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
         RuntimeException publishError = new RuntimeException("rabbit down");
         doThrow(publishError).when(rabbitProducer).publish(any(ChatRequest.class));
         SsePushService ssePushService = mock(SsePushService.class);
         ChatGovernanceService governanceService = passthroughGovernanceService();
-        when(governanceService.reserveUserQuota(any(), anyString())).thenReturn(List.of("reservation-a"));
+        when(governanceService.reserveUserQuota(any(), anyString(), anyLong())).thenReturn(List.of("reservation-a"));
         ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer, mock(MemoryManager.class),
             mock(ObjectStorageService.class), ssePushService, governanceService);
 
@@ -140,6 +165,67 @@ class ChatApplicationServiceTest {
 
         verify(ssePushService).discardRequest(anyString());
         verify(governanceService).releaseReservations(List.of("reservation-a"));
+    }
+
+    @Test
+    void submitAsyncReleasesUserAndProviderReservationsWhenPublishFails() {
+        ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
+        RuntimeException publishError = new RuntimeException("rabbit down");
+        doThrow(publishError).when(rabbitProducer).publish(any(ChatRequest.class));
+        SsePushService ssePushService = mock(SsePushService.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        when(governanceService.reserveUserQuota(any(), anyString(), anyLong())).thenReturn(List.of("user-reservation"));
+        when(governanceService.reserveProviderBudget(eq("deepseek"), anyString(), anyLong()))
+            .thenReturn(List.of("provider-reservation"));
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        when(providerResolver.resolveProviderId(eq("default"), eq("deepseek:model")))
+            .thenReturn(Optional.of("deepseek"));
+        ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer,
+            mock(MemoryManager.class), mock(ObjectStorageService.class), ssePushService, governanceService,
+            providerResolver);
+
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        try {
+            assertThatThrownBy(() -> service.submitAsync(
+                new ChatMessageRequest("default", "hello", "session-a", "deepseek:model", List.of())))
+                .isSameAs(publishError);
+        } finally {
+            AuthContext.clear();
+        }
+
+        verify(ssePushService).discardRequest(anyString());
+        verify(governanceService).releaseReservations(List.of("user-reservation"));
+        verify(governanceService).releaseReservations(List.of("provider-reservation"));
+    }
+
+    @Test
+    void submitAsyncRejectsProviderBudgetBeforeRegisteringOrPublishing() {
+        ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
+        SsePushService ssePushService = mock(SsePushService.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        when(governanceService.reserveUserQuota(any(), anyString(), anyLong())).thenReturn(List.of("user-reservation"));
+        ProviderTokenBudgetExceededException budgetError =
+            new ProviderTokenBudgetExceededException("deepseek", "daily", 100, 100);
+        when(governanceService.reserveProviderBudget(eq("deepseek"), anyString(), anyLong())).thenThrow(budgetError);
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        when(providerResolver.resolveProviderId(eq("default"), eq("deepseek:model")))
+            .thenReturn(Optional.of("deepseek"));
+        ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer,
+            mock(MemoryManager.class), mock(ObjectStorageService.class), ssePushService, governanceService,
+            providerResolver);
+
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        try {
+            assertThatThrownBy(() -> service.submitAsync(
+                new ChatMessageRequest("default", "hello", "session-a", "deepseek:model", List.of())))
+                .isSameAs(budgetError);
+        } finally {
+            AuthContext.clear();
+        }
+
+        verify(governanceService).releaseReservations(List.of("user-reservation"));
+        verifyNoInteractions(ssePushService);
+        verifyNoInteractions(rabbitProducer);
     }
 
     @Test
@@ -206,7 +292,11 @@ class ChatApplicationServiceTest {
         ProviderTokenBudgetExceededException budgetError =
             new ProviderTokenBudgetExceededException("deepseek", "daily", 1000, 1000);
         when(orchestrator.executeStreamContext(eq("user-a"), eq("default"), eq("session-budget"),
-            eq("hello"), eq("deepseek:model"), eq(List.of()), eq("hello"))).thenReturn(Mono.error(budgetError));
+            eq("hello"), eq("deepseek:model"), eq(List.of()), eq("hello"),
+            argThat((Map<String, Object> attributes) -> attributes.size() == 1
+                && attributes.get(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS)
+                    .equals(List.of("reservation-a")))))
+            .thenReturn(Mono.error(budgetError));
         ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
             mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
 
@@ -497,13 +587,23 @@ class ChatApplicationServiceTest {
     private ChatApplicationService service(AgentOrchestrator orchestrator, ChatRabbitProducer rabbitProducer,
                                            MemoryManager memoryManager, ObjectStorageService storageService,
                                            SsePushService ssePushService, ChatGovernanceService governanceService) {
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        when(providerResolver.resolveProviderId(anyString(), any())).thenReturn(Optional.empty());
+        return service(orchestrator, rabbitProducer, memoryManager, storageService, ssePushService, governanceService,
+            providerResolver);
+    }
+
+    private ChatApplicationService service(AgentOrchestrator orchestrator, ChatRabbitProducer rabbitProducer,
+                                           MemoryManager memoryManager, ObjectStorageService storageService,
+                                           SsePushService ssePushService, ChatGovernanceService governanceService,
+                                           ChatProviderResolver providerResolver) {
         AgentChatExecutor agentChatExecutor = new AgentChatExecutor(orchestrator);
         QueuedChatStreamExecutor queuedChatStreamExecutor =
             new QueuedChatStreamExecutor(agentChatExecutor, governanceService);
         ChatSessionCleanupService sessionCleanupService =
             new ChatSessionCleanupService(memoryManager, storageService);
         return new ChatApplicationService(rabbitProducer, ssePushService, governanceService,
-            queuedChatStreamExecutor, sessionCleanupService);
+            queuedChatStreamExecutor, sessionCleanupService, providerResolver);
     }
 
     private ChatGovernanceService passthroughGovernanceService() {

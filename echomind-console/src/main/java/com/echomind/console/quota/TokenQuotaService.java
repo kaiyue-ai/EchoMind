@@ -129,7 +129,7 @@ public class TokenQuotaService {
             .ifPresent(quota -> assertQuota(user.userId(), quota));
     }
 
-    public List<String> reserveUsage(AuthUser user, String requestId) {
+    public List<String> reserveUsage(AuthUser user, String requestId, long estimatedTokens) {
         if (user == null || !user.authenticated()) {
             return List.of();
         }
@@ -137,7 +137,8 @@ public class TokenQuotaService {
         if (service == null) {
             return List.of();
         }
-        return service.reserveUser(user.userId(), requestId, service.defaultReserveTokens());
+        return service.reserveUser(user.userId(), requestId,
+            estimatedTokens > 0 ? estimatedTokens : service.defaultReserveTokens());
     }
 
     /**
