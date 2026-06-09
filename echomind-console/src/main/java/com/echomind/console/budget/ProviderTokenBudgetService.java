@@ -1,7 +1,5 @@
 package com.echomind.console.budget;
 
-import com.echomind.agent.pipeline.PipelineContext;
-import com.echomind.agent.pipeline.budget.ProviderTokenBudgetGuard;
 import com.echomind.console.alerts.AlertService;
 import com.echomind.console.budget.ProviderTokenBudgetDtos.ProviderTokenBudgetListResponse;
 import com.echomind.console.budget.ProviderTokenBudgetDtos.ProviderTokenBudgetView;
@@ -28,7 +26,7 @@ import java.util.List;
 import java.util.Set;
 
 @Service
-public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
+public class ProviderTokenBudgetService {
 
     private static final ZoneId BUDGET_ZONE = ZoneId.of("Asia/Shanghai");
 
@@ -67,24 +65,14 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
         this.clock = clock == null ? Clock.system(BUDGET_ZONE) : clock;
     }
 
-    @Override
     @Transactional(readOnly = true)
-    public void assertAllowed(PipelineContext ctx) {
-        if (hasProviderReservations(ctx)) {
-            return;
-        }
-        String providerId = providerId(ctx);
-        if (providerId == null || providerId.isBlank()) {
-            return;
-        }
-        budgetMapper.selectOptionalById(providerId)
-            .filter(budget -> budget.getStatus() == ProviderTokenBudgetStatus.ACTIVE)
-            .filter(this::hasConfiguredLimit)
-            .ifPresent(budget -> reserveBudget(providerId, ctx));
+    public List<String> reserveProviderBudget(String providerId, String requestId, long estimatedTokens) {
+        return reserveProviderBudget(providerId, requestId, null, null, estimatedTokens);
     }
 
     @Transactional(readOnly = true)
-    public List<String> reserveProviderBudget(String providerId, String requestId, long estimatedTokens) {
+    public List<String> reserveProviderBudget(String providerId, String requestId, String agentId, String sessionId,
+                                              long estimatedTokens) {
         if (providerId == null || providerId.isBlank()) {
             return List.of();
         }
@@ -95,7 +83,7 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
         if (budget == null) {
             return List.of();
         }
-        return reserveBudget(providerId, requestId, null, null, estimatedTokens);
+        return reserveBudget(providerId, requestId, agentId, sessionId, estimatedTokens);
     }
 
     @Transactional
@@ -147,29 +135,6 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
         return list();
     }
 
-    private void reserveBudget(String providerId, PipelineContext ctx) {
-        List<String> reservationIds = reserveBudget(providerId, ctx == null ? null : ctx.getTraceId(),
-            ctx == null ? null : ctx.getAgentId(), ctx == null ? null : ctx.getSessionId());
-        if (!reservationIds.isEmpty() && ctx != null) {
-            ctx.getAttributes().put(PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS, reservationIds);
-        }
-    }
-
-    private List<String> reserveBudget(String providerId, String requestId, String agentId, String sessionId) {
-        TokenReservationService service = reservationService == null ? null : reservationService.getIfAvailable();
-        if (service == null) {
-            throw new com.echomind.console.reservation.TokenReservationUnavailableException(
-                "Redis unavailable for provider token budget reservation");
-        }
-        try {
-            return service.reserveProvider(providerId, requestId, service.defaultReserveTokens());
-        } catch (ProviderTokenBudgetExceededException e) {
-            alertService.emitProviderBudgetExceeded(providerId, requestId, agentId, sessionId, e.scope(),
-                e.usedTokens(), e.limitTokens());
-            throw e;
-        }
-    }
-
     private List<String> reserveBudget(String providerId, String requestId, String agentId, String sessionId,
                                         long estimatedTokens) {
         TokenReservationService service = reservationService == null ? null : reservationService.getIfAvailable();
@@ -185,18 +150,6 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
                 e.usedTokens(), e.limitTokens());
             throw e;
         }
-    }
-
-    @SuppressWarnings("unchecked")
-    private boolean hasProviderReservations(PipelineContext ctx) {
-        if (ctx == null) {
-            return false;
-        }
-        Object value = ctx.getAttributes().get(PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS);
-        if (value instanceof List<?> list) {
-            return !list.isEmpty();
-        }
-        return false;
     }
 
     private void emitSignals(String providerId, ProviderTokenBudgetEntity budget, AiCallUsageEntity usage) {
@@ -332,17 +285,6 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
             return 0;
         }
         return Math.min(999, (used * 100.0) / limit);
-    }
-
-    private String providerId(PipelineContext ctx) {
-        if (ctx == null) {
-            return null;
-        }
-        if (ctx.getResolvedModel() != null && ctx.getResolvedModel().providerId() != null
-            && !ctx.getResolvedModel().providerId().isBlank()) {
-            return ctx.getResolvedModel().providerId();
-        }
-        return providerFromModelId(ctx.getModelId());
     }
 
     private String providerId(AiCallUsageEntity usage) {

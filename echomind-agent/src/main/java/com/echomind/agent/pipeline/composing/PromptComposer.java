@@ -8,7 +8,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Builds the model-facing prompt from current input, reference context, and recent history.
+ * 面向模型的用户提示词组装器。
+ *
+ * <p>它只负责把当前问题、参考上下文和短期历史按预算拼接成 user message。
+ * 工具使用策略由结果聚合阶段追加到 system prompt，避免提示词组装器重新耦合工具路由逻辑。</p>
  */
 public class PromptComposer {
 
@@ -22,12 +25,11 @@ public class PromptComposer {
         List<AgentMessage> allMessages = ctx.getMessages();
         int historySize = Math.max(0, allMessages.size() - 1);
         String currentHeader = "=== 当前用户问题（最高优先级） ===\n";
-        String followUpInstruction = followUpInstruction(ctx);
         String currentInstruction = """
             硬规则：必须优先回答当前用户问题。参考上下文和短期对话历史只能用于消歧、续写和理解偏好约束。
             如果参考上下文或历史与当前问题无关，不要转移话题，也不要主动回到旧话题。
 
-            """ + followUpInstruction;
+            """;
         int currentBudget = promptBudget.getMaxChars() - currentHeader.length() - currentInstruction.length();
         String currentUserMessage = truncateTail(safeContent(ctx.getUserMessage()), Math.max(0, currentBudget));
         String currentSection = currentHeader + currentInstruction + currentUserMessage;
@@ -126,19 +128,6 @@ public class PromptComposer {
 
     private String safeContent(String value) {
         return value == null ? "" : MemoryDecisionParser.stripHiddenDecisionBlocks(value);
-    }
-
-    private String followUpInstruction(PipelineContext ctx) {
-        Object matched = ctx.getAttributes().get(PipelineContext.ATTR_CONTEXT_MATCHED_TOOLS);
-        if (!(matched instanceof List<?> tools) || tools.isEmpty()) {
-            return "";
-        }
-        return """
-            本轮问题被识别为对最近业务查询的短句追问；系统已根据短期历史补充相关上下文工具。
-            如果当前问题只是日期、继续、换条件等新约束，不要只回答这个约束本身，要结合短期历史继续完成原业务任务。
-            如果日期/时间工具已经把相对日期约束计算成目标日期，后续业务工具必须直接使用该目标日期，不要再次叠加相同偏移。
-
-            """;
     }
 
     private String truncateHead(String value, int maxChars) {

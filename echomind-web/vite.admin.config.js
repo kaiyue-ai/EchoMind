@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
+import Components from 'unplugin-vue-components/vite'
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
 function adminHistoryFallback() {
   return {
@@ -24,7 +26,15 @@ function adminHistoryFallback() {
 }
 
 export default defineConfig({
-  plugins: [adminHistoryFallback(), vue(), tailwindcss()],
+  plugins: [
+    adminHistoryFallback(),
+    vue(),
+    Components({
+      dts: false,
+      resolvers: [ElementPlusResolver({ importStyle: 'css' })]
+    }),
+    tailwindcss()
+  ],
   server: {
     port: 5174,
     proxy: {
@@ -40,9 +50,16 @@ export default defineConfig({
     rollupOptions: {
       input: 'index.admin.html',
       output: {
-        manualChunks: {
-          vue: ['vue', 'vue-router', 'pinia'],
-          element: ['element-plus', '@element-plus/icons-vue']
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('node_modules/vue')
+            || id.includes('node_modules/vue-router')
+            || id.includes('node_modules/pinia')) {
+            return 'vue'
+          }
+          if (id.includes('node_modules/echarts')) return 'charts'
+          if (id.includes('node_modules/@element-plus/icons-vue')) return 'element-icons'
+          if (id.includes('node_modules/element-plus')) return 'element'
         }
       }
     }

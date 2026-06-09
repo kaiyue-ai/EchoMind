@@ -25,29 +25,16 @@ import lombok.Setter;
 @Setter
 public class PipelineContext {
 
-    /** Agent 允许暴露给模型的 Skill ID 列表。 */
-    public static final String ATTR_AGENT_SKILL_IDS = "agentSkillIds";
     /** 治理前的用户原文，供工具调用理解原始意图。 */
     public static final String ATTR_RAW_USER_MESSAGE = "rawUserMessage";
-    /** 工具暴露模式：关键词命中或交给模型自由选择。 */
-    public static final String ATTR_TOOL_MATCH_MODE = "toolMatchMode";
     /** 内部控制面调用禁用工具暴露，避免 Planner/Reviewer 误触业务 Skill。 */
     public static final String ATTR_TOOL_EXPOSURE_DISABLED = "toolExposureDisabled";
-    /** 关键词命中的工具名列表，仅用于调试和链路追踪。 */
-    public static final String ATTR_KEYWORD_MATCHED_TOOLS = "keywordMatchedTools";
-    /** 短句追问从最近上下文补回的工具名列表，仅用于调试和链路追踪。 */
-    public static final String ATTR_CONTEXT_MATCHED_TOOLS = "contextMatchedTools";
     /** 本轮没有真实模型 usage，不应写入用量表。 */
     public static final String ATTR_MODEL_USAGE_NOT_APPLICABLE = "modelUsageNotApplicable";
-    /** 平台 provider token 预算已阻断本轮模型调用。 */
-    public static final String ATTR_PROVIDER_TOKEN_BUDGET_BLOCKED = "providerTokenBudgetBlocked";
     /** 入队前用户 Token 配额预留 ID 列表。 */
     public static final String ATTR_USER_TOKEN_RESERVATION_IDS = "userTokenReservationIds";
     /** 模型调用前 Provider Token 预算预留 ID 列表。 */
     public static final String ATTR_PROVIDER_TOKEN_RESERVATION_IDS = "providerTokenReservationIds";
-    public static final String TOOL_MATCH_KEYWORD = "keyword";
-    public static final String TOOL_MATCH_MODEL = "model";
-    public static final String TOOL_MATCH_DISABLED = "disabled";
 
     private String sessionId;
     private String userId = "default";

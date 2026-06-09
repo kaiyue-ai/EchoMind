@@ -11,6 +11,7 @@ import com.echomind.common.model.UserMemoryEvent;
 import com.echomind.console.auth.AuthUser;
 import com.echomind.console.config.RabbitMQConfig;
 import com.echomind.console.service.ChatGovernanceService;
+import com.echomind.console.service.ChatProviderResolver;
 import com.echomind.console.service.SsePushService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -26,12 +27,12 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -127,23 +128,64 @@ class RabbitDeadLetterServiceTest {
         ChatGovernanceService governance = mock(ChatGovernanceService.class);
         SsePushService sse = mock(SsePushService.class);
         RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
-        RabbitDeadLetterService service = service(deadLetterMapper, governance, sse, rabbitTemplate);
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        RabbitDeadLetterService service = service(deadLetterMapper, governance, providerResolver, sse, rabbitTemplate);
         ChatRequest request = new ChatRequest("req-replay", "user-a", "default", "session-a", "hello",
             "mock:model", "trace-a", "00-trace-a", List.of(), List.of("old-reservation"));
         RabbitDeadLetterEntity entity = entity(42L, RabbitDeadLetterService.TYPE_CHAT_REQUEST,
             mapper.writeValueAsString(request));
         when(deadLetterMapper.selectById(42L)).thenReturn(entity);
-        when(governance.reserveUserQuota(any(AuthUser.class), eq("req-replay"), anyLong())).thenReturn(List.of("new-reservation"));
+        when(providerResolver.resolveProviderId("default", "mock:model")).thenReturn(Optional.of("mock"));
+        when(governance.reserveUserQuota(any(AuthUser.class), eq("req-replay"), eq(4098L)))
+            .thenReturn(List.of("new-reservation"));
+        when(governance.reserveProviderBudget("mock", "req-replay", 4098L))
+            .thenReturn(List.of("new-provider-reservation"));
 
         service.replay(42L);
 
         verify(sse).registerRequest("req-replay", "user-a");
         verify(rabbitTemplate).convertAndSend(eq(RabbitMQConfig.QUEUE_CHAT_REQUESTS),
             argThat((ChatRequest replay) -> replay.userReservationIds().equals(List.of("new-reservation"))
+                && replay.providerReservationIds().equals(List.of("new-provider-reservation"))
                 && "req-replay".equals(replay.requestId())),
             any(MessagePostProcessor.class),
             any(CorrelationData.class));
         verify(deadLetterMapper).markReplaySuccess(eq(42L), eq(RabbitDeadLetterStatus.REPLAYED), any(Instant.class));
+    }
+
+    @Test
+    void replayChatRequestReleasesFreshReservationsWhenPublishFails() throws Exception {
+        RabbitDeadLetterMapper deadLetterMapper = mock(RabbitDeadLetterMapper.class);
+        ChatGovernanceService governance = mock(ChatGovernanceService.class);
+        SsePushService sse = mock(SsePushService.class);
+        RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        RabbitDeadLetterService service = service(deadLetterMapper, governance, providerResolver, sse, rabbitTemplate);
+        ChatRequest request = new ChatRequest("req-replay", "user-a", "default", "session-a", "hello",
+            "mock:model", "trace-a", "00-trace-a", List.of(), List.of("old-reservation"));
+        RabbitDeadLetterEntity entity = entity(45L, RabbitDeadLetterService.TYPE_CHAT_REQUEST,
+            mapper.writeValueAsString(request));
+        RuntimeException publishError = new RuntimeException("rabbit down");
+        when(deadLetterMapper.selectById(45L)).thenReturn(entity);
+        when(providerResolver.resolveProviderId("default", "mock:model")).thenReturn(Optional.of("mock"));
+        when(governance.reserveUserQuota(any(AuthUser.class), eq("req-replay"), eq(4098L)))
+            .thenReturn(List.of("new-reservation"));
+        when(governance.reserveProviderBudget("mock", "req-replay", 4098L))
+            .thenReturn(List.of("new-provider-reservation"));
+        org.mockito.Mockito.doThrow(publishError).when(rabbitTemplate).convertAndSend(
+            eq(RabbitMQConfig.QUEUE_CHAT_REQUESTS),
+            any(ChatRequest.class),
+            any(MessagePostProcessor.class),
+            any(CorrelationData.class)
+        );
+
+        assertThatThrownBy(() -> service.replay(45L)).isSameAs(publishError);
+
+        verify(sse).discardRequest("req-replay");
+        verify(governance).releaseReservations(List.of("new-reservation"));
+        verify(governance).releaseReservations(List.of("new-provider-reservation"));
+        verify(deadLetterMapper).markReplayFailure(eq(45L), eq(RabbitDeadLetterStatus.REPLAY_FAILED),
+            argThat(error -> error.contains("rabbit down")));
     }
 
     @Test
@@ -186,14 +228,24 @@ class RabbitDeadLetterServiceTest {
 
     private RabbitDeadLetterService service(RabbitDeadLetterMapper deadLetterMapper,
                                             ChatGovernanceService governance,
+                                            ChatProviderResolver providerResolver,
                                             SsePushService sse,
                                             RabbitTemplate rabbitTemplate) {
-        RabbitDeadLetterService service = new RabbitDeadLetterService(deadLetterMapper, mapper, governance, sse,
-            rabbitTemplate);
+        RabbitDeadLetterService service = new RabbitDeadLetterService(deadLetterMapper, mapper, governance,
+            providerResolver, sse, rabbitTemplate);
         ReflectionTestUtils.setField(service, "chatMemoryExchangeName", "chat.memory.exchange");
         ReflectionTestUtils.setField(service, "chatMemoryShardCount", 4);
         ReflectionTestUtils.setField(service, "userMemoryQueueName", "user.memory.queue");
         return service;
+    }
+
+    private RabbitDeadLetterService service(RabbitDeadLetterMapper deadLetterMapper,
+                                            ChatGovernanceService governance,
+                                            SsePushService sse,
+                                            RabbitTemplate rabbitTemplate) {
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        when(providerResolver.resolveProviderId(anyString(), any())).thenReturn(Optional.empty());
+        return service(deadLetterMapper, governance, providerResolver, sse, rabbitTemplate);
     }
 
     private RabbitDeadLetterMapper mapperWithArchiveStorage() {

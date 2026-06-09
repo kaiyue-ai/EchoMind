@@ -1,6 +1,6 @@
 # 当前进度
 
-最后更新：2026-06-03
+最后更新：2026-06-08
 
 ## 已完成
 
@@ -43,11 +43,15 @@
 - 聊天入口已进一步解耦：`ChatGovernanceService` 统一收口配额、脱敏、用量和调用错误告警；流式聊天改为 `POST /api/chat` 入队、`GET /api/chat/stream/{requestId}` 订阅 token 事件；`MemoryApplicationService` 统一会话摘要、历史读取和附件展示 URL 刷新。
 - RabbitMQ 使用面已梳理：当前只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件；聊天 token、tool、result、failure 事件由消费端直接交给 SSE 推送服务；Agent Team 仍由 `TaskExecutor` 推进 MySQL 黑板状态机。
 - SSE token 级 RabbitMQ 中转及其消费者配置已移除。
+- 聊天请求入队前已携带用户 quota 和 Provider budget 两类 Redis reservation；消费端不重复用户配额校验，Pipeline 不再做 Provider budget 兜底预留，RabbitMQ 聊天请求死信重放会在重新入队前重建两类 reservation。
+- Team 内部 LLM 调用已改为每次调用前按本轮 prompt 显式预留用户 quota 和 Provider budget，reservation id 会随 `PipelineContext` 进入统一用量结算。
+- RabbitMQ 核心队列已补齐 DLQ 归档和受控重放：聊天请求、普通聊天记忆和用户长期记忆重试耗尽后进入 DLQ，主后端归档到 MySQL `echomind_rabbitmq_dead_letters`；聊天请求死信会释放入队前冻结的用户 reservation 并推送 SSE `failure`，管理端可查询并按 dead-letter id 重放。
 - 已新增 Docker MySQL 迁移入口：`scripts/apply-mysql-migrations.ps1` 和 harness `make migrate` 会按顺序执行 `docker/mysql/migrations/*.sql`，`make deploy` 在重启后端前自动应用迁移。
 - 已补齐 Agent 知识库 HTTP 编排层：`AgentController` 只处理 HTTP 适配，上传校验和 `MultipartFile` 参数整理进入 `AgentKnowledgeApplicationService`。
 - 启动恢复逻辑已从 `EchoMindAutoConfiguration` 下沉到 `AgentRuntimeBootstrapper`；默认 Skill 补齐、旧模型迁移、fallback Agent 和退役 Skill 清理已由 `echomind.runtime` 配置驱动，避免启动流程继续硬编码具体 Skill 或旧模型。
+- 默认 Agent 启动配置已切到阿里云百炼 Qwen vision 模型 `aliyun-bailian:qwen3.6-plus`；芙莉莲、洛克希和张雪峰/耿同学 Skill 已退役，现保留 JVM 大手子、计算机操作系统大手子，并新增张雪峰 Agent。张雪峰 Agent 的系统提示词通过 `system-prompt-resource` 读取 GitHub `zhangxuefeng-skill` 的 `SKILL.md` 内容，私有知识库 seed 使用志愿填报公开著作/简介抽象出的结构化笔记，知识库仍按 `agentId` 进入 MySQL 元数据和 Milvus 向量索引。
 - LLM Provider 已移除按具体工具名判断最终答案策略的硬编码；工具输出统一回到 LLM 生成最终答复，不支持工具直出最终答案。
-- 工具路由已收敛为显式 metadata 预匹配：`ToolRouter` 保持入口，`ToolMatchScorer` 只基于 `keywords`、`aliases`、`tags` 和工具名打分；短句追问由 `ToolExposurePlanner` 回看最近用户消息补回上一轮业务工具；URL/domain 专用过滤、确定性消歧和直调参数兜底已移除，参数交给模型正式 tool call 与 schema 校验。
+- 工具路由已收敛为全量工具暴露：`ToolRouter` 只做运行时注册表，普通聊天每轮把所有已启用 Skill 和已挂载外部 MCP 工具交给模型；关键词预筛选、Agent allow-list 过滤和短句追问补工具逻辑已移除，参数交给模型正式 tool call 与 schema 校验。
 - `echomind-llm` 已局部接入 Spring AI：OpenAI-compatible 与 DeepSeek Provider 收缩为 ChatModel adapter，DeepSeek 默认协议迁移到 Chat Completions，默认模型为 `deepseek-v4-flash`。
 - README、CLAUDE、AGENTS、docs/API 和 harness 文档已同步项目详解、运行步骤、整体架构图、工具路由边界和验证命令。
 - Agent Team v2 已合并 DAG 管控中心与 Reflexion 重试：Planner 输出 SIMPLE/COMPLEX 和 DAG，TeamControlCenter 按依赖调度可并发 Step，AgentSelector 将候选 Executor、能力/负载/健康度评分交给模型自主选择并保留规则兜底，RiskPolicy 触发 SubReviewer，MergeAgent 聚合，ConflictDetector 检测冲突，必要时 PlannerArbitration 仲裁，GlobalReviewer 负责终审、重试、局部重规划、整体重规划、澄清和最终报告。

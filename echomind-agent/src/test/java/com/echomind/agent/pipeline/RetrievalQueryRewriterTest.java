@@ -6,6 +6,7 @@ import com.echomind.llm.provider.dto.ProviderRequest;
 import com.echomind.llm.provider.dto.ProviderResponse;
 import com.echomind.llm.router.ModelCapability;
 import com.echomind.llm.router.ModelSpec;
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 
@@ -34,6 +35,7 @@ class RetrievalQueryRewriterTest {
             .containsEntry(RetrievalQueryRewriter.ATTR_RETRIEVAL_QUERY, "今天苹果的价格")
             .containsEntry(RetrievalQueryRewriter.ATTR_RETRIEVAL_QUERY_REWRITTEN, true);
         assertThat(captured.get().tools()).isEmpty();
+        assertThat(captured.get().systemPrompt()).contains("no longer than 120 characters");
     }
 
     @Test
@@ -52,20 +54,26 @@ class RetrievalQueryRewriterTest {
     }
 
     @Test
-    void fallsBackToOriginalOnInvalidJsonEmptyOrLongQuery() {
-        PipelineContext invalid = context("今天苹果多少钱");
+    void fallsBackToSafeQueryOnInvalidJsonEmptyOrLongQuery() {
+        String longMessage = "HEAD-" + "x".repeat(80) + "-TAIL";
+        PipelineContext invalid = context(longMessage);
         assertThat(rewriter(request -> ProviderResponse.text("not-json")).queryFor(invalid))
-            .isEqualTo("今天苹果多少钱");
+            .hasSize(35)
+            .startsWith("HEAD-")
+            .contains("\n...\n")
+            .endsWith("-TAIL");
         assertThat(invalid.getAttributes())
             .containsEntry(RetrievalQueryRewriter.ATTR_RETRIEVAL_QUERY_REWRITTEN, false);
 
-        PipelineContext empty = context("今天苹果多少钱");
+        PipelineContext empty = context(longMessage);
         assertThat(rewriter(request -> ProviderResponse.text("{\"query\":\"\"}")).queryFor(empty))
-            .isEqualTo("今天苹果多少钱");
+            .hasSize(35)
+            .contains("\n...\n");
 
-        PipelineContext tooLong = context("今天苹果多少钱");
+        PipelineContext tooLong = context(longMessage);
         assertThat(rewriter(request -> ProviderResponse.text("{\"query\":\"超过\"}"), 1).queryFor(tooLong))
-            .isEqualTo("今天苹果多少钱");
+            .hasSize(35)
+            .contains("\n...\n");
     }
 
     @Test
@@ -97,7 +105,8 @@ class RetrievalQueryRewriterTest {
             true,
             1000,
             maxQueryChars,
-            null
+            null,
+            new EmbeddingInputPolicy(35)
         );
     }
 

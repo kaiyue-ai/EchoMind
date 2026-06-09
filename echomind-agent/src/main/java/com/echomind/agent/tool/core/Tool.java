@@ -20,27 +20,27 @@ public interface Tool {
     /** 工具唯一名称，例如 weather-query、calculator、open_web_search。 */
     String name();
 
-    /** 人类可读的描述，用于关键词匹配和模型函数说明。 */
+    /** 人类可读的描述，用于模型函数说明。 */
     String description();
 
     /** 输入参数的 JSON Schema。 */
     Map<String, Object> parameterSchema();
 
-    /** 用于关键词匹配的标签，例如 weather、temperature。 */
+    /** 工具标签，例如 weather、temperature；用于展示、治理和后续能力分析。 */
     List<String> tags();
 
     /**
-     * 工具作者显式声明的触发关键词。
+     * 工具作者显式声明的能力关键词。
      *
-     * <p>新 Skill JAR 可以通过 {@code SkillMetadata.keywords()} 提供这些词。
-     * 默认返回空列表，保证旧工具和旧适配器不需要立即改造。</p>
+     * <p>普通聊天不再用关键词预筛选工具；这些词仍可用于 Skill 市场、管理界面和
+     * 后续能力分析。默认返回空列表，保证旧工具和旧适配器不需要立即改造。</p>
      */
     default List<String> keywords() {
         return List.of();
     }
 
     /**
-     * 工具作者显式声明的关键词别名表。
+     * 工具作者显式声明的能力别名表。
      *
      * <p>key 是规范能力词，value 是用户可能说出的别名。默认空表。</p>
      */

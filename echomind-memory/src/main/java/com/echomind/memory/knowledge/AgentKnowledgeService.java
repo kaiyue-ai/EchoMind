@@ -1,5 +1,6 @@
 package com.echomind.memory.knowledge;
 
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 import com.echomind.memory.knowledge.entity.AgentKnowledgeDocumentEntity;
 import com.echomind.memory.knowledge.mapper.AgentKnowledgeDocumentMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +42,7 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
     private final AgentKnowledgeChunker chunker;
     private final boolean enabled;
     private final double minVectorSimilarity;
+    private final EmbeddingInputPolicy embeddingInputPolicy;
 
     public AgentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
                                  VectorStore vectorStore,
@@ -57,7 +59,26 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
                                  String collectionName) {
         this(documentMapper, vectorStore, vectorStore == null ? null : new KnowledgeWindowQuery(vectorStore, collectionName),
             enabled, chunkSize, chunkOverlapRatio, minVectorSimilarity, ocrEnabled, ocrLanguage, ocrDpi,
-            ocrMinTextChars, ocrMaxPages, tesseractCommand);
+            ocrMinTextChars, ocrMaxPages, tesseractCommand, EmbeddingInputPolicy.defaults());
+    }
+
+    public AgentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
+                                 VectorStore vectorStore,
+                                 boolean enabled,
+                                 int chunkSize,
+                                 double chunkOverlapRatio,
+                                 double minVectorSimilarity,
+                                 boolean ocrEnabled,
+                                 String ocrLanguage,
+                                 int ocrDpi,
+                                 int ocrMinTextChars,
+                                 int ocrMaxPages,
+                                 String tesseractCommand,
+                                 String collectionName,
+                                 EmbeddingInputPolicy embeddingInputPolicy) {
+        this(documentMapper, vectorStore, vectorStore == null ? null : new KnowledgeWindowQuery(vectorStore, collectionName),
+            enabled, chunkSize, chunkOverlapRatio, minVectorSimilarity, ocrEnabled, ocrLanguage, ocrDpi,
+            ocrMinTextChars, ocrMaxPages, tesseractCommand, embeddingInputPolicy);
     }
 
     AgentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
@@ -73,11 +94,31 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
                           int ocrMinTextChars,
                           int ocrMaxPages,
                           String tesseractCommand) {
+        this(documentMapper, vectorStore, windowQuery, enabled, chunkSize, chunkOverlapRatio, minVectorSimilarity,
+            ocrEnabled, ocrLanguage, ocrDpi, ocrMinTextChars, ocrMaxPages, tesseractCommand,
+            EmbeddingInputPolicy.defaults());
+    }
+
+    AgentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
+                          VectorStore vectorStore,
+                          KnowledgeWindowQuery windowQuery,
+                          boolean enabled,
+                          int chunkSize,
+                          double chunkOverlapRatio,
+                          double minVectorSimilarity,
+                          boolean ocrEnabled,
+                          String ocrLanguage,
+                          int ocrDpi,
+                          int ocrMinTextChars,
+                          int ocrMaxPages,
+                          String tesseractCommand,
+                          EmbeddingInputPolicy embeddingInputPolicy) {
         this.documentMapper = documentMapper;
         this.vectorStore = vectorStore;
         this.windowQuery = windowQuery;
         this.enabled = enabled && vectorStore != null;
         this.minVectorSimilarity = clamp(minVectorSimilarity, 0, 1);
+        this.embeddingInputPolicy = embeddingInputPolicy == null ? EmbeddingInputPolicy.defaults() : embeddingInputPolicy;
         this.textExtractor = new AgentKnowledgeTextExtractor(
             ocrEnabled, ocrLanguage, ocrDpi, ocrMinTextChars, ocrMaxPages, tesseractCommand);
         this.chunker = new AgentKnowledgeChunker(chunkSize, chunkOverlapRatio);
@@ -169,7 +210,7 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
         try {
             FilterExpressionBuilder filterBuilder = new FilterExpressionBuilder();
             MilvusSearchRequest request = MilvusSearchRequest.milvusBuilder()
-                .query(truncate(query, 2000))
+                .query(embeddingInputPolicy.safeQuery(query))
                 .topK(expandedTopK(topK))
                 .similarityThreshold(minVectorSimilarity)
                 .filterExpression(filterBuilder.eq(META_AGENT_ID, agentId).build())
@@ -296,13 +337,6 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
 
     private String asString(Object value) {
         return value == null ? null : String.valueOf(value);
-    }
-
-    private String truncate(String value, int maxChars) {
-        if (value == null || value.length() <= maxChars) {
-            return value;
-        }
-        return value.substring(0, Math.max(0, maxChars - 3)) + "...";
     }
 
     private String safeFileName(String fileName) {

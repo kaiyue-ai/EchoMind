@@ -1,15 +1,22 @@
 package com.echomind.console.usage;
 
 import com.echomind.agent.pipeline.PipelineContext;
+import com.echomind.agent.team.runtime.TeamProviderBudgetExceededException;
 import com.echomind.agent.team.runtime.TeamUsageQuotaExceededException;
+import com.echomind.agent.team.runtime.TeamUsageReservation;
 import com.echomind.common.model.TokenUsage;
 import com.echomind.console.alerts.AlertService;
 import com.echomind.console.auth.AuthUser;
+import com.echomind.console.budget.ProviderTokenBudgetExceededException;
+import com.echomind.console.budget.ProviderTokenBudgetService;
 import com.echomind.console.quota.TokenQuotaExceededException;
 import com.echomind.console.quota.TokenQuotaService;
+import com.echomind.console.service.ChatProviderResolver;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -29,7 +36,7 @@ class TeamUsageRecorderAdapterTest {
         AiCallUsageService usageService = mock(AiCallUsageService.class);
         TokenQuotaService quotaService = mock(TokenQuotaService.class);
         AlertService alertService = mock(AlertService.class);
-        TeamUsageRecorderAdapter adapter = new TeamUsageRecorderAdapter(usageService, quotaService, alertService);
+        TeamUsageRecorderAdapter adapter = adapter(usageService, quotaService, alertService);
         PipelineContext ctx = new PipelineContext();
         ctx.setTraceId("trace-a");
         ctx.setModelId("mock:model");
@@ -53,7 +60,7 @@ class TeamUsageRecorderAdapterTest {
         AiCallUsageService usageService = mock(AiCallUsageService.class);
         TokenQuotaService quotaService = mock(TokenQuotaService.class);
         AlertService alertService = mock(AlertService.class);
-        TeamUsageRecorderAdapter adapter = new TeamUsageRecorderAdapter(usageService, quotaService, alertService);
+        TeamUsageRecorderAdapter adapter = adapter(usageService, quotaService, alertService);
         PipelineContext ctx = new PipelineContext();
         ctx.setTraceId("trace-a");
         ctx.setModelId("mock:model");
@@ -75,7 +82,7 @@ class TeamUsageRecorderAdapterTest {
         AiCallUsageService usageService = mock(AiCallUsageService.class);
         TokenQuotaService quotaService = mock(TokenQuotaService.class);
         AlertService alertService = mock(AlertService.class);
-        TeamUsageRecorderAdapter adapter = new TeamUsageRecorderAdapter(usageService, quotaService, alertService);
+        TeamUsageRecorderAdapter adapter = adapter(usageService, quotaService, alertService);
         AuthUser owner = new AuthUser("user-a", "user-a", true);
         TokenQuotaExceededException quotaError = new TokenQuotaExceededException("user-a", "daily", 100, 100);
         org.mockito.Mockito.doThrow(quotaError).when(quotaService).assertAllowed(owner);
@@ -87,18 +94,50 @@ class TeamUsageRecorderAdapterTest {
     }
 
     @Test
-    void reservesUserQuotaForTeamCall() {
+    void reservesUserAndProviderBudgetForTeamCall() {
         AiCallUsageService usageService = mock(AiCallUsageService.class);
         TokenQuotaService quotaService = mock(TokenQuotaService.class);
         AlertService alertService = mock(AlertService.class);
-        TeamUsageRecorderAdapter adapter = new TeamUsageRecorderAdapter(usageService, quotaService, alertService);
-        when(quotaService.reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a"), eq(0L)))
-            .thenReturn(List.of("reservation-a"));
+        ProviderTokenBudgetService providerBudgetService = mock(ProviderTokenBudgetService.class);
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        TeamUsageRecorderAdapter adapter = adapter(usageService, quotaService, alertService, providerBudgetService,
+            providerResolver);
+        when(quotaService.reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a"), eq(4100L)))
+            .thenReturn(List.of("user-reservation"));
+        when(providerResolver.resolveProviderId("planner", null)).thenReturn(Optional.of("deepseek"));
+        when(providerBudgetService.reserveProviderBudget("deepseek", "session-a", "planner", "session-a", 4100L))
+            .thenReturn(List.of("provider-reservation"));
 
-        List<String> reservations = adapter.reserveUserQuota("user-a", "planner", "session-a");
+        TeamUsageReservation reservation = adapter.reserveUsage("user-a", "planner", "session-a", "abcdefghij");
 
-        assertThat(reservations).containsExactly("reservation-a");
-        verify(quotaService).reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a"), eq(0L));
+        assertThat(reservation.userReservationIds()).containsExactly("user-reservation");
+        assertThat(reservation.providerReservationIds()).containsExactly("provider-reservation");
+        verify(quotaService).reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a"), eq(4100L));
+        verify(providerBudgetService).reserveProviderBudget("deepseek", "session-a", "planner", "session-a", 4100L);
+    }
+
+    @Test
+    void releasesUserReservationWhenProviderBudgetIsExceeded() {
+        AiCallUsageService usageService = mock(AiCallUsageService.class);
+        TokenQuotaService quotaService = mock(TokenQuotaService.class);
+        AlertService alertService = mock(AlertService.class);
+        ProviderTokenBudgetService providerBudgetService = mock(ProviderTokenBudgetService.class);
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        TeamUsageRecorderAdapter adapter = adapter(usageService, quotaService, alertService, providerBudgetService,
+            providerResolver);
+        when(quotaService.reserveUsage(eq(new AuthUser("user-a", "user-a", true)), eq("session-a"), eq(4100L)))
+            .thenReturn(List.of("user-reservation"));
+        when(providerResolver.resolveProviderId("planner", null)).thenReturn(Optional.of("deepseek"));
+        ProviderTokenBudgetExceededException providerError =
+            new ProviderTokenBudgetExceededException("deepseek", "daily", 100, 100);
+        when(providerBudgetService.reserveProviderBudget("deepseek", "session-a", "planner", "session-a", 4100L))
+            .thenThrow(providerError);
+
+        assertThatThrownBy(() -> adapter.reserveUsage("user-a", "planner", "session-a", "abcdefghij"))
+            .isInstanceOf(TeamProviderBudgetExceededException.class)
+            .hasCause(providerError);
+
+        verify(usageService).releaseReservations(List.of("user-reservation"));
     }
 
     @Test
@@ -106,10 +145,32 @@ class TeamUsageRecorderAdapterTest {
         AiCallUsageService usageService = mock(AiCallUsageService.class);
         TokenQuotaService quotaService = mock(TokenQuotaService.class);
         AlertService alertService = mock(AlertService.class);
-        TeamUsageRecorderAdapter adapter = new TeamUsageRecorderAdapter(usageService, quotaService, alertService);
+        TeamUsageRecorderAdapter adapter = adapter(usageService, quotaService, alertService);
 
         adapter.releaseReservations(List.of("reservation-a"));
 
         verify(usageService).releaseReservations(List.of("reservation-a"));
+    }
+
+    private TeamUsageRecorderAdapter adapter(AiCallUsageService usageService, TokenQuotaService quotaService,
+                                             AlertService alertService) {
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        when(providerResolver.resolveProviderId(any(), any())).thenReturn(Optional.empty());
+        return adapter(usageService, quotaService, alertService, null, providerResolver);
+    }
+
+    private TeamUsageRecorderAdapter adapter(AiCallUsageService usageService, TokenQuotaService quotaService,
+                                             AlertService alertService,
+                                             ProviderTokenBudgetService providerBudgetService,
+                                             ChatProviderResolver providerResolver) {
+        return new TeamUsageRecorderAdapter(usageService, quotaService, alertService,
+            objectProvider(providerBudgetService), providerResolver);
+    }
+
+    @SuppressWarnings("unchecked")
+    private ObjectProvider<ProviderTokenBudgetService> objectProvider(ProviderTokenBudgetService service) {
+        ObjectProvider<ProviderTokenBudgetService> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(service);
+        return provider;
     }
 }

@@ -8,6 +8,7 @@ import com.echomind.console.dto.ChatSubmitResponse;
 import com.echomind.console.service.ChatApplicationService;
 import com.echomind.console.service.MemoryApplicationService;
 import com.echomind.console.service.SsePushService;
+import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -38,7 +39,7 @@ public class ChatController {
      * 客户端拿到 requestId 后，再订阅 SSE 等待最终结果。
      */
     @PostMapping
-    public ResponseEntity<ChatSubmitResponse> chat(@RequestBody ChatMessageRequest request) {
+    public ResponseEntity<ChatSubmitResponse> chat(@Valid @RequestBody ChatMessageRequest request) {
         return ResponseEntity.ok(chatService.submitAsync(request));
     }
 

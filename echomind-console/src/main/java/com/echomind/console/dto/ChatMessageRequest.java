@@ -1,6 +1,7 @@
 package com.echomind.console.dto;
 
 import com.echomind.common.model.MessageAttachment;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 
 /**
@@ -8,6 +9,7 @@ import java.util.List;
  */
 public record ChatMessageRequest(
     String agentId,
+    @Size(max = 20_000, message = "message 不能超过 20000 个字符")
     String message,
     String sessionId,
     String modelId,

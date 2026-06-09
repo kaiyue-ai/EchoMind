@@ -144,6 +144,30 @@ class ChatApplicationServiceTest {
     }
 
     @Test
+    void submitAsyncReservesProcessedTokensBeforePublishing() {
+        ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        ChatProviderResolver providerResolver = mock(ChatProviderResolver.class);
+        when(providerResolver.resolveProviderId(eq("default"), eq("deepseek:model")))
+            .thenReturn(Optional.of("deepseek"));
+        ChatApplicationService service = service(mock(AgentOrchestrator.class), rabbitProducer,
+            mock(MemoryManager.class), mock(ObjectStorageService.class), mock(SsePushService.class),
+            governanceService, providerResolver);
+        String message = "a".repeat(1000);
+
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        try {
+            service.submitAsync(new ChatMessageRequest("default", message, "session-a", "deepseek:model", List.of()));
+        } finally {
+            AuthContext.clear();
+        }
+
+        verify(governanceService).reserveUserQuota(any(), anyString(), eq(4496L));
+        verify(governanceService).reserveProviderBudget(eq("deepseek"), anyString(), eq(4496L));
+        verify(rabbitProducer).publish(any(ChatRequest.class));
+    }
+
+    @Test
     void submitAsyncReleasesReservationsWhenPublishFails() {
         ChatRabbitProducer rabbitProducer = mock(ChatRabbitProducer.class);
         RuntimeException publishError = new RuntimeException("rabbit down");

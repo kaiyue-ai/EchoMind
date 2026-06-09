@@ -1,6 +1,5 @@
 package com.echomind.console.budget;
 
-import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.console.alerts.AlertService;
 import com.echomind.console.reservation.TokenReservationService;
 import com.echomind.console.usage.AiCallUsageEntity;
@@ -30,13 +29,12 @@ class ProviderTokenBudgetServiceTest {
     );
 
     @Test
-    void reservesProviderBudgetBeforeModelInvocation() {
+    void reservesProviderBudgetWithEstimatedTokens() {
         ProviderTokenBudgetMapper budgetMapper = mock(ProviderTokenBudgetMapper.class);
         when(budgetMapper.selectOptionalById("deepseek")).thenReturn(Optional.of(activeBudget("deepseek")));
         ProviderTokenBudgetUsageMapper usageMapper = mock(ProviderTokenBudgetUsageMapper.class);
         TokenReservationService reservationService = mock(TokenReservationService.class);
-        when(reservationService.defaultReserveTokens()).thenReturn(4096L);
-        when(reservationService.reserveProvider("deepseek", "trace-a", 4096L))
+        when(reservationService.reserveProvider("deepseek", "request-a", 4496L))
             .thenReturn(List.of("reservation-provider"));
         ProviderTokenBudgetService service = new ProviderTokenBudgetService(
             budgetMapper,
@@ -47,14 +45,12 @@ class ProviderTokenBudgetServiceTest {
             objectProvider(reservationService),
             FIXED_CLOCK
         );
-        PipelineContext ctx = new PipelineContext();
-        ctx.setTraceId("trace-a");
-        ctx.setModelId("deepseek:deepseek-v4-flash");
 
-        service.assertAllowed(ctx);
+        List<String> reservationIds = service.reserveProviderBudget("deepseek", "request-a", "planner",
+            "session-a", 4496L);
 
-        assertThat(ctx.getAttributes())
-            .containsEntry(PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS, List.of("reservation-provider"));
+        assertThat(reservationIds).containsExactly("reservation-provider");
+        verify(reservationService).reserveProvider("deepseek", "request-a", 4496L);
         verifyNoInteractions(usageMapper);
     }
 

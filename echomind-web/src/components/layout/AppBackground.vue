@@ -20,6 +20,7 @@ const ambientX = ref(0)
 const ambientY = ref(0)
 let ambientFrame = 0
 let reduceMotionQuery = null
+let finePointerQuery = null
 
 const imageUrl = computed(() => renderableImageUrl(background.value.imageUrl))
 const hasImageBackground = computed(() => background.value.mode === 'image' && Boolean(imageUrl.value))
@@ -36,7 +37,7 @@ const imageStyle = computed(() => ({
 }))
 
 function updateAmbient(event) {
-  if (reduceMotionQuery?.matches || ambientFrame) return
+  if (reduceMotionQuery?.matches || finePointerQuery?.matches === false || ambientFrame) return
   const { innerWidth = 1, innerHeight = 1 } = window
   const nextX = ((event.clientX / innerWidth) - 0.5) * 28
   const nextY = ((event.clientY / innerHeight) - 0.5) * 22
@@ -50,7 +51,10 @@ function updateAmbient(event) {
 onMounted(() => {
   if (typeof window === 'undefined') return
   reduceMotionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)')
-  window.addEventListener('pointermove', updateAmbient, { passive: true })
+  finePointerQuery = window.matchMedia?.('(hover: hover) and (pointer: fine)')
+  if (!reduceMotionQuery?.matches && finePointerQuery?.matches) {
+    window.addEventListener('pointermove', updateAmbient, { passive: true })
+  }
 })
 
 onBeforeUnmount(() => {

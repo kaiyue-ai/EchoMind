@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -45,7 +46,8 @@ class QueuedChatStreamExecutor {
             try {
                 String rawMessage = request.message();
                 execution = agentChatExecutor.executeStream(request.userId(), request.agentId(), request.sessionId(),
-                        request.message(), request.modelId(), request.attachments(), rawMessage)
+                        request.message(), request.modelId(), request.attachments(), rawMessage,
+                        requestReservationAttributes(request))
                     .block();
                 if (execution == null) {
                     throw new IllegalStateException("stream execution was not created");
@@ -140,20 +142,49 @@ class QueuedChatStreamExecutor {
     }
 
     private void attachRequestReservations(PipelineContext ctx, ChatRequest request) {
-        if (ctx == null || request == null || request.userReservationIds().isEmpty()) {
+        if (ctx == null || request == null) {
             return;
         }
-        ctx.getAttributes().putIfAbsent(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS,
-            request.userReservationIds());
+        if (!request.userReservationIds().isEmpty()) {
+            ctx.getAttributes().putIfAbsent(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS,
+                request.userReservationIds());
+        }
+        if (!request.providerReservationIds().isEmpty()) {
+            ctx.getAttributes().putIfAbsent(PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS,
+                request.providerReservationIds());
+        }
+    }
+
+    private Map<String, Object> requestReservationAttributes(ChatRequest request) {
+        Map<String, Object> attributes = new HashMap<>();
+        if (request == null) {
+            return attributes;
+        }
+        if (!request.userReservationIds().isEmpty()) {
+            attributes.put(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS, request.userReservationIds());
+        }
+        if (!request.providerReservationIds().isEmpty()) {
+            attributes.put(PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS, request.providerReservationIds());
+        }
+        return attributes;
     }
 
     @SuppressWarnings("unchecked")
     private List<String> reservationIds(PipelineContext ctx, ChatRequest request) {
-        Object value = ctx == null ? null : ctx.getAttributes().get(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS);
+        List<String> reservations = new ArrayList<>();
+        reservations.addAll(reservationIds(ctx, PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS,
+            request == null ? List.of() : request.userReservationIds()));
+        reservations.addAll(reservationIds(ctx, PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS,
+            request == null ? List.of() : request.providerReservationIds()));
+        return reservations;
+    }
+
+    private List<String> reservationIds(PipelineContext ctx, String attribute, List<String> fallback) {
+        Object value = ctx == null ? null : ctx.getAttributes().get(attribute);
         if (value instanceof List<?> list) {
             return list.stream().map(String::valueOf).toList();
         }
-        return request == null ? List.of() : request.userReservationIds();
+        return fallback == null ? List.of() : fallback;
     }
 
     private void tagRequest(Span span, ChatRequest request) {

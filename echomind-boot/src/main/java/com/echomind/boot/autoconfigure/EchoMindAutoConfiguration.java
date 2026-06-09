@@ -7,7 +7,6 @@ import com.echomind.agent.memory.RabbitChatMemoryPersistPublisher;
 import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.pipeline.ExecutionPipeline;
 import com.echomind.agent.pipeline.PipelineStage;
-import com.echomind.agent.pipeline.budget.ProviderTokenBudgetGuard;
 import com.echomind.agent.pipeline.composing.PromptBudget;
 import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.agent.pipeline.stages.*;
@@ -33,12 +32,14 @@ import com.echomind.memory.cache.RecentMemoryCache;
 import com.echomind.memory.cache.RedisRecentMemoryCache;
 import com.echomind.memory.embedding.DisabledEmbeddingModel;
 import com.echomind.memory.embedding.DisabledVectorStore;
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 
 import com.echomind.memory.persistence.mapper.ChatMessageMapper;
 import com.echomind.memory.persistence.mapper.ChatSessionMapper;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
 import com.echomind.memory.knowledge.mapper.AgentKnowledgeDocumentMapper;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
+import com.echomind.memory.knowledge.AgentKnowledgeManagementPort;
 import com.echomind.memory.usermemory.impl.NoopUserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserMemoryStore;
@@ -82,6 +83,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -353,9 +355,15 @@ public class EchoMindAutoConfiguration {
     }
 
     @Bean
+    public EmbeddingInputPolicy embeddingInputPolicy(EchoMindProperties props) {
+        return new EmbeddingInputPolicy(props.getMemory().getEmbeddingQueryMaxChars());
+    }
+
+    @Bean
     public AgentKnowledgeService agentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
                                                        EchoMindProperties props,
-                                                       @Qualifier("agentKnowledgeVectorStore") VectorStore vectorStore) {
+                                                       @Qualifier("agentKnowledgeVectorStore") VectorStore vectorStore,
+                                                       EmbeddingInputPolicy embeddingInputPolicy) {
         return new AgentKnowledgeService(
             documentMapper,
             vectorStore,
@@ -369,7 +377,8 @@ public class EchoMindAutoConfiguration {
             props.getMemory().getKnowledgeOcrMinTextChars(),
             props.getMemory().getKnowledgeOcrMaxPages(),
             props.getMemory().getKnowledgeOcrTesseractCommand(),
-            props.getMemory().getMilvusKnowledgeCollection()
+            props.getMemory().getMilvusKnowledgeCollection(),
+            embeddingInputPolicy
         );
     }
 
@@ -386,22 +395,23 @@ public class EchoMindAutoConfiguration {
     @DependsOn("llmInitializer")
     public RetrievalQueryRewriter retrievalQueryRewriter(EchoMindProperties props,
                                                          ModelProviderRegistry registry,
-                                                         ObjectMapper mapper) {
+                                                         ObjectMapper mapper,
+                                                         EmbeddingInputPolicy embeddingInputPolicy) {
         var memory = props.getMemory();
         if (!memory.isRetrievalQueryRewriteEnabled()) {
-            return RetrievalQueryRewriter.disabled();
+            return RetrievalQueryRewriter.disabled(embeddingInputPolicy);
         }
         String modelId = memory.getRetrievalQueryRewriteModelId();
         String[] parts = modelId == null ? new String[0] : modelId.split(":", 2);
         if (parts.length != 2) {
             log.warn("Retrieval query rewrite disabled: invalid model id {}", modelId);
-            return RetrievalQueryRewriter.disabled();
+            return RetrievalQueryRewriter.disabled(embeddingInputPolicy);
         }
         Optional<ModelSpec> model = registry.find(parts[0], parts[1]);
         Optional<ModelProvider> provider = registry.getProvider(parts[0]);
         if (model.isEmpty() || provider.isEmpty()) {
             log.warn("Retrieval query rewrite disabled: model/provider unavailable {}", modelId);
-            return RetrievalQueryRewriter.disabled();
+            return RetrievalQueryRewriter.disabled(embeddingInputPolicy);
         }
         return new RetrievalQueryRewriter(
             model.get(),
@@ -409,17 +419,19 @@ public class EchoMindAutoConfiguration {
             true,
             memory.getRetrievalQueryRewriteTimeoutMs(),
             memory.getRetrievalQueryRewriteMaxChars(),
-            mapper
+            mapper,
+            embeddingInputPolicy
         );
     }
 
     @Bean
     public UserMemoryStore userMemoryStore(EchoMindProperties props,
-                                           @Qualifier("userMemoryVectorStore") VectorStore vectorStore) {
+                                           @Qualifier("userMemoryVectorStore") VectorStore vectorStore,
+                                           EmbeddingInputPolicy embeddingInputPolicy) {
         if (!embeddingAvailable(props.getMemory())) {
             return new NoopUserMemoryStore();
         }
-        return new SpringAiUserMemoryStore(vectorStore);
+        return new SpringAiUserMemoryStore(vectorStore, embeddingInputPolicy);
     }
 
     @Bean
@@ -627,7 +639,6 @@ public class EchoMindAutoConfiguration {
                                                 DynamicModelRouter router, ModelProviderRegistry providerReg,
                                                  ObjectStorageService storageService,
                                                  PromptBudget promptBudget,
-                                                ObjectProvider<ProviderTokenBudgetGuard> providerTokenBudgetGuard,
                                                 RetrievalQueryRewriter retrievalQueryRewriter,
                                                 EchoMindProperties props) {
         List<PipelineStage> stages = List.of(
@@ -644,9 +655,6 @@ public class EchoMindAutoConfiguration {
             new KnowledgeRetrievalStage(knowledgeService, props.getMemory().getKnowledgeTopK(),
                 retrievalQueryRewriter),
             new ModelResolutionStage(router),
-            new ProviderTokenBudgetGuardStage(
-                providerTokenBudgetGuard.getIfAvailable(() -> ProviderTokenBudgetGuard.NOOP)
-            ),
             new MultimodalGuardStage(providerReg),
             new AttachmentPreparationStage(storageService),
             new ResultAggregationStage(providerReg, capabilityRegistry, promptBudget),
@@ -706,8 +714,23 @@ public class EchoMindAutoConfiguration {
      */
     @Bean
     public AgentFactory agentFactory(ExecutionPipeline pipeline, EchoMindProperties props,
-                                     AgentPersistenceService persistenceService) {
-        return new AgentRuntimeBootstrapper(props).restore(pipeline, props, persistenceService);
+                                     AgentPersistenceService persistenceService,
+                                     ResourceLoader resourceLoader) {
+        return new AgentRuntimeBootstrapper(props, resourceLoader).restore(pipeline, props, persistenceService);
+    }
+
+    @Bean
+    @DependsOn("agentFactory")
+    public Object agentKnowledgeSeedInitializer(EchoMindProperties props,
+                                                AgentKnowledgeManagementPort knowledgeService,
+                                                ObjectStorageService storageService,
+                                                ResourceLoader resourceLoader) {
+        EchoMindProperties.Runtime runtime = props.getRuntime() == null
+            ? new EchoMindProperties.Runtime()
+            : props.getRuntime();
+        new AgentKnowledgeBootstrapper(
+            runtime.getAgentBootstrap(), knowledgeService, storageService, resourceLoader).seedAll();
+        return new Object();
     }
 
     @Bean

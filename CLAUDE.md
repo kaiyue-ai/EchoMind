@@ -23,9 +23,9 @@ EchoMind 是 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 - `echomind-memory`：会话记忆、Milvus 向量检索、Agent 知识库。
 - `echomind-mcp`：基于 Spring AI MCP 的外部 MCP 客户端、stdio/SSE/Streamable HTTP 传输和工具适配。
 - `echomind-agent`：单 Agent 执行、Pipeline、能力注册表。
-- `echomind-agent/src/main/java/com/echomind/agent/tool`：工具注册、能力来源适配和显式 metadata 预匹配。
+- `echomind-agent/src/main/java/com/echomind/agent/tool`：工具注册、能力来源适配和统一工具视图。
 - `echomind-agent-team`：多 Agent 团队协作编排；当前由 `TaskExecutor` 推进 MySQL 黑板状态，不使用 RabbitMQ。
-- `echomind-console`：REST Controller、Application Service、CLI。
+- `echomind-console`：REST Controller、Application Service。
 - `echomind-boot`：Spring Boot 自动装配。
 - `echomind-app`：应用入口和配置文件。
 - `echomind-web`：Vue 3 前端。
@@ -34,7 +34,7 @@ EchoMind 是 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 ## 当前架构边界
 
 ```text
-Controller / CLI
+Controller
   -> Application Service
   -> Runtime Orchestrator / Pipeline / CapabilityRegistry
   -> Repository / Memory / LLM Provider / Skill / MCP
@@ -46,8 +46,8 @@ Controller / CLI
 - Application Service 负责校验、持久化顺序和运行时同步。
 - `AgentFactory`、`SkillRegistry`、`CapabilityRegistry` 只是运行时索引。
 - MySQL 保存业务事实和完整会话历史；Redis 保存短期上下文和用户画像快照；Milvus 保存用户长期事实向量以及 Agent 知识库切片正文和向量。
-- RabbitMQ 只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件；聊天 token、tool、result、failure 事件由消费端直接交给 SSE 推送服务。
-- `ToolRouter` 只作为工具路由入口；`ToolMatchScorer` 只基于工具显式 `keywords`、`aliases`、`tags` 和工具名做预匹配，参数由模型正式 tool call 生成并按 schema 校验。
+- RabbitMQ 只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件；聊天 token、tool、result、failure 事件由消费端直接交给 SSE 推送服务。核心队列重试耗尽后进入 DLQ，由主后端归档到 MySQL `echomind_rabbitmq_dead_letters`，聊天请求死信会释放入队前 reservation 并推送 SSE `failure`，管理端支持按 dead-letter id 受控重放。
+- `ToolRouter` 只作为运行时工具注册表；普通聊天直接暴露所有已启用 Skill 和已挂载外部 MCP 工具，参数由模型正式 tool call 生成并按 schema 校验。
 - LLM Provider 只处理模型协议；Spring AI 只放在 Provider adapter 边界内，不接管 Agent、Skill、MCP 或 Memory。Provider 不按具体 Skill 名称硬编码参数、工具选择或最终答案策略；工具输出统一回到 LLM 生成最终答复。
 - 主项目只接入外部 MCP Server，不暴露自身 MCP Server。
 - 普通聊天记忆按 `userId + sessionId` 隔离；Agent、Skill、MCP、Team 仍是全局资源。

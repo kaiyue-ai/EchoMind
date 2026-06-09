@@ -8,7 +8,7 @@ import java.util.List;
  * Team 运行时的轻量用量治理端口。
  *
  * <p>agent-team 不依赖 console 持久化实现；console 负责把内部 LLM 调用写入现有
- * {@code echomind_ai_call_usage} 并执行同一套用户配额。</p>
+ * {@code echomind_ai_call_usage}，并在每次内部模型调用前显式预留用户 quota 和 Provider budget。</p>
  */
 public interface TeamUsageRecorder {
 
@@ -18,8 +18,8 @@ public interface TeamUsageRecorder {
     default void assertAllowed(String userId, String agentId, String sessionId) {
     }
 
-    default List<String> reserveUserQuota(String userId, String agentId, String sessionId) {
-        return List.of();
+    default TeamUsageReservation reserveUsage(String userId, String agentId, String sessionId, String prompt) {
+        return TeamUsageReservation.EMPTY;
     }
 
     default void record(String operation, String userId, String agentId, String sessionId,

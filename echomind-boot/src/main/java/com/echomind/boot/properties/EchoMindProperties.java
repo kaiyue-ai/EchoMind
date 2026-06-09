@@ -140,6 +140,8 @@ public class EchoMindProperties {
         private String embeddingModel = "text-embedding-v4";
         /** 向量维度；需与 embeddingModel 实际输出保持一致。 */
         private int embeddingDimension = 1024;
+        /** 进入 embedding 前的检索文本最大字符数，超出后保留头尾裁剪。 */
+        private int embeddingQueryMaxChars = 8000;
         /** 普通聊天记忆持久化 RabbitMQ 队列名。 */
         private String persistQueueName = "echomind.chat-memory.persist.requests";
         /** 普通聊天记忆持久化 RabbitMQ Direct Exchange 名。 */
@@ -189,7 +191,7 @@ public class EchoMindProperties {
         /** 向量检索前是否启用轻量模型查询改写。 */
         private boolean retrievalQueryRewriteEnabled = true;
         /** 查询改写使用的轻量模型 ID，格式 provider:model。 */
-        private String retrievalQueryRewriteModelId = "deepseek:deepseek-v4-flash";
+        private String retrievalQueryRewriteModelId = "aliyun-bailian:qwen3.6-plus";
         /** 查询改写超时时间，失败会回退原句。 */
         private int retrievalQueryRewriteTimeoutMs = 1500;
         /** 查询改写结果最大字符数，过长会回退原句。 */
@@ -222,7 +224,7 @@ public class EchoMindProperties {
         /** 单次提取最多写入多少条用户事实。 */
         private int maxExtractedEntries = 10;
         /** 轻量级用户记忆模型，默认 DeepSeek V4 Flash。 */
-        private String extractorModelId = "deepseek:deepseek-v4-flash";
+        private String extractorModelId = "aliyun-bailian:qwen3.6-plus";
     }
 
     /**
@@ -322,6 +324,8 @@ public class EchoMindProperties {
         private List<ModelMigration> modelMigrations = List.of();
         /** 极端情况下没有 MySQL Agent 且没有配置 Agent 时使用的兜底 Agent。 */
         private AgentDef fallbackAgent = defaultFallbackAgent();
+        /** 启动时为默认 Agent 私有知识库补齐的种子文档。 */
+        private List<KnowledgeSeed> knowledgeSeeds = List.of();
 
         private static AgentDef defaultFallbackAgent() {
             AgentDef config = new AgentDef();
@@ -367,6 +371,28 @@ public class EchoMindProperties {
     }
 
     /**
+     * Agent 私有知识库种子文档。
+     *
+     * <p>启动时只在目标 Agent 没有同名文档时写入，文档原文会进入对象存储，
+     * 文档元数据进入 MySQL，切片正文和向量进入 Milvus。</p>
+     */
+    @Data
+    public static class KnowledgeSeed {
+        /** 是否启用该 seed。 */
+        private boolean enabled = true;
+        /** 目标 Agent ID。 */
+        private String agentId;
+        /** 展示在知识库列表里的文件名。 */
+        private String fileName = "seed-knowledge.txt";
+        /** classpath:/ 或 file:/ 资源位置；与 content 二选一。 */
+        private String resource;
+        /** 内联文本；适合很短的 seed。 */
+        private String content;
+        /** 原文件 Content-Type。 */
+        private String contentType = "text/plain";
+    }
+
+    /**
      * 单个 Agent 的配置定义 —— 用于在配置文件中声明式定义 Agent。
      *
      * <p>每个 Agent 定义包括：唯一标识、显示名称、系统提示词、
@@ -380,6 +406,8 @@ public class EchoMindProperties {
         private String name;
         /** 系统提示词，定义 Agent 的角色和行为 */
         private String systemPrompt;
+        /** 系统提示词资源位置；适合较长提示词，例如 classpath:/agent-prompts/example.txt */
+        private String systemPromptResource;
         /** 绑定的模型 ID，格式为 "providerId:modelName" */
         private String modelId;
         /** 可调用的技能 ID 列表 */

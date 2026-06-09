@@ -10,6 +10,7 @@ import com.echomind.console.auth.AuthUser;
 import com.echomind.console.config.RabbitMQConfig;
 import com.echomind.console.reservation.TokenEstimator;
 import com.echomind.console.service.ChatGovernanceService;
+import com.echomind.console.service.ChatProviderResolver;
 import com.echomind.console.service.SsePushService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -80,6 +81,9 @@ public class RabbitDeadLetterService {
     /** 聊天治理服务（用于配额管理） */
     private final ChatGovernanceService governanceService;
 
+    /** Provider 解析器（用于死信重放前重建 Provider budget 预留） */
+    private final ChatProviderResolver providerResolver;
+
     /** SSE 推送服务（用于通知前端） */
     private final SsePushService ssePushService;
 
@@ -103,6 +107,10 @@ public class RabbitDeadLetterService {
     /** 用户记忆队列名称 */
     @Value("${echomind.user-memory.queue-name:echomind.user-memory.requests}")
     private String userMemoryQueueName;
+
+    /** 模型最大输出 Token，用于重放时按同一公式重建预留额度。 */
+    @Value("${echomind.llm.maxTokens:${echomind.models.providers.deepseek.max-tokens:4096}}")
+    private long maxOutputTokens = 4096;
 
     // ==================== 公共方法 ====================
 
@@ -274,38 +282,44 @@ public class RabbitDeadLetterService {
     /**
      * 重放聊天请求消息
      *
-     * <p>重新预留用户配额，然后发送到聊天请求队列。
+     * <p>重新预留用户配额和 Provider 预算，然后发送到聊天请求队列。
      *
      * @param entity 死信实体
      */
     private void replayChatRequest(RabbitDeadLetterEntity entity) {
         ChatRequest request = read(entity.getPayloadJson(), ChatRequest.class);
-        
-        // 重新预留用户配额（基于消息长度动态估算）
-        long estimatedTokens = TokenEstimator.estimate(request.message());
-        List<String> reservations = governanceService.reserveUserQuota(
-            authUser(request.userId()), request.requestId(), estimatedTokens);
-        if (reservations == null) {
-            reservations = List.of();
-        }
-        
-        // 构建重放请求（包含新的预留ID）
-        ChatRequest replay = new ChatRequest(
-            request.requestId(),
-            request.userId(),
-            request.agentId(),
-            request.sessionId(),
-            request.message(),
-            request.modelId(),
-            request.traceId(),
-            request.traceparent(),
-            request.attachments(),
-            reservations
-        );
+        List<String> userReservations = List.of();
+        List<String> providerReservations = List.of();
+        boolean sseRegistered = false;
         
         try {
+            // 重放和普通聊天入口使用同一套“输入估算 + 输出上限”预留公式。
+            long estimatedTokens = TokenEstimator.estimateProcessedTokens(request.message(), maxOutputTokens);
+            userReservations = safeReservations(governanceService.reserveUserQuota(
+                authUser(request.userId()), request.requestId(), estimatedTokens));
+            providerReservations = providerResolver.resolveProviderId(request.agentId(), request.modelId())
+                .map(providerId -> safeReservations(
+                    governanceService.reserveProviderBudget(providerId, request.requestId(), estimatedTokens)))
+                .orElse(List.of());
+
+            // 构建重放请求（包含新的预留ID）
+            ChatRequest replay = new ChatRequest(
+                request.requestId(),
+                request.userId(),
+                request.agentId(),
+                request.sessionId(),
+                request.message(),
+                request.modelId(),
+                request.traceId(),
+                request.traceparent(),
+                request.attachments(),
+                userReservations,
+                providerReservations
+            );
+
             // 注册请求到 SSE 服务
             ssePushService.registerRequest(request.requestId(), request.userId());
+            sseRegistered = true;
             
             // 发送到聊天请求队列
             rabbitTemplate.convertAndSend(
@@ -316,8 +330,11 @@ public class RabbitDeadLetterService {
             );
         } catch (RuntimeException e) {
             // 发送失败，清理资源
-            ssePushService.discardRequest(request.requestId());
-            governanceService.releaseReservations(reservations);
+            if (sseRegistered) {
+                ssePushService.discardRequest(request.requestId());
+            }
+            releaseReservationsQuietly(userReservations);
+            releaseReservationsQuietly(providerReservations);
             throw e;
         }
     }
@@ -554,6 +571,18 @@ public class RabbitDeadLetterService {
     private AuthUser authUser(String userId) {
         String owner = userId == null || userId.isBlank() ? AuthUser.DEFAULT_USER_ID : userId;
         return new AuthUser(owner, owner, !AuthUser.DEFAULT_USER_ID.equals(owner));
+    }
+
+    private List<String> safeReservations(List<String> reservationIds) {
+        return reservationIds == null ? List.of() : reservationIds;
+    }
+
+    private void releaseReservationsQuietly(List<String> reservationIds) {
+        try {
+            governanceService.releaseReservations(reservationIds);
+        } catch (RuntimeException releaseError) {
+            log.warn("Failed to release replay reservations after publish error: {}", releaseError.getMessage());
+        }
     }
 
     /**

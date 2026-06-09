@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import reactor.core.publisher.Flux;
@@ -67,11 +68,24 @@ public class AgentOrchestrator {
         return executeInternal("default", agentId, sessionId, userMessage, toolExposureEnabled);
     }
 
+    /** 执行内部任务，并允许调用方在 PipelineContext 创建时写入初始属性。 */
+    public PipelineContext executeInternal(String agentId, String sessionId, String userMessage,
+                                           boolean toolExposureEnabled, Map<String, Object> initialAttributes) {
+        return executeInternal("default", agentId, sessionId, userMessage, toolExposureEnabled, initialAttributes);
+    }
+
     /** 执行内部任务，可指定用量归属用户，但仍不写普通聊天记忆。 */
     public PipelineContext executeInternal(String userId, String agentId, String sessionId, String userMessage,
                                            boolean toolExposureEnabled) {
         return execute(userId, agentId, sessionId, userMessage, null, List.of(), false, toolExposureEnabled,
             null);
+    }
+
+    /** 执行内部任务，可指定用量归属用户和初始 PipelineContext 属性。 */
+    public PipelineContext executeInternal(String userId, String agentId, String sessionId, String userMessage,
+                                           boolean toolExposureEnabled, Map<String, Object> initialAttributes) {
+        return execute(userId, agentId, sessionId, userMessage, null, List.of(), false, toolExposureEnabled,
+            null, initialAttributes);
     }
 
     private Agent resolveAgent(String agentId) {
@@ -95,6 +109,13 @@ public class AgentOrchestrator {
     private PipelineContext buildPipelineContext(String userId, Agent agent, String sessionId, String userMessage,
                                                   String modelId, List<MessageAttachment> attachments,
                                                   String rawUserMessage) {
+        return buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments, rawUserMessage,
+            Map.of());
+    }
+
+    private PipelineContext buildPipelineContext(String userId, Agent agent, String sessionId, String userMessage,
+                                                  String modelId, List<MessageAttachment> attachments,
+                                                  String rawUserMessage, Map<String, Object> initialAttributes) {
         PipelineContext ctx = new PipelineContext();
         ctx.setUserId(normalizeUserId(userId));
         ctx.setAgentId(agent.getAgentId());
@@ -106,9 +127,11 @@ public class AgentOrchestrator {
         if (attachments != null) {
             ctx.getAttachments().addAll(attachments);
         }
-        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, agent.getSkillIds());
         if (rawUserMessage != null && !rawUserMessage.isBlank()) {
             ctx.getAttributes().put(PipelineContext.ATTR_RAW_USER_MESSAGE, rawUserMessage);
+        }
+        if (initialAttributes != null && !initialAttributes.isEmpty()) {
+            ctx.getAttributes().putAll(initialAttributes);
         }
         return ctx;
     }
@@ -149,6 +172,14 @@ public class AgentOrchestrator {
     private PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
                                     List<MessageAttachment> attachments, boolean memoryPersistenceEnabled,
                                     boolean toolExposureEnabled, String rawUserMessage) {
+        return execute(userId, agentId, sessionId, userMessage, modelId, attachments, memoryPersistenceEnabled,
+            toolExposureEnabled, rawUserMessage, Map.of());
+    }
+
+    private PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
+                                    List<MessageAttachment> attachments, boolean memoryPersistenceEnabled,
+                                    boolean toolExposureEnabled, String rawUserMessage,
+                                    Map<String, Object> initialAttributes) {
         // 1. 解析并获取 Agent 实例
         Agent agent = resolveAgent(agentId);
         if (agent == null) {
@@ -162,7 +193,7 @@ public class AgentOrchestrator {
 
         // 2. 构建执行上下文
         PipelineContext ctx = buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments,
-            rawUserMessage);
+            rawUserMessage, initialAttributes);
         // 设置记忆持久化标志
         ctx.setMemoryPersistenceEnabled(memoryPersistenceEnabled);
 
@@ -204,6 +235,15 @@ public class AgentOrchestrator {
                                                      String userMessage, String modelId,
                                                      List<MessageAttachment> attachments,
                                                      String rawUserMessage) {
+        return executeStreamContext(userId, agentId, sessionId, userMessage, modelId, attachments, rawUserMessage,
+            Map.of());
+    }
+
+    public Mono<StreamExecution> executeStreamContext(String userId, String agentId, String sessionId,
+                                                     String userMessage, String modelId,
+                                                     List<MessageAttachment> attachments,
+                                                     String rawUserMessage,
+                                                     Map<String, Object> initialAttributes) {
         return Mono.defer(() -> {
             Agent agent = resolveAgent(agentId);
             if (agent == null) {
@@ -219,7 +259,7 @@ public class AgentOrchestrator {
             }
 
             PipelineContext ctx = buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments,
-                rawUserMessage);
+                rawUserMessage, initialAttributes);
 
             log.info("[Orchestrator:stream] Agent={} model={} session={} msg={}", agent.getAgentId(),
                 ctx.getModelId(), ctx.getSessionId(),

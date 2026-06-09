@@ -91,8 +91,6 @@ class ResultAggregationStageProviderRequestTest {
             "test.png",
             123L
         ));
-        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("open_web_search"));
-
         stage.process(ctx);
 
         assertThat(ctx.getFinalResponse()).isEqualTo("ok");
@@ -102,6 +100,7 @@ class ResultAggregationStageProviderRequestTest {
         assertThat(request.attachments()).hasSize(1);
         assertThat(request.tools()).hasSize(1);
         assertThat(request.tools().get(0).name()).isEqualTo("open_web_search");
+        assertThat(request.systemPrompt()).contains("先调用 open_web_search");
         assertThat(request.requiredToolName()).isNull();
         assertThat(request.toolInputMessage()).isEqualTo("帮我看图并搜索这张图里是什么");
     }
@@ -145,7 +144,6 @@ class ResultAggregationStageProviderRequestTest {
         ctx.setResolvedModel(model);
         ctx.setUserMessage("查询[LOCATION]到上海的火车票");
         ctx.getAttributes().put(PipelineContext.ATTR_RAW_USER_MESSAGE, "查询重庆到上海的火车票");
-        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("12306"));
 
         stage.process(ctx);
 
@@ -156,7 +154,7 @@ class ResultAggregationStageProviderRequestTest {
     }
 
     @Test
-    void processKeepsRailwayToolAvailableForShortDateFollowUp() {
+    void processExposesAllToolsForFollowUpCorrection() {
         ModelProviderRegistry registry = new ModelProviderRegistry();
         AtomicReference<ProviderRequest> captured = new AtomicReference<>();
         ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
@@ -164,29 +162,49 @@ class ResultAggregationStageProviderRequestTest {
         ToolRouter toolRouter = new ToolRouter();
         toolRouter.register(new RailwayTool());
         toolRouter.register(new DateTool());
+        toolRouter.register(new StubTool());
         ResultAggregationStage stage = stage(registry, toolRouter);
 
         PipelineContext ctx = new PipelineContext();
         ctx.setSessionId("session-1");
         ctx.setModelId("mock:tool-model");
         ctx.setResolvedModel(model);
-        ctx.setUserMessage("查后天的");
-        ctx.getMessages().add(AgentMessage.user("查询重庆到临沂的火车票"));
-        ctx.getMessages().add(AgentMessage.assistant("需要我帮你查其他日期吗？"));
-        ctx.getMessages().add(AgentMessage.user("查后天的"));
-        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("12306", "date-query"));
+        ctx.setUserMessage("高考两天???你确定吗???");
+        ctx.getMessages().add(AgentMessage.user("搜搜今天的新闻"));
+        ctx.getMessages().add(AgentMessage.assistant("已查询今日新闻。"));
+        ctx.getMessages().add(AgentMessage.user("高考两天???你确定吗???"));
 
         stage.process(ctx);
 
         ProviderRequest request = captured.get();
         assertThat(request.tools()).extracting(tool -> tool.name())
-            .containsExactlyInAnyOrder("tool_12306", "date_query");
-        assertThat(request.userMessage()).contains("短句追问");
-        assertThat(request.userMessage()).contains("继续完成原业务任务");
-        assertThat(request.userMessage()).contains("不要再次叠加相同偏移");
+            .containsExactlyInAnyOrder("tool_12306", "date_query", "open_web_search");
+        assertThat(request.systemPrompt()).contains("先调用 date_query");
+        assertThat(request.systemPrompt()).contains("先调用 open_web_search");
         assertThat(request.requiredToolName()).isNull();
-        assertThat(ctx.getAttributes())
-            .containsEntry(PipelineContext.ATTR_CONTEXT_MATCHED_TOOLS, List.of("12306"));
+    }
+
+    @Test
+    void processHidesToolsWhenExposureIsDisabledForInternalCalls() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("只输出 JSON");
+        ctx.getAttributes().put(PipelineContext.ATTR_TOOL_EXPOSURE_DISABLED, true);
+
+        stage.process(ctx);
+
+        assertThat(captured.get().tools()).isEmpty();
+        assertThat(captured.get().systemPrompt()).doesNotContain("工具使用规则");
     }
 
     @Test
@@ -298,7 +316,6 @@ class ResultAggregationStageProviderRequestTest {
         assertThat(ctx.getFinalResponse()).isEqualTo("[Error] provider 400");
     }
 
-    @Test
     private ResultAggregationStage stage(ModelProviderRegistry registry, ToolRouter toolRouter) {
         return new ResultAggregationStage(registry, toolRouter, new PromptBudget(4000, 2000, 800));
     }

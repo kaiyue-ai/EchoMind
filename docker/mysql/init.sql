@@ -196,11 +196,34 @@ CREATE TABLE IF NOT EXISTS echomind.echomind_alert_events (
     INDEX idx_alert_events_user_time (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- RabbitMQ DLQ 审计表：死信只归档、补偿和受控重放，不盲目自动重跑
+CREATE TABLE IF NOT EXISTS echomind.echomind_rabbitmq_dead_letters (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    message_hash VARCHAR(64) NOT NULL,
+    dlq_name VARCHAR(255) NOT NULL,
+    message_type VARCHAR(64) NOT NULL,
+    business_key VARCHAR(255),
+    trace_id VARCHAR(64),
+    payload_json LONGTEXT NOT NULL,
+    error_headers_json LONGTEXT,
+    status VARCHAR(32) NOT NULL DEFAULT 'ARCHIVED',
+    replay_count INT NOT NULL DEFAULT 0,
+    last_replay_error VARCHAR(1000),
+    archived_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    replayed_at DATETIME(6),
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    UNIQUE KEY uk_rabbitmq_dead_letter_hash (message_hash),
+    INDEX idx_rabbitmq_dead_letter_status_time (status, archived_at),
+    INDEX idx_rabbitmq_dead_letter_type_time (message_type, archived_at),
+    INDEX idx_rabbitmq_dead_letter_business_key (business_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 创建 Agent 表（生产环境由初始化脚本和迁移脚本保证表结构）
 CREATE TABLE IF NOT EXISTS echomind.echomind_agents (
     agent_id VARCHAR(128) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    system_prompt VARCHAR(8000) NOT NULL,
+    system_prompt LONGTEXT NOT NULL,
     model_id VARCHAR(255) NOT NULL,
     skill_ids_json VARCHAR(4000) NOT NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),

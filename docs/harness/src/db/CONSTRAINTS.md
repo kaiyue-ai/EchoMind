@@ -17,6 +17,7 @@
 | Provider Token 预算 | MySQL `echomind_provider_token_budgets` 保存 Provider 日/周/月预算配置；`echomind_provider_token_budget_usage` 按 `provider_id + scope + bucket_start` 保存真实已用 token | Redis `echomind:provider-budget:*` 保存当前 bucket 的 used 热镜像和 in-flight reserved 冻结额度 |
 | 敏感数据治理 | MySQL `echomind_sensitive_rules` 保存规则，`echomind_sensitive_events` 保存脱敏后事件样本；请求侧 `BLOCK` 样本保存替代词结果 | Redis `echomind:sensitive:rules:*` 只做规则热缓存；`ChatApplicationService` 请求/响应治理钩子 |
 | 告警治理 | MySQL `echomind_alert_rules` 保存阈值、静默期和升级策略，`echomind_alert_events` 保存推送结果、升级标记和飞书响应摘要 | 飞书 Webhook 客户端，不作为事实来源；地址来自后端运行环境变量 `Webhook` |
+| RabbitMQ 死信归档 | MySQL `echomind_rabbitmq_dead_letters` 保存 DLQ payload、错误 headers、业务 key、traceId、补偿和重放状态 | RabbitMQ DLQ 只保留待归档消息；管理端接口按记录 id 受控重放 |
 | 用户长期记忆 | Milvus `echomind_user_memory_spring_ai_v1` 按 `userId` 保存细粒度事实；Redis `echomind:user-profile:snapshot:*` 保存画像快照 | Spring AI VectorStore 负责 embedding 和中心向量召回；旧 collection 保留但不再读取 |
 | Agent 知识库文档 | MySQL 文档表 + 对象存储文件 | Milvus `echomind_agent_knowledge_spring_ai_v1` 保存切片正文、切片元数据和知识库向量索引 |
 | 上传文件 | 阿里云 OSS 或本地对象目录 | 数据库只保存引用信息 |
@@ -47,6 +48,7 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 - 用户 Token 配额配置和日/月真实已用账本；账本行按 `user_id + scope + bucket_start` 唯一，不能只从审计表聚合判断 quota。
 - Provider Token 预算配置和日/周/月真实已用账本；迁移会从 `echomind_ai_call_usage` 回填已有 provider bucket 用量。
 - 敏感数据规则、脱敏事件、告警规则和告警事件。敏感事件只能保存脱敏后的样本或请求侧 `BLOCK` 替代词结果，不允许落原始手机号、身份证、邮箱、银行卡等命中文本。
+- RabbitMQ 死信归档记录，包含消息去重 hash、DLQ 名称、消息类型、业务 key、traceId、原始 payload、错误 headers、状态、重放次数和最后一次重放错误。
 - Agent 知识库文档元数据和原文件引用。
 - 后续 Agent Team 的 Team、Member、Run、Step。
 
@@ -102,9 +104,11 @@ AI 模型调用。`echomind_ai_call_usage.trace_id` 必须能关联到导出到 
 `usage_source` 固定为 `PROVIDER`；模型未返回原生 usage 时不允许写入本地预估 Token。
 管理端仪表盘的请求量、Token、平均响应、模型分布、趋势和最近调用都只能从该表的真实记录聚合；
 项目没有落库的成本、余额、API 密钥消费等数据不能在管理端展示为真实指标。
-用户日/月 quota 和 Provider 日/周/月 budget 都会在调用前用 Redis 预留固定额度：
-普通聊天在 `ChatApplicationService.submitAsync` 入队前预留用户 quota，Team 内部 LLM 调用通过
-`TeamUsageRecorder` 预留用户 quota，Provider budget 在 `ProviderTokenBudgetGuardStage` 模型解析后预留。
+用户日/月 quota 和 Provider 日/周/月 budget 都会在模型调用前用 Redis 原子预留：
+普通聊天在 `ChatApplicationService.submitAsync` 入队前按“输入估算 + 输出上限”同时预留用户 quota
+和 Provider budget；Team 内部 LLM 调用通过 `TeamUsageRecorder` 在每次调用前按本轮 prompt
+显式预留两类额度。RabbitMQ 聊天请求死信重放会在重新入队前重建两类 reservation。
+Pipeline 不再做 Provider budget 兜底预留。
 模型返回真实 provider usage 后，`AiCallUsageService` 先保留 `echomind_ai_call_usage` 审计记录，再用
 `echomind_token_quota_usage` 和 `echomind_provider_token_budget_usage` 在事务内结算真实已用；
 事务提交后才把 Redis reserved 转入 used，事务回滚或模型未返回原生 usage 时释放 reserved。
@@ -113,6 +117,7 @@ AI 模型调用。`echomind_ai_call_usage.trace_id` 必须能关联到导出到 
 项目三 AI Infra 是当前 Agent 项目的管理端，不新增独立网关或应用 API Key；配额仍按客户端用户维度执行。
 脱敏/告警属于管理端治理事实，必须落 MySQL，不能只放内存 Map；请求侧命中 `BLOCK` 会阻止进入 Agent/RabbitMQ 管线并返回替代词拼接结果，响应侧命中 `BLOCK` 仍走阻断异常。飞书自定义机器人 Webhook 只负责通知，不是告警事实来源。Webhook 地址只来自后端运行环境变量 `Webhook`，不在管理端前端配置规则级 Webhook。
 敏感规则可以进入 Redis 热缓存来减少聊天治理链路反复查库，但 MySQL 仍是事实来源；规则写入成功后必须删除对应 Redis 缓存，让下一次读取回源刷新。
+RabbitMQ 死信表是 DLQ 归档和人工重放的审计事实来源。聊天请求死信归档后必须释放入队前冻结的用户 reservation，并向 SSE buffer 写入 `failure` 终态；状态从 `ARCHIVED` 更新为 `COMPENSATED`。聊天记忆和用户记忆死信不自动重放，避免重复写普通聊天历史或重复沉淀长期事实。管理端重放成功后状态为 `REPLAYED`，失败后状态为 `REPLAY_FAILED` 并保存错误摘要。
 
 每次聊天进入提示词的内容应该是：
 

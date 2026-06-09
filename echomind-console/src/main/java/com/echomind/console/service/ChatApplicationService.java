@@ -10,6 +10,7 @@ import com.echomind.console.dto.ChatSubmitResponse;
 import com.echomind.console.reservation.TokenEstimator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
@@ -37,6 +38,9 @@ public class ChatApplicationService {
     private final QueuedChatStreamExecutor queuedChatStreamExecutor;
     private final ChatSessionCleanupService sessionCleanupService;
     private final ChatProviderResolver providerResolver;
+
+    @Value("${echomind.llm.maxTokens:${echomind.models.providers.deepseek.max-tokens:4096}}")
+    private long maxOutputTokens = 4096;
 
     private final ChatRequestNormalizer requestNormalizer = new ChatRequestNormalizer();
 
@@ -93,7 +97,10 @@ public class ChatApplicationService {
             List<String> providerReservationIds = List.of();
             boolean sseRegistered = false;
             try {
-                long estimatedTokens = TokenEstimator.estimate(normalized.message());
+                long estimatedTokens = TokenEstimator.estimateProcessedTokens(
+                    normalized.message(),
+                    maxOutputTokens
+                );
                 userReservationIds = safeReservations(
                     governanceService.reserveUserQuota(normalized.authUser(), requestId, estimatedTokens));
                 providerReservationIds = providerResolver.resolveProviderId(normalized.agentId(), normalized.modelId())

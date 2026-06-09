@@ -9,6 +9,7 @@ import com.echomind.llm.router.ModelProviderRegistry;
 import com.echomind.llm.router.ModelSpec;
 import com.echomind.memory.embedding.DisabledEmbeddingModel;
 import com.echomind.memory.embedding.DisabledVectorStore;
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 import com.echomind.memory.usermemory.impl.RedisUserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserMemoryStore;
@@ -103,7 +104,10 @@ public class UserMemoryWorkerConfig {
         if (!embeddingAvailable(properties)) {
             return new NoopUserMemoryStore();
         }
-        return new SpringAiUserMemoryStore(vectorStore);
+        return new SpringAiUserMemoryStore(
+            vectorStore,
+            new EmbeddingInputPolicy(properties.getEmbeddingQueryMaxChars())
+        );
     }
 
     @Bean

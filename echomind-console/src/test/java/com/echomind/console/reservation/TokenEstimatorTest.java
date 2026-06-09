@@ -66,4 +66,30 @@ class TokenEstimatorTest {
         String msg = "a".repeat(5000);
         assertThat(TokenEstimator.estimate(msg)).isEqualTo(4096);
     }
+
+    @Test
+    void processedTokensForEmptyPromptUsesMaxOutputOnly() {
+        assertThat(TokenEstimator.estimateProcessedTokens("", 4096)).isEqualTo(4096);
+    }
+
+    @Test
+    void processedTokensAddsEstimatedInputToMaxOutput() {
+        String msg = "a".repeat(1000);
+
+        assertThat(TokenEstimator.estimateProcessedTokens(msg, 4096)).isEqualTo(4496);
+    }
+
+    @Test
+    void processedTokensSupportsDifferentMaxOutputValues() {
+        String msg = "a".repeat(250);
+
+        assertThat(TokenEstimator.estimateProcessedTokens(msg, 1024)).isEqualTo(1124);
+    }
+
+    @Test
+    void processedTokensTreatsNegativeMaxOutputAsZero() {
+        String msg = "a".repeat(25);
+
+        assertThat(TokenEstimator.estimateProcessedTokens(msg, -1)).isEqualTo(10);
+    }
 }

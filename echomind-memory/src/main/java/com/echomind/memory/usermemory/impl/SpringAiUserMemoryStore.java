@@ -1,5 +1,6 @@
 package com.echomind.memory.usermemory.impl;
 
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryEntry;
 import com.echomind.memory.usermemory.UserMemoryHit;
@@ -30,9 +31,15 @@ public class SpringAiUserMemoryStore implements UserMemoryStore {
     private static final String META_UPDATED_AT = "updatedAt";
 
     private final VectorStore vectorStore;
+    private final EmbeddingInputPolicy embeddingInputPolicy;
 
     public SpringAiUserMemoryStore(VectorStore vectorStore) {
+        this(vectorStore, EmbeddingInputPolicy.defaults());
+    }
+
+    public SpringAiUserMemoryStore(VectorStore vectorStore, EmbeddingInputPolicy embeddingInputPolicy) {
         this.vectorStore = vectorStore;
+        this.embeddingInputPolicy = embeddingInputPolicy == null ? EmbeddingInputPolicy.defaults() : embeddingInputPolicy;
     }
 
     @Override
@@ -61,7 +68,7 @@ public class SpringAiUserMemoryStore implements UserMemoryStore {
         try {
             FilterExpressionBuilder filterBuilder = new FilterExpressionBuilder();
             SearchRequest request = SearchRequest.builder()
-                .query(query)
+                .query(embeddingInputPolicy.safeQuery(query))
                 .topK(topK)
                 .similarityThreshold(clampSimilarity(minSimilarity))
                 .filterExpression(filterBuilder.eq(META_USER_MEMORY_KEY, sessionId).build())

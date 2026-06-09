@@ -57,12 +57,6 @@ public class ExecutionPipeline {
             } catch (Exception e) {
                 EchoMindTrace.recordException(span, e);
                 log.error("[Pipeline] Stage {} failed: {}", stage.name(), e.getMessage());
-                if (Boolean.TRUE.equals(current.getAttributes().get(PipelineContext.ATTR_PROVIDER_TOKEN_BUDGET_BLOCKED))) {
-                    if (e instanceof RuntimeException runtimeException) {
-                        throw runtimeException;
-                    }
-                    throw new RuntimeException(e);
-                }
                 current.markFailed("Pipeline stage '" + stage.name() + "' failed: " + e.getMessage());
                 return current;
             } finally {

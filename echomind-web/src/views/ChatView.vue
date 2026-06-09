@@ -91,6 +91,7 @@ import { useMcpStore } from '../stores/mcp'
 import { useModelStore } from '../stores/models'
 import { useSkillStore } from '../stores/skills'
 import { useUiStore } from '../stores/ui'
+import { runWhenIdle } from '../utils/scheduler'
 
 defineOptions({ name: 'ChatView' })
 
@@ -114,6 +115,7 @@ let historySerial = 0
 let messageClientSerial = 0
 let streamTokenBuffer = ''
 let streamTokenTimer = 0
+let cancelMetadataLoad = null
 
 const {
   input,
@@ -158,12 +160,12 @@ const selectedModelSupportsVision = computed(() => supportsVision(selectedModelS
 
 onMounted(() => {
   collapseInspectorOnCompactViewport()
-  Promise.allSettled([
+  cancelMetadataLoad = runWhenIdle(() => Promise.allSettled([
     modelStore.loadModels(),
     agentStore.loadAgents(),
     skillStore.loadSkills(),
     mcpStore.loadMcp()
-  ]).then(() => ensureSelectedModel())
+  ]).then(() => ensureSelectedModel()), 800)
   loadRouteHistory(route.query.sessionId)
 })
 
@@ -188,7 +190,10 @@ onActivated(() => {
   nextTick(() => messageListRef.value?.scrollToBottom('auto'))
 })
 
-onBeforeUnmount(() => cancelActiveStream())
+onBeforeUnmount(() => {
+  cancelMetadataLoad?.()
+  cancelActiveStream()
+})
 
 async function loadRouteHistory(sid) {
   if (!sid || sid === sessionId.value && messages.value.length > 0) return
@@ -299,7 +304,7 @@ function updateToolStatus(toolName) {
 function queueStreamToken(token) {
   streamTokenBuffer += token
   if (streamTokenTimer) return
-  streamTokenTimer = window.setTimeout(() => flushStreamToken(), 50)
+  streamTokenTimer = window.setTimeout(() => flushStreamToken(), 72)
 }
 
 function flushStreamToken() {
@@ -467,6 +472,7 @@ function createClientMessage(role, content, extra = {}) {
     clientId: `local-${Date.now()}-${messageClientSerial}`,
     role,
     content,
+    timestamp: new Date().toISOString(),
     ...extra
   }
 }

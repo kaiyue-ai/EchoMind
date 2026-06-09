@@ -7,16 +7,16 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 统一工具注册表和匹配器。
+ * 统一工具注册表。
  *
- * <p>它把本地 Skill 与 MCP 工具放到同一个命名空间里，并通过工具名、标签、
- * keywords 和 aliases 从用户消息中匹配可能要调用的工具。</p>
+ * <p>它只维护本地 Skill 与 MCP 工具的运行时索引，不再根据关键词或 Agent 绑定关系
+ * 预筛选工具。普通聊天会把所有已启用工具交给 LLM，由模型结合工具描述和 schema
+ * 自主决定是否调用。</p>
  */
 @Slf4j
 public class ToolRouter {
 
     protected final Map<String, Tool> tools = new ConcurrentHashMap<>();
-    private final ToolMatchScorer matchScorer = new ToolMatchScorer();
 
     /**
      * 当前可路由工具集合。
@@ -76,48 +76,5 @@ public class ToolRouter {
 
     public Collection<Tool> listAll() {
         return List.copyOf(currentTools());
-    }
-
-    /**
-     * 根据 Agent 配置过滤可暴露给模型的工具。
-     *
-     * <p>MCP 工具默认可见；Skill 工具需要命中 Agent 的 skillIds。为了兼容配置习惯，
-     * 支持三种写法：工具名、完整 sourceId、去掉版本号后的 sourceId。</p>
-     */
-    public List<Tool> listForAgentSkillIds(Collection<?> allowedSkillIds) {
-        List<Tool> allTools = new ArrayList<>(currentTools());
-        if (allowedSkillIds == null || allowedSkillIds.isEmpty()) {
-            return allTools;
-        }
-
-        return allTools.stream()
-            .filter(tool -> !Tool.SOURCE_SKILL.equals(tool.sourceType()) || isAllowedSkill(tool, allowedSkillIds))
-            .toList();
-    }
-
-    /**
-     * 先按Agent允许范围过滤，再做关键词匹配。
-     *
-     * <p>用于模型函数调用前的候选工具收窄：关键词命中时只把相关工具交给模型；
-     * 未命中时再让模型在完整允许工具集合里智能判断。</p>
-     */
-    public List<Tool> matchForAgentSkillIds(String userMessage, Collection<?> allowedSkillIds) {
-        return matchTools(userMessage, listForAgentSkillIds(allowedSkillIds));
-    }
-
-    public List<Tool> matchTools(String userMessage, Collection<Tool> candidateTools) {
-        if (userMessage == null || userMessage.isBlank()) {
-            return List.of();
-        }
-        return matchScorer.match(userMessage, candidateTools);
-    }
-
-    private boolean isAllowedSkill(Tool tool, Collection<?> allowedSkillIds) {
-        String sourceId = tool.sourceId();
-        if (allowedSkillIds.contains(sourceId) || allowedSkillIds.contains(tool.name())) {
-            return true;
-        }
-        int versionSep = sourceId == null ? -1 : sourceId.indexOf('@');
-        return versionSep > 0 && allowedSkillIds.contains(sourceId.substring(0, versionSep));
     }
 }

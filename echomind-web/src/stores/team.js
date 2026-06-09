@@ -19,6 +19,8 @@ export const useTeamStore = defineStore('team', {
     userRuns: [],
     teamRuns: [],
     pollingTimer: null,
+    pollingDelay: 1000,
+    lastRunSnapshot: '',
     loading: false,
     loadingRuns: false,
     creating: false,
@@ -142,13 +144,22 @@ export const useTeamStore = defineStore('team', {
     async refreshRun(runId = this.currentRun?.runId) {
       if (!this.selectedTeam || !runId) return null
       try {
-        this.currentRun = await api.team.getRun(this.selectedTeam.teamId, runId)
-        if (this.isTerminalRun(this.currentRun.status)) {
+        const nextRun = await api.team.getRun(this.selectedTeam.teamId, runId)
+        const nextSnapshot = stableRunSnapshot(nextRun)
+        if (nextSnapshot !== this.lastRunSnapshot) {
+          this.currentRun = nextRun
+          this.lastRunSnapshot = nextSnapshot
+          this.pollingDelay = 1000
+        } else {
+          this.pollingDelay = Math.min(this.pollingDelay + 500, 3000)
+        }
+        if (this.isTerminalRun(nextRun.status)) {
           this.stopPolling()
-          this.teamResult = this.currentRun
+          this.currentRun = nextRun
+          this.teamResult = nextRun
           this.loadTeamRuns(this.selectedTeam.teamId).catch(() => {})
         }
-        return this.currentRun
+        return nextRun
       } catch (error) {
         this.error = api.parseError(error, '刷新团队任务失败')
         this.stopPolling()
@@ -157,16 +168,24 @@ export const useTeamStore = defineStore('team', {
     },
     startPolling(runId) {
       this.stopPolling()
-      this.pollingTimer = window.setInterval(() => {
-        this.refreshRun(runId).catch(() => {})
-      }, 250)
-      this.refreshRun(runId).catch(() => {})
+      this.pollingDelay = 1000
+      this.lastRunSnapshot = ''
+      const tick = () => {
+        this.refreshRun(runId)
+          .catch(() => {})
+          .finally(() => {
+            if (!this.pollingTimer || this.isTerminalRun(this.currentRun?.status)) return
+            this.pollingTimer = window.setTimeout(tick, this.pollingDelay)
+          })
+      }
+      this.pollingTimer = window.setTimeout(tick, 0)
     },
     stopPolling() {
       if (this.pollingTimer) {
-        window.clearInterval(this.pollingTimer)
+        window.clearTimeout(this.pollingTimer)
         this.pollingTimer = null
       }
+      this.pollingDelay = 1000
     },
     isTerminalRun(status) {
       return ['COMPLETED', 'FAILED', 'NEEDS_CLARIFICATION'].includes(status)
@@ -206,4 +225,16 @@ function normalizeReviewOptions(options) {
     ...defaultReviewOptions(),
     ...(options || {})
   }
+}
+
+function stableRunSnapshot(run) {
+  if (!run) return ''
+  return JSON.stringify({
+    status: run.status,
+    updatedAt: run.updatedAt,
+    finalOutput: run.finalOutput,
+    mermaidDiagram: run.mermaidDiagram,
+    steps: run.steps,
+    events: run.events
+  })
 }

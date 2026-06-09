@@ -1,5 +1,6 @@
 package com.echomind.memory.knowledge;
 
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 import com.echomind.memory.knowledge.entity.AgentKnowledgeDocumentEntity;
 import com.echomind.memory.knowledge.mapper.AgentKnowledgeDocumentMapper;
 import org.junit.jupiter.api.Test;
@@ -58,6 +59,21 @@ class AgentKnowledgeServiceSpringAiSearchTest {
     }
 
     @Test
+    void springAiMilvusSearchTrimsOverlongQueryBeforeVectorSearch() {
+        RecordingVectorStore vectorStore = new RecordingVectorStore(List.of());
+        AgentKnowledgeService service = service(vectorStore, 0.25, new EmbeddingInputPolicy(30));
+
+        service.search("agent-1", "HEAD-" + "x".repeat(80) + "-TAIL", 3);
+
+        assertThat(vectorStore.requests).hasSize(1);
+        assertThat(vectorStore.requests.get(0).getQuery())
+            .hasSize(30)
+            .startsWith("HEAD-")
+            .contains("\n...\n")
+            .endsWith("-TAIL");
+    }
+
+    @Test
     void springAiMilvusWindowExpressionExpandsCenterChunkByFiveNeighbors() {
         String expr = KnowledgeWindowQuery.windowFilterExpr("agent-1", 42L, 7);
 
@@ -106,6 +122,12 @@ class AgentKnowledgeServiceSpringAiSearchTest {
 
     private AgentKnowledgeService service(VectorStore vectorStore,
                                           double minSimilarity) {
+        return service(vectorStore, minSimilarity, EmbeddingInputPolicy.defaults());
+    }
+
+    private AgentKnowledgeService service(VectorStore vectorStore,
+                                          double minSimilarity,
+                                          EmbeddingInputPolicy embeddingInputPolicy) {
         return new AgentKnowledgeService(
             mock(AgentKnowledgeDocumentMapper.class),
             vectorStore,
@@ -119,7 +141,8 @@ class AgentKnowledgeServiceSpringAiSearchTest {
             80,
             20,
             "tesseract",
-            "echomind_agent_knowledge_test"
+            "echomind_agent_knowledge_test",
+            embeddingInputPolicy
         );
     }
 

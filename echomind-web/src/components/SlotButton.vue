@@ -30,7 +30,11 @@ const hover = ref(false)
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.3px;
-  transition: all 0.2s;
+  transition:
+    color 0.2s,
+    border-color 0.2s,
+    background-color 0.2s,
+    transform 0.2s;
 }
 .slot-btn.outline {
   background: transparent;

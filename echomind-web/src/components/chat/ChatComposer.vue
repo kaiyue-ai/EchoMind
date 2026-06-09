@@ -9,7 +9,14 @@
       </div>
     </TransitionGroup>
     <div
-      :class="['composer-row', { 'has-content': hasContent, 'is-busy': loading || uploading }]"
+      :class="[
+        'composer-row',
+        {
+          'has-content': hasContent,
+          'is-busy': loading || uploading,
+          'is-near-limit': isNearLimit
+        }
+      ]"
       :aria-busy="loading || uploading"
     >
       <el-input
@@ -19,7 +26,7 @@
         :autosize="{ minRows: 1, maxRows: 5 }"
         :maxlength="maxLength"
         resize="none"
-        :disabled="loading"
+        :readonly="loading"
         :placeholder="loading ? '正在生成回复...' : '输入任务或问题...'"
         @update:model-value="$emit('update:modelValue', $event)"
         @compositionstart="isComposing = true"
@@ -28,6 +35,13 @@
       />
       <input ref="imageInput" type="file" accept="image/*" class="hidden-input" @change="handleImageSelected" />
       <div class="composer-actions">
+        <span
+          v-if="showCharacterCount"
+          :class="['composer-char-count', { 'is-warning': isNearLimit }]"
+          aria-live="polite"
+        >
+          {{ remainingChars }}
+        </span>
         <el-button
           circle
           class="composer-tool-button"
@@ -55,6 +69,12 @@
         </el-button>
       </div>
     </div>
+    <div class="composer-footnote" aria-live="polite">
+      <span v-if="uploading">正在上传图片...</span>
+      <span v-else-if="loading">正在生成，点击停止按钮可中断。</span>
+      <span v-else-if="attachments.length">已附加 {{ attachments.length }} 张图片。</span>
+      <span v-else></span>
+    </div>
   </form>
 </template>
 
@@ -76,6 +96,9 @@ const isComposing = ref(false)
 
 const hasContent = computed(() => props.modelValue.trim().length > 0 || props.attachments.length > 0)
 const disabled = computed(() => props.loading || props.uploading || (!props.modelValue.trim() && props.attachments.length === 0))
+const remainingChars = computed(() => Math.max(0, props.maxLength - props.modelValue.length))
+const isNearLimit = computed(() => remainingChars.value <= Math.min(1000, Math.ceil(props.maxLength * 0.12)))
+const showCharacterCount = computed(() => props.modelValue.length > 0 || isNearLimit.value)
 
 function requestSend() {
   if (!disabled.value) emit('send')
