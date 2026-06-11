@@ -28,6 +28,18 @@ echomind-web/dist/
 .env
 .env.local
 
-# Temporary
+# Trae AI
+.trae/
+.codex/
+.claude/
+
+# Backups and temporary
+backups/
+tmp/
 *.tmp
 *.bak
+deploy-log.txt
+remote-check.txt
+remote-result.txt
+skills-lock.json
+temp.txt
