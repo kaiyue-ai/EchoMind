@@ -67,6 +67,12 @@
   --strong-shadow: 0 30px 90px rgba(0, 0, 0, 0.42);
   --scrollbar-thumb: #282b31;
   --scrollbar-thumb-hover: #3a3e47;
+  --motion-fast: 0.16s;
+  --motion-medium: 0.24s;
+  --motion-slow: 0.36s;
+  --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-lift: translateY(-2px);
   color-scheme: dark;
 }
 
@@ -608,24 +614,60 @@ textarea {
 }
 
 .login-panel {
+  position: relative;
+  overflow: hidden;
   width: min(440px, 100%);
   border: 1px solid var(--border);
   background: var(--login-panel);
   border-radius: 8px;
   padding: 30px;
   box-shadow: var(--strong-shadow);
+  animation: login-panel-in var(--motion-slow) var(--motion-ease) both;
+  transition:
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-medium) ease,
+    transform var(--motion-medium) var(--motion-ease-soft);
+}
+
+.login-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(110deg, transparent 0 24%, rgba(118, 232, 255, 0.12) 43%, transparent 64%),
+    radial-gradient(circle at 18% 0%, rgba(125, 134, 255, 0.16), transparent 34%);
+  opacity: 0.42;
+  transform: translate3d(-14%, 0, 0);
+}
+
+.login-panel.is-submitting {
+  border-color: rgba(118, 232, 255, 0.38);
+  box-shadow: var(--strong-shadow), 0 0 36px rgba(118, 232, 255, 0.16);
 }
 
 .login-brand {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
   margin-bottom: 22px;
+  animation: login-stagger-in 0.42s var(--motion-ease) 0.04s both;
 }
 
 .login-brand .brand-mark {
   width: 42px;
   height: 42px;
+  transition:
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease,
+    transform var(--motion-fast) var(--motion-ease-soft);
+}
+
+.login-panel:hover .login-brand .brand-mark,
+.login-panel:focus-within .login-brand .brand-mark {
+  transform: translateY(-1px);
+  box-shadow: 0 0 28px rgba(118, 232, 255, 0.16);
 }
 
 .login-brand strong,
@@ -641,6 +683,7 @@ textarea {
 
 .login-copy {
   margin: 24px 0 18px;
+  animation: login-stagger-in 0.42s var(--motion-ease) 0.1s both;
 }
 
 .login-copy h1 {
@@ -658,6 +701,7 @@ textarea {
 .login-form .el-form-item {
   display: block;
   margin-bottom: 16px;
+  animation: login-stagger-in 0.42s var(--motion-ease) 0.16s both;
 }
 
 .login-form .el-form-item__label {
@@ -681,9 +725,76 @@ textarea {
   height: 42px;
 }
 
+.login-form .el-input__wrapper {
+  transition:
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease,
+    transform var(--motion-fast) var(--motion-ease-soft);
+}
+
+.login-form .el-input__wrapper.is-focus {
+  box-shadow:
+    0 0 0 1px rgba(118, 232, 255, 0.52) inset,
+    0 0 0 4px rgba(118, 232, 255, 0.12) !important;
+  transform: translateY(-1px);
+}
+
 .login-submit {
   width: 100%;
   margin-top: 4px;
+  transition:
+    opacity var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease,
+    transform var(--motion-fast) var(--motion-ease-soft);
+}
+
+.login-submit.is-ready {
+  box-shadow: 0 0 28px rgba(118, 232, 255, 0.18);
+}
+
+.login-submit.is-ready:hover {
+  transform: translateY(-1px);
+}
+
+.app-shell-enter-active,
+.app-shell-leave-active {
+  transition:
+    opacity var(--motion-medium) var(--motion-ease),
+    transform var(--motion-medium) var(--motion-ease);
+}
+
+.app-shell-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 8px, 0) scale(0.992);
+}
+
+.app-shell-leave-to {
+  opacity: 0;
+  transform: translate3d(0, -6px, 0) scale(0.996);
+}
+
+@keyframes login-panel-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.986);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes login-stagger-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .responsive-shell,
@@ -876,14 +987,38 @@ textarea {
 
 .admin-nav {
   display: flex;
+  position: relative;
   flex-direction: column;
   gap: 8px;
   padding: 16px 14px;
   transition: padding 0.24s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+.admin-nav-active-indicator {
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 42px;
+  pointer-events: none;
+  border: 1px solid rgba(125, 134, 255, 0.28);
+  border-radius: 8px;
+  background: var(--active);
+  box-shadow:
+    0 12px 28px rgba(79, 107, 255, 0.11),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transform: translate3d(0, var(--admin-nav-indicator-y, 16px), 0);
+  transition:
+    transform var(--motion-medium) var(--motion-ease),
+    left var(--motion-medium) var(--motion-ease),
+    right var(--motion-medium) var(--motion-ease),
+    width var(--motion-medium) var(--motion-ease);
+}
+
 .admin-nav-item {
   display: flex;
+  position: relative;
+  z-index: 1;
   align-items: center;
   gap: 14px;
   min-height: 42px;
@@ -910,8 +1045,8 @@ textarea {
 
 .admin-nav-item:hover,
 .admin-nav-item.active {
-  background: var(--active);
-  border-color: rgba(125, 134, 255, 0.28);
+  background: transparent;
+  border-color: transparent;
   color: var(--text);
 }
 
@@ -935,6 +1070,12 @@ textarea {
 
 .admin-shell.sidebar-collapsed .admin-nav {
   padding: 16px 12px;
+}
+
+.admin-shell.sidebar-collapsed .admin-nav-active-indicator {
+  left: calc(50% - 21px);
+  right: auto;
+  width: 42px;
 }
 
 .admin-nav-label,
@@ -1152,6 +1293,27 @@ textarea {
   container-type: inline-size;
 }
 
+.admin-route-view {
+  min-height: 100%;
+}
+
+.admin-route-enter-active,
+.admin-route-leave-active {
+  transition:
+    opacity var(--motion-medium) var(--motion-ease),
+    transform var(--motion-medium) var(--motion-ease);
+}
+
+.admin-route-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 10px, 0);
+}
+
+.admin-route-leave-to {
+  opacity: 0;
+  transform: translate3d(0, -6px, 0);
+}
+
 .route-loading,
 .page-skeleton {
   height: 100%;
@@ -1266,6 +1428,26 @@ textarea {
   box-shadow: var(--card-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition:
+    transform var(--motion-fast) var(--motion-ease-soft),
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    box-shadow var(--motion-medium) ease;
+}
+
+.admin-route-view :is(.metric-card, .admin-metric-card, .panel-block, .admin-table-panel, .dashboard-panel, .alert-rule-card, .alert-event-card) {
+  animation: admin-rise-in var(--motion-slow) var(--motion-ease) both;
+}
+
+.admin-route-view :is(.metric-card, .admin-metric-card, .panel-block, .admin-table-panel, .dashboard-panel, .alert-rule-card, .alert-event-card):hover {
+  border-color: rgba(118, 232, 255, 0.28);
+  transform: var(--motion-lift);
+  box-shadow: var(--strong-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.admin-route-view .alert-event-card.is-escalated:hover {
+  border-color: rgba(255, 100, 124, 0.55);
+  box-shadow: var(--strong-shadow), inset 3px 0 0 rgba(255, 100, 124, 0.9);
 }
 
 .metric-icon {
@@ -1331,6 +1513,11 @@ textarea {
   box-shadow: var(--card-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition:
+    transform var(--motion-fast) var(--motion-ease-soft),
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    box-shadow var(--motion-medium) ease;
 }
 
 .section-head {
@@ -1657,6 +1844,11 @@ textarea {
   box-shadow: var(--card-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition:
+    transform var(--motion-fast) var(--motion-ease-soft),
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    box-shadow var(--motion-medium) ease;
 }
 
 .admin-filter-group {
@@ -1743,6 +1935,7 @@ textarea {
   border-bottom: 1px solid var(--border-soft);
   background: var(--surface);
   vertical-align: middle;
+  transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease;
 }
 
 .admin-record-table tbody tr:hover td {
@@ -1971,6 +2164,11 @@ textarea {
   box-shadow: var(--card-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition:
+    transform var(--motion-fast) var(--motion-ease-soft),
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    box-shadow var(--motion-medium) ease;
 }
 
 .dashboard-panel-head {
@@ -2040,6 +2238,23 @@ textarea {
   box-shadow: var(--card-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition:
+    transform var(--motion-fast) var(--motion-ease-soft),
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    box-shadow var(--motion-medium) ease;
+}
+
+@keyframes admin-rise-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .alert-rule-card {
@@ -2809,4 +3024,42 @@ textarea {
     align-items: stretch;
     flex-direction: column;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0.01ms;
+    --motion-medium: 0.01ms;
+    --motion-slow: 0.01ms;
+    --motion-lift: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .admin-route-enter-from,
+  .admin-route-leave-to,
+  .admin-route-view :is(.metric-card, .admin-metric-card, .panel-block, .admin-table-panel, .dashboard-panel, .alert-rule-card, .alert-event-card),
+  .admin-route-view :is(.metric-card, .admin-metric-card, .panel-block, .admin-table-panel, .dashboard-panel, .alert-rule-card, .alert-event-card):hover {
+    opacity: 1;
+    transform: none;
+  }
+
+  .login-panel,
+  .login-brand,
+  .login-copy,
+  .login-form .el-form-item {
+    animation: none;
+  }
+
+  .login-panel::before {
+    opacity: 0;
+  }
+
 }

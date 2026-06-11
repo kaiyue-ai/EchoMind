@@ -6,11 +6,12 @@ import com.echomind.agent.memory.NoopChatMemoryPersistPublisher;
 import com.echomind.agent.memory.RabbitChatMemoryPersistPublisher;
 import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.pipeline.ExecutionPipeline;
+import com.echomind.agent.pipeline.ModelInvocationPreflight;
 import com.echomind.agent.pipeline.PipelineStage;
-import com.echomind.agent.pipeline.budget.ProviderTokenBudgetGuard;
 import com.echomind.agent.pipeline.composing.PromptBudget;
 import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.agent.pipeline.stages.*;
+import com.echomind.agent.team.runtime.TeamRuntimeProperties;
 import com.echomind.agent.store.AgentPersistenceService;
 import com.echomind.agent.store.AgentMapper;
 import com.echomind.agent.tool.router.CapabilityRegistry;
@@ -30,21 +31,21 @@ import com.echomind.memory.MemoryManager;
 import com.echomind.memory.cache.InMemoryRecentMemoryCache;
 import com.echomind.memory.cache.RecentMemoryCache;
 import com.echomind.memory.cache.RedisRecentMemoryCache;
-import com.echomind.memory.embedding.DashScopeEmbeddingClient;
-import com.echomind.memory.embedding.DisabledEmbeddingClient;
-import com.echomind.memory.embedding.EmbeddingClient;
+import com.echomind.memory.embedding.DisabledEmbeddingModel;
+import com.echomind.memory.embedding.DisabledVectorStore;
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 
 import com.echomind.memory.persistence.mapper.ChatMessageMapper;
 import com.echomind.memory.persistence.mapper.ChatSessionMapper;
 import com.echomind.memory.persistence.PersistentChatMemoryStore;
 import com.echomind.memory.knowledge.mapper.AgentKnowledgeDocumentMapper;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
+import com.echomind.memory.knowledge.AgentKnowledgeManagementPort;
 import com.echomind.memory.usermemory.impl.NoopUserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import com.echomind.memory.usermemory.UserMemoryStore;
-import com.echomind.memory.milvus.MilvusClientFactory;
-import com.echomind.memory.usermemory.impl.MilvusUserMemoryStore;
 import com.echomind.memory.usermemory.impl.RedisUserProfileSnapshotStore;
+import com.echomind.memory.usermemory.impl.SpringAiUserMemoryStore;
 import com.echomind.memory.shortterm.WindowConfig;
 import com.echomind.memory.summary.MemorySummaryService;
 import com.echomind.common.messaging.ChatMemoryShardSupport;
@@ -58,6 +59,18 @@ import com.echomind.skill.storage.AliyunOssObjectStorageService;
 import com.echomind.skill.storage.LocalObjectStorageService;
 import com.echomind.skill.storage.ObjectStorageService;
 import lombok.extern.slf4j.Slf4j;
+import io.milvus.client.MilvusServiceClient;
+import io.milvus.param.ConnectParam;
+import io.milvus.param.IndexType;
+import io.milvus.param.MetricType;
+import org.springframework.ai.document.MetadataMode;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.milvus.MilvusVectorStore;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.amqp.core.Binding;
@@ -70,6 +83,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -86,6 +101,8 @@ import java.util.*;
 @EnableConfigurationProperties(EchoMindProperties.class)
 @Slf4j
 public class EchoMindAutoConfiguration {
+
+    private static final String MILVUS_HNSW_INDEX_PARAMS = "{\"M\":16,\"efConstruction\":256}";
 
     // --- 大模型装配 ---
 
@@ -251,25 +268,25 @@ public class EchoMindAutoConfiguration {
         return new PersistentChatMemoryStore(sessionMapper, messageMapper, mapper);
     }
 
-    @Bean
-    public EmbeddingClient embeddingClient(EchoMindProperties props, ObjectMapper mapper) {
+    @Bean("echomindEmbeddingModel")
+    public EmbeddingModel embeddingModel(EchoMindProperties props) {
         var memory = props.getMemory();
-        String apiKey = firstNonBlank(
-            memory.getEmbeddingApiKey(),
-            System.getenv("ALIYUN_BAILIAN_API_KEY"),
-            System.getenv("DASHSCOPE_API_KEY")
-        );
-        if (!memory.isEmbeddingEnabled() || isBlank(apiKey)) {
+        String apiKey = embeddingApiKey(memory);
+        if (!embeddingAvailable(memory)) {
             log.warn("Memory embedding disabled: no ALIYUN_BAILIAN_API_KEY/DASHSCOPE_API_KEY configured");
-            return new DisabledEmbeddingClient();
+            return new DisabledEmbeddingModel(memory.getEmbeddingDimension());
         }
-        log.info("Using DashScope embedding model: {}", memory.getEmbeddingModel());
-        return new DashScopeEmbeddingClient(
-            memory.getEmbeddingBaseUrl(),
-            apiKey,
-            memory.getEmbeddingModel(),
-            mapper
-        );
+        log.info("Using Spring AI OpenAI-compatible embedding model: {}", memory.getEmbeddingModel());
+        OpenAiApi openAiApi = OpenAiApi.builder()
+            .baseUrl(memory.getEmbeddingBaseUrl())
+            .apiKey(apiKey)
+            .embeddingsPath("/v1/embeddings")
+            .build();
+        OpenAiEmbeddingOptions options = OpenAiEmbeddingOptions.builder()
+            .model(memory.getEmbeddingModel())
+            .dimensions(memory.getEmbeddingDimension())
+            .build();
+        return new OpenAiEmbeddingModel(openAiApi, MetadataMode.EMBED, options);
     }
 
     @Bean
@@ -296,24 +313,62 @@ public class EchoMindAutoConfiguration {
     }
 
     @Bean(destroyMethod = "close")
-    public MilvusClientFactory milvusClientFactory(EchoMindProperties props) {
-        return new MilvusClientFactory(
-            props.getMemory().getMilvusHost(),
-            props.getMemory().getMilvusPort()
+    @Lazy
+    public MilvusServiceClient milvusServiceClient(EchoMindProperties props) {
+        return new MilvusServiceClient(ConnectParam.newBuilder()
+            .withHost(props.getMemory().getMilvusHost())
+            .withPort(props.getMemory().getMilvusPort())
+            .build());
+    }
+
+    @Bean("agentKnowledgeVectorStore")
+    public VectorStore agentKnowledgeVectorStore(ObjectProvider<MilvusServiceClient> milvusServiceClient,
+                                                 @Qualifier("echomindEmbeddingModel") EmbeddingModel embeddingModel,
+                                                 EchoMindProperties props) throws Exception {
+        if (!embeddingAvailable(props.getMemory())) {
+            return new DisabledVectorStore();
+        }
+        MilvusVectorStore store = milvusVectorStore(
+            milvusServiceClient.getObject(),
+            embeddingModel,
+            props.getMemory().getMilvusKnowledgeCollection(),
+            props.getMemory().getEmbeddingDimension()
         );
+        store.afterPropertiesSet();
+        return store;
+    }
+
+    @Bean("userMemoryVectorStore")
+    public VectorStore userMemoryVectorStore(ObjectProvider<MilvusServiceClient> milvusServiceClient,
+                                             @Qualifier("echomindEmbeddingModel") EmbeddingModel embeddingModel,
+                                             EchoMindProperties props) throws Exception {
+        if (!embeddingAvailable(props.getMemory())) {
+            return new DisabledVectorStore();
+        }
+        MilvusVectorStore store = milvusVectorStore(
+            milvusServiceClient.getObject(),
+            embeddingModel,
+            props.getMemory().getMilvusUserMemoryCollection(),
+            props.getMemory().getEmbeddingDimension()
+        );
+        store.afterPropertiesSet();
+        return store;
+    }
+
+    @Bean
+    public EmbeddingInputPolicy embeddingInputPolicy(EchoMindProperties props) {
+        return new EmbeddingInputPolicy(props.getMemory().getEmbeddingQueryMaxChars());
     }
 
     @Bean
     public AgentKnowledgeService agentKnowledgeService(AgentKnowledgeDocumentMapper documentMapper,
-                                                       EmbeddingClient embeddingClient,
                                                        EchoMindProperties props,
-                                                       MilvusClientFactory milvusClientFactory) {
+                                                       @Qualifier("agentKnowledgeVectorStore") VectorStore vectorStore,
+                                                       EmbeddingInputPolicy embeddingInputPolicy) {
         return new AgentKnowledgeService(
             documentMapper,
-            embeddingClient,
-            milvusClientFactory.getClient(),
-            props.getMemory().isEmbeddingEnabled(),
-            props.getMemory().getMilvusKnowledgeCollection(),
+            vectorStore,
+            embeddingAvailable(props.getMemory()),
             props.getMemory().getKnowledgeChunkSize(),
             props.getMemory().getKnowledgeChunkOverlapRatio(),
             props.getMemory().getKnowledgeMinVectorSimilarity(),
@@ -322,7 +377,9 @@ public class EchoMindAutoConfiguration {
             props.getMemory().getKnowledgeOcrDpi(),
             props.getMemory().getKnowledgeOcrMinTextChars(),
             props.getMemory().getKnowledgeOcrMaxPages(),
-            props.getMemory().getKnowledgeOcrTesseractCommand()
+            props.getMemory().getKnowledgeOcrTesseractCommand(),
+            props.getMemory().getMilvusKnowledgeCollection(),
+            embeddingInputPolicy
         );
     }
 
@@ -339,22 +396,23 @@ public class EchoMindAutoConfiguration {
     @DependsOn("llmInitializer")
     public RetrievalQueryRewriter retrievalQueryRewriter(EchoMindProperties props,
                                                          ModelProviderRegistry registry,
-                                                         ObjectMapper mapper) {
+                                                         ObjectMapper mapper,
+                                                         EmbeddingInputPolicy embeddingInputPolicy) {
         var memory = props.getMemory();
         if (!memory.isRetrievalQueryRewriteEnabled()) {
-            return RetrievalQueryRewriter.disabled();
+            return RetrievalQueryRewriter.disabled(embeddingInputPolicy);
         }
         String modelId = memory.getRetrievalQueryRewriteModelId();
         String[] parts = modelId == null ? new String[0] : modelId.split(":", 2);
         if (parts.length != 2) {
             log.warn("Retrieval query rewrite disabled: invalid model id {}", modelId);
-            return RetrievalQueryRewriter.disabled();
+            return RetrievalQueryRewriter.disabled(embeddingInputPolicy);
         }
         Optional<ModelSpec> model = registry.find(parts[0], parts[1]);
         Optional<ModelProvider> provider = registry.getProvider(parts[0]);
         if (model.isEmpty() || provider.isEmpty()) {
             log.warn("Retrieval query rewrite disabled: model/provider unavailable {}", modelId);
-            return RetrievalQueryRewriter.disabled();
+            return RetrievalQueryRewriter.disabled(embeddingInputPolicy);
         }
         return new RetrievalQueryRewriter(
             model.get(),
@@ -362,17 +420,19 @@ public class EchoMindAutoConfiguration {
             true,
             memory.getRetrievalQueryRewriteTimeoutMs(),
             memory.getRetrievalQueryRewriteMaxChars(),
-            mapper
+            mapper,
+            embeddingInputPolicy
         );
     }
 
     @Bean
     public UserMemoryStore userMemoryStore(EchoMindProperties props,
-                                           MilvusClientFactory milvusClientFactory) {
-        return new MilvusUserMemoryStore(
-            milvusClientFactory.getClient(),
-            props.getMemory().getMilvusUserMemoryCollection()
-        );
+                                           @Qualifier("userMemoryVectorStore") VectorStore vectorStore,
+                                           EmbeddingInputPolicy embeddingInputPolicy) {
+        if (!embeddingAvailable(props.getMemory())) {
+            return new NoopUserMemoryStore();
+        }
+        return new SpringAiUserMemoryStore(vectorStore, embeddingInputPolicy);
     }
 
     @Bean
@@ -429,6 +489,20 @@ public class EchoMindAutoConfiguration {
             "x-dead-letter-exchange", RabbitReliableMessaging.DEAD_LETTER_EXCHANGE,
             "x-dead-letter-routing-key", deadLetterRoutingKey
         ));
+    }
+
+    private MilvusVectorStore milvusVectorStore(MilvusServiceClient client,
+                                                EmbeddingModel embeddingModel,
+                                                String collectionName,
+                                                int dimension) {
+        return MilvusVectorStore.builder(client, embeddingModel)
+            .collectionName(collectionName)
+            .embeddingDimension(dimension)
+            .metricType(MetricType.COSINE)
+            .indexType(IndexType.HNSW)
+            .indexParameters(MILVUS_HNSW_INDEX_PARAMS)
+            .initializeSchema(true)
+            .build();
     }
 
     @Bean
@@ -559,21 +633,19 @@ public class EchoMindAutoConfiguration {
     @Bean
     public ExecutionPipeline executionPipeline(MemoryManager memory,
                                                  AgentKnowledgeService knowledgeService,
-                                                 EmbeddingClient embeddingClient,
                                                  ObjectProvider<UserMemoryStore> userMemoryStore,
                                                  ObjectProvider<UserProfileSnapshotStore> userProfileSnapshotStore,
                                                  ChatMemoryPersistPublisher chatMemoryPersistPublisher,
                                                 CapabilityRegistry capabilityRegistry,
                                                 DynamicModelRouter router, ModelProviderRegistry providerReg,
-                                                 ObjectStorageService storageService,
+                                                ObjectStorageService storageService,
                                                  PromptBudget promptBudget,
-                                                ObjectProvider<ProviderTokenBudgetGuard> providerTokenBudgetGuard,
                                                 RetrievalQueryRewriter retrievalQueryRewriter,
-                                                EchoMindProperties props) {
+                                                EchoMindProperties props,
+                                                ObjectProvider<ModelInvocationPreflight> invocationPreflight) {
         List<PipelineStage> stages = List.of(
             new ContextEnrichStage(memory),
             new UserMemoryRetrievalStage(
-                embeddingClient,
                 userMemoryStore.getIfAvailable(NoopUserMemoryStore::new),
                 userProfileSnapshotStore.getIfAvailable(UserProfileSnapshotStore::noop),
                 props.getUserMemory().isEnabled(),
@@ -582,15 +654,13 @@ public class EchoMindAutoConfiguration {
                 props.getUserMemory().getRetrievalMinSimilarity(),
                 retrievalQueryRewriter
             ),
-            new KnowledgeRetrievalStage(knowledgeService, embeddingClient, props.getMemory().getKnowledgeTopK(),
+            new KnowledgeRetrievalStage(knowledgeService, props.getMemory().getKnowledgeTopK(),
                 retrievalQueryRewriter),
             new ModelResolutionStage(router),
-            new ProviderTokenBudgetGuardStage(
-                providerTokenBudgetGuard.getIfAvailable(() -> ProviderTokenBudgetGuard.NOOP)
-            ),
             new MultimodalGuardStage(providerReg),
             new AttachmentPreparationStage(storageService),
-            new ResultAggregationStage(providerReg, capabilityRegistry, promptBudget),
+            new ResultAggregationStage(providerReg, capabilityRegistry, promptBudget,
+                invocationPreflight.getIfAvailable(() -> ModelInvocationPreflight.NOOP)),
             new MemoryPersistStage(chatMemoryPersistPublisher)
         );
         return new ExecutionPipeline(stages);
@@ -647,8 +717,23 @@ public class EchoMindAutoConfiguration {
      */
     @Bean
     public AgentFactory agentFactory(ExecutionPipeline pipeline, EchoMindProperties props,
-                                     AgentPersistenceService persistenceService) {
-        return new AgentRuntimeBootstrapper(props).restore(pipeline, props, persistenceService);
+                                     AgentPersistenceService persistenceService,
+                                     ResourceLoader resourceLoader) {
+        return new AgentRuntimeBootstrapper(props, resourceLoader).restore(pipeline, props, persistenceService);
+    }
+
+    @Bean
+    @DependsOn("agentFactory")
+    public Object agentKnowledgeSeedInitializer(EchoMindProperties props,
+                                                AgentKnowledgeManagementPort knowledgeService,
+                                                ObjectStorageService storageService,
+                                                ResourceLoader resourceLoader) {
+        EchoMindProperties.Runtime runtime = props.getRuntime() == null
+            ? new EchoMindProperties.Runtime()
+            : props.getRuntime();
+        new AgentKnowledgeBootstrapper(
+            runtime.getAgentBootstrap(), knowledgeService, storageService, resourceLoader).seedAll();
+        return new Object();
     }
 
     @Bean
@@ -658,16 +743,75 @@ public class EchoMindAutoConfiguration {
 
     // --- Agent Team 装配 ---
 
+    // ============================================================
+    // Team Event-Driven Engine Beans
+    // ============================================================
+
     @Bean
-    public org.springframework.core.task.TaskExecutor teamTaskExecutor() {
-        org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor executor =
-            new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
-        executor.setThreadNamePrefix("team-run-");
-        executor.setCorePoolSize(4);
-        executor.setMaxPoolSize(8);
-        executor.setQueueCapacity(100);
-        executor.initialize();
-        return executor;
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        org.springframework.data.redis.core.StringRedisTemplate.class)
+    public com.echomind.agent.team.runtime.TeamRedisDagStore teamRedisDagStore(
+            org.springframework.data.redis.core.StringRedisTemplate teamStringRedisTemplate,
+            @org.springframework.beans.factory.annotation.Qualifier("teamCompleteStepScript")
+            org.springframework.data.redis.core.script.RedisScript<java.util.List> completeStepScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamClaimSlotScript")
+            org.springframework.data.redis.core.script.RedisScript<String> claimSlotScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamReleaseSlotScript")
+            org.springframework.data.redis.core.script.RedisScript<Long> releaseSlotScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamMarkReadyScript")
+            org.springframework.data.redis.core.script.RedisScript<Long> markReadyScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamSetControlFlagScript")
+            org.springframework.data.redis.core.script.RedisScript<Long> setControlFlagScript) {
+        return new com.echomind.agent.team.runtime.TeamRedisDagStore(
+            teamStringRedisTemplate, completeStepScript, claimSlotScript,
+            releaseSlotScript, markReadyScript, setControlFlagScript);
+    }
+
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        org.springframework.amqp.rabbit.core.RabbitTemplate.class)
+    public com.echomind.agent.team.runtime.TeamStepCommandProducer teamStepCommandProducer(
+            @org.springframework.beans.factory.annotation.Qualifier("teamRabbitTemplate")
+            org.springframework.amqp.rabbit.core.RabbitTemplate teamRabbitTemplate,
+            TeamRuntimeProperties runtimeProperties) {
+        return new com.echomind.agent.team.runtime.TeamStepCommandProducer(
+            teamRabbitTemplate, runtimeProperties.getDagEventShards());
+    }
+
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        com.echomind.agent.team.runtime.TeamRedisDagStore.class)
+    public com.echomind.agent.team.runtime.TeamDagCoordinator teamDagCoordinator(
+            com.echomind.agent.team.runtime.TeamRedisDagStore dagStore,
+            com.echomind.agent.team.runtime.TeamStepCommandProducer producer,
+            com.echomind.agent.team.runtime.TeamBlackboardService blackboard) {
+        return new com.echomind.agent.team.runtime.TeamDagCoordinator(dagStore, producer, blackboard);
+    }
+
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        com.echomind.agent.team.runtime.TeamDagCoordinator.class)
+    public com.echomind.agent.team.runtime.TeamDeadLetterCompensator teamDeadLetterCompensator(
+            com.echomind.agent.team.runtime.TeamBlackboardService blackboard) {
+        return new com.echomind.agent.team.runtime.TeamDeadLetterCompensator(blackboard);
+    }
+
+    @Bean
+    public com.echomind.agent.team.runtime.TeamExecutionEngine teamExecutionEngine(
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            com.echomind.agent.team.runtime.TeamStepCommandProducer producer) {
+        return new com.echomind.agent.team.runtime.TeamExecutionEngine(producer);
+    }
+
+    // Wire DAG store into the blackboard service
+    @org.springframework.context.annotation.Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        com.echomind.agent.team.runtime.TeamRedisDagStore.class)
+    public Object teamDagStoreWiring(
+            com.echomind.agent.team.runtime.TeamBlackboardService blackboard,
+            com.echomind.agent.team.runtime.TeamRedisDagStore dagStore) {
+        blackboard.setDagStore(dagStore);
+        return "wired";
     }
 
     private boolean isBlank(String value) {
@@ -681,5 +825,17 @@ public class EchoMindAutoConfiguration {
             }
         }
         return null;
+    }
+
+    private String embeddingApiKey(EchoMindProperties.Memory memory) {
+        return firstNonBlank(
+            memory.getEmbeddingApiKey(),
+            System.getenv("ALIYUN_BAILIAN_API_KEY"),
+            System.getenv("DASHSCOPE_API_KEY")
+        );
+    }
+
+    private boolean embeddingAvailable(EchoMindProperties.Memory memory) {
+        return memory.isEmbeddingEnabled() && !isBlank(embeddingApiKey(memory));
     }
 }

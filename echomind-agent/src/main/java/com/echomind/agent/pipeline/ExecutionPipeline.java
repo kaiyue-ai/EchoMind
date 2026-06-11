@@ -1,5 +1,6 @@
 package com.echomind.agent.pipeline;
 
+import com.echomind.common.exception.ModelInvocationRejectedException;
 import com.echomind.common.observability.EchoMindTrace;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
@@ -38,7 +39,7 @@ public class ExecutionPipeline {
         for (PipelineStage stage : stages) { // 遍历每个阶段
             if (stage.order() > maxOrderInclusive) break;
             // 进行自定义埋点
-            Span span = EchoMindTrace.startSpan("echomind.pipeline.stage");
+            Span span = EchoMindTrace.startSpan("echomind.pipeline.stage." + stage.name());
             span.setAttribute("echomind.pipeline.stage", stage.name());
             span.setAttribute("echomind.pipeline.order", stage.order());
             span.setAttribute("echomind.user_id", safe(current.getUserId()));
@@ -54,15 +55,15 @@ public class ExecutionPipeline {
                         current.setTraceId(EchoMindTrace.traceId(span));
                     }
                 }
+            } catch (ModelInvocationRejectedException e) {
+                EchoMindTrace.recordException(span, e);
+                if (e.errorDetail() != null) {
+                    current.markGovernanceRejected(e.errorDetail());
+                }
+                throw e;
             } catch (Exception e) {
                 EchoMindTrace.recordException(span, e);
                 log.error("[Pipeline] Stage {} failed: {}", stage.name(), e.getMessage());
-                if (Boolean.TRUE.equals(current.getAttributes().get(PipelineContext.ATTR_PROVIDER_TOKEN_BUDGET_BLOCKED))) {
-                    if (e instanceof RuntimeException runtimeException) {
-                        throw runtimeException;
-                    }
-                    throw new RuntimeException(e);
-                }
                 current.markFailed("Pipeline stage '" + stage.name() + "' failed: " + e.getMessage());
                 return current;
             } finally {

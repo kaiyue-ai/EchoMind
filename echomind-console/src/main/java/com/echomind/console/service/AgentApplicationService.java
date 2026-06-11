@@ -2,17 +2,13 @@ package com.echomind.console.service;
 
 import com.echomind.agent.AgentConfig;
 import com.echomind.agent.AgentFactory;
-import com.echomind.agent.orchestration.AgentOrchestrator;
-import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.store.AgentPersistenceService;
-import com.echomind.console.dto.AgentExecuteRequest;
 import com.echomind.console.dto.AgentSaveRequest;
 import com.echomind.console.dto.AgentView;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.UUID;
 
 /**
  * Agent应用服务。
@@ -34,7 +30,6 @@ import java.util.UUID;
 public class AgentApplicationService {
 
     private final AgentFactory factory;
-    private final AgentOrchestrator orchestrator;
     private final AgentPersistenceService persistenceService;
     private final AgentKnowledgeApplicationService knowledgeService;
 
@@ -71,28 +66,6 @@ public class AgentApplicationService {
             throw new IllegalArgumentException("Agent配置不能为空");
         }
         return createOrUpdate(request.toConfig());
-    }
-
-    /**
-     * 执行指定Agent。
-     *
-     * <p>这个入口保留给Agent管理页或调试工具使用；聊天页的主入口仍然走
-     * {@link ChatApplicationService}，以便统一处理同步、异步和流式三种模式。</p>
-     */
-    public java.util.Map<String, Object> execute(String agentId, AgentExecuteRequest request) {
-        String sessionId = request != null && request.sessionId() != null
-            ? request.sessionId()
-            : UUID.randomUUID().toString();
-        String message = request == null ? null : request.message();
-        if (message == null || message.isBlank()) {
-            throw new IllegalArgumentException("message不能为空");
-        }
-
-        PipelineContext result = orchestrator.execute(agentId, sessionId, message);
-        return java.util.Map.of(
-            "sessionId", result.getSessionId(),
-            "response", result.getFinalResponse()
-        );
     }
 
     /**

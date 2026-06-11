@@ -1,27 +1,34 @@
 <template>
-  <router-view v-if="route.path === '/login'" />
-  <WorkbenchShell
-    v-else
-    :sessions="sessions"
-    :sessions-loading="sessionsLoading"
-    :deleting-session-id="deletingId"
-    :active-session-id="activeSessionId"
-    @refresh-sessions="loadSessions"
-    @new-session="newSession"
-    @open-session="openSession"
-    @delete-session="deleteSession"
-  />
+  <el-config-provider :locale="zhCn">
+    <Transition name="app-shell" mode="out-in">
+      <router-view v-if="route.path === '/login'" key="login" />
+      <WorkbenchShell
+        v-else
+        key="workbench"
+        :sessions="sessions"
+        :sessions-loading="sessionsLoading"
+        :deleting-session-id="deletingId"
+        :active-session-id="activeSessionId"
+        @refresh-sessions="loadSessions"
+        @new-session="newSession"
+        @open-session="openSession"
+        @delete-session="deleteSession"
+      />
+    </Transition>
+  </el-config-provider>
 </template>
 
 <script setup>
-import { onMounted, provide, watch } from 'vue'
+import { onBeforeUnmount, onMounted, provide, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import WorkbenchShell from './components/workbench/WorkbenchShell.vue'
 import { useChatStore } from './stores/chat'
 import { useSessionStore } from './stores/sessions'
 import { useAuthStore } from './stores/auth'
+import { runWhenIdle } from './utils/scheduler'
 
 const route = useRoute()
 const router = useRouter()
@@ -29,6 +36,7 @@ const chatStore = useChatStore()
 const sessionStore = useSessionStore()
 const authStore = useAuthStore()
 const { sessions, loading: sessionsLoading, deletingId, activeSessionId } = storeToRefs(sessionStore)
+let cancelInitialSessionLoad = null
 
 watch(() => [route.path, route.query.sessionId, chatStore.sessionId], ([path, sid, currentChatSessionId]) => {
   if (path === '/chat') {
@@ -82,8 +90,12 @@ provide('deleteSession', deleteSession)
 
 onMounted(() => {
   if (route.path !== '/login') {
-    loadSessions()
+    cancelInitialSessionLoad = runWhenIdle(() => loadSessions(), 900)
   }
+})
+
+onBeforeUnmount(() => {
+  cancelInitialSessionLoad?.()
 })
 
 watch(() => authStore.user?.userId, async (userId, previousUserId) => {

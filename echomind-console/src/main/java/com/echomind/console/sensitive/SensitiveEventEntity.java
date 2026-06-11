@@ -13,6 +13,7 @@ import java.time.Instant;
 @TableName("echomind_sensitive_events")
 @Getter
 @Setter
+// 敏感数据事件
 public class SensitiveEventEntity {
 
     @TableId(value = "event_id", type = IdType.ASSIGN_UUID)

@@ -10,6 +10,7 @@ import org.springframework.ai.deepseek.api.DeepSeekApi;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * DeepSeek Provider backed by Spring AI's chat-completions adapter.
@@ -54,7 +55,18 @@ public class DeepSeekProvider extends SpringAiProviderSupport {
             builder.toolCallbacks(toolCallbacks)
                 .internalToolExecutionEnabled(true);
         }
-        return builder.build();
+        DeepSeekChatOptions options = builder.build();
+        if (hasTools && requiredToolName != null && !requiredToolName.isBlank()) {
+            options.setToolChoice(functionToolChoice(requiredToolName));
+        }
+        return options;
+    }
+
+    private Map<String, Object> functionToolChoice(String toolName) {
+        return Map.of(
+            "type", "function",
+            "function", Map.of("name", toolName)
+        );
     }
 
     private String modelName(ModelSpec model, boolean hasTools) {

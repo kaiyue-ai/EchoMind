@@ -144,6 +144,7 @@
 <script setup>
 import { computed, defineComponent, h, onMounted, ref } from 'vue'
 import { ElMessage, ElInputNumber } from 'element-plus'
+import 'element-plus/es/components/input-number/style/css'
 import { Box, Check, CircleCheck, Connection, Refresh, Search, Warning } from '@element-plus/icons-vue'
 import api from '../api/admin'
 import StatusBadge from '../components/workbench/StatusBadge.vue'

@@ -5,9 +5,5 @@ public enum AlertType {
     ERROR_RATE,
     PROVIDER_TOKEN_BUDGET_EXCEEDED,
     PROVIDER_TOKEN_BUDGET_WARNING,
-    /** Historical user quota alert type; kept so old events can still deserialize. */
-    TOKEN_QUOTA_EXCEEDED,
-    /** Historical user quota alert type; kept so old events can still deserialize. */
-    TOKEN_QUOTA_WARNING,
     SENSITIVE_DATA
 }

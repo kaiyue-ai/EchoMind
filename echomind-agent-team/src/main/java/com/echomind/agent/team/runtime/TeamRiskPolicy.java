@@ -30,13 +30,13 @@ public class TeamRiskPolicy {
         }
         if (step.riskLevel() == TeamRiskLevel.HIGH) {
             return new TeamRiskDecision(TeamRiskLevel.HIGH,
-                "Planner 建议高风险：" + blankToDefault(step.riskReason(), "需要子评审校验"));
+                "Planner 建议高风险：" + blankToDefault(step.riskReason(), "需要 StepReviewer 重点校验"));
         }
         for (String tag : step.requiredCapabilities()) {
             String normalized = normalize(tag);
             if (normalized.equals("risk:high") || normalized.equals("review-required")) {
                 return new TeamRiskDecision(TeamRiskLevel.HIGH,
-                    "能力标签要求子评审：" + normalized);
+                    "能力标签要求 StepReviewer 重点校验：" + normalized);
             }
         }
         String content = normalize(step.title() + " " + step.description() + " " + step.acceptanceCriteria()
@@ -44,10 +44,10 @@ public class TeamRiskPolicy {
         for (String keyword : HIGH_RISK_KEYWORDS) {
             if (content.contains(normalize(keyword))) {
                 return new TeamRiskDecision(TeamRiskLevel.HIGH,
-                    "命中风险关键词「" + keyword + "」，需要 SubReviewer 校验");
+                    "命中风险关键词「" + keyword + "」，需要 StepReviewer 重点校验");
             }
         }
-        return new TeamRiskDecision(TeamRiskLevel.LOW, "未命中高风险规则，按低风险直接交付");
+        return new TeamRiskDecision(TeamRiskLevel.LOW, "未命中高风险规则，按低风险常规校验");
     }
 
     public TeamRiskLevel resolve(PlannedStep step) {

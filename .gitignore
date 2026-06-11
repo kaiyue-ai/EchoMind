@@ -23,23 +23,30 @@ skills/*.jar
 logs/
 *.log
 echomind-web/dist/
+echomind-web/dist-admin/
 
 # Environment
 .env
 .env.local
+
+# Temporary
+*.tmp
+*.bak
+tmp/
+
+# Node.js
+node_modules/
+echomind-web/node_modules/
 
 # Trae AI
 .trae/
 .codex/
 .claude/
 
-# Backups and temporary
-backups/
-tmp/
-*.tmp
-*.bak
+# Python
+__pycache__/
+*.pyc
+
+# Deployment logs
 deploy-log.txt
-remote-check.txt
 remote-result.txt
-skills-lock.json
-temp.txt

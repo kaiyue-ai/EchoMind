@@ -7,8 +7,10 @@ import com.echomind.console.auth.UserAccountStatus;
 import com.echomind.console.quota.TokenQuotaDtos.TokenQuotaListResponse;
 import com.echomind.console.quota.TokenQuotaDtos.TokenQuotaView;
 import com.echomind.console.quota.TokenQuotaDtos.UpdateTokenQuotaRequest;
+import com.echomind.console.reservation.TokenReservationService;
 import com.echomind.console.usage.AiCallUsageMapper;
 import com.echomind.console.usage.UsageDtos.TokenTotals;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,10 +20,9 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.util.ArrayList;
+import java.util.List;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -36,7 +37,7 @@ import java.util.Map;
  * </ul>
  * </p>
  * 
- * <p>配额结算使用数据库行锁（SELECT ... FOR UPDATE）确保并发安全。</p>
+ * <p>配额结算按模型返回的真实用量原子累加；请求前检查负责拒绝已满额用户。</p>
  */
 @Service
 public class TokenQuotaService {
@@ -58,6 +59,9 @@ public class TokenQuotaService {
     
     /** 配额使用账本Mapper */
     private final TokenQuotaUsageMapper quotaUsageMapper;
+
+    /** Redis Token 预留服务。 */
+    private final ObjectProvider<TokenReservationService> reservationService;
     
     /** 系统时钟 */
     private final Clock clock;
@@ -69,8 +73,16 @@ public class TokenQuotaService {
     public TokenQuotaService(TokenQuotaMapper quotaMapper,
                              UserAccountMapper userMapper,
                              AiCallUsageMapper usageMapper,
+                             TokenQuotaUsageMapper quotaUsageMapper,
+                             ObjectProvider<TokenReservationService> reservationService) {
+        this(quotaMapper, userMapper, usageMapper, quotaUsageMapper, reservationService, Clock.systemDefaultZone());
+    }
+
+    public TokenQuotaService(TokenQuotaMapper quotaMapper,
+                             UserAccountMapper userMapper,
+                             AiCallUsageMapper usageMapper,
                              TokenQuotaUsageMapper quotaUsageMapper) {
-        this(quotaMapper, userMapper, usageMapper, quotaUsageMapper, Clock.systemDefaultZone());
+        this(quotaMapper, userMapper, usageMapper, quotaUsageMapper, null, Clock.systemDefaultZone());
     }
 
     /**
@@ -81,10 +93,20 @@ public class TokenQuotaService {
                       AiCallUsageMapper usageMapper,
                       TokenQuotaUsageMapper quotaUsageMapper,
                       Clock clock) {
+        this(quotaMapper, userMapper, usageMapper, quotaUsageMapper, null, clock);
+    }
+
+    TokenQuotaService(TokenQuotaMapper quotaMapper,
+                      UserAccountMapper userMapper,
+                      AiCallUsageMapper usageMapper,
+                      TokenQuotaUsageMapper quotaUsageMapper,
+                      ObjectProvider<TokenReservationService> reservationService,
+                      Clock clock) {
         this.quotaMapper = quotaMapper;
         this.userMapper = userMapper;
         this.usageMapper = usageMapper;
         this.quotaUsageMapper = quotaUsageMapper;
+        this.reservationService = reservationService;
         this.clock = clock == null ? Clock.systemDefaultZone() : clock;
     }
 
@@ -105,6 +127,18 @@ public class TokenQuotaService {
         quotaMapper.selectOptionalById(user.userId())
             .filter(quota -> quota.getStatus() == TokenQuotaStatus.ACTIVE)
             .ifPresent(quota -> assertQuota(user.userId(), quota));
+    }
+
+    public List<String> reserveUsage(AuthUser user, String requestId, long estimatedTokens) {
+        if (user == null || !user.authenticated()) {
+            return List.of();
+        }
+        TokenReservationService service = reservationService == null ? null : reservationService.getIfAvailable();
+        if (service == null) {
+            return List.of();
+        }
+        return service.reserveUser(user.userId(), requestId,
+            estimatedTokens > 0 ? estimatedTokens : service.defaultReserveTokens());
     }
 
     /**
@@ -158,7 +192,6 @@ public class TokenQuotaService {
         // Step 3: 更新配额配置
         quota.setDailyLimitTokens(normalizeLimit(request == null ? null : request.dailyLimitTokens()));
         quota.setMonthlyLimitTokens(normalizeLimit(request == null ? null : request.monthlyLimitTokens()));
-        quota.setWarningThresholdPercent(normalizeThreshold(request == null ? null : request.warningThresholdPercent()));
         quota.setStatus(request == null || request.status() == null ? TokenQuotaStatus.ACTIVE : request.status());
         
         // Step 4: 保存并返回视图
@@ -170,7 +203,8 @@ public class TokenQuotaService {
      * 结算Token使用量（原子操作）
      * 
      * <p>使用新事务确保结算操作的原子性，避免与主事务冲突。
-     * 对每日和每月配额进行原子累加，使用行锁保证并发安全。</p>
+     * 对每日和每月配额进行原子累加。后置结算不拒绝已经完成的模型调用，
+     * 即使本次真实用量使 bucket 超过限额，也由下一次请求前检查拦截。</p>
      * 
      * @param user            认证用户
      * @param currentCallTokens 当前调用的Token消耗
@@ -209,48 +243,34 @@ public class TokenQuotaService {
     /**
      * 结算配额（原子累加）
      * 
-     * <p>对每日和每月桶进行原子累加，使用SELECT ... FOR UPDATE保证并发安全。</p>
+     * <p>对每日和每月桶进行原子累加，不做后置超限拒绝。</p>
      * 
      * @param userId            用户ID
      * @param quota             配额配置
      * @param currentCallTokens 当前调用的Token消耗
      */
     private void settleQuota(String userId, TokenQuotaEntity quota, long currentCallTokens) {
-        List<SettlementBucket> buckets = new ArrayList<>(2);
-        
-        // 添加每日桶（带锁检查）
-        addLockedBucket(buckets, userId, DAILY, todayBucket(), quota.getDailyLimitTokens(), currentCallTokens);
-        // 添加每月桶（带锁检查）
-        addLockedBucket(buckets, userId, MONTHLY, monthBucket(), quota.getMonthlyLimitTokens(), currentCallTokens);
-        
-        // 批量累加Token使用量
-        for (SettlementBucket bucket : buckets) {
-            quotaUsageMapper.incrementUsedTokens(userId, bucket.scope(), bucket.bucketStart(), currentCallTokens);
-        }
+        settleBucket(userId, DAILY, todayBucket(), quota.getDailyLimitTokens(), currentCallTokens);
+        settleBucket(userId, MONTHLY, monthBucket(), quota.getMonthlyLimitTokens(), currentCallTokens);
     }
 
     /**
-     * 添加带锁的结算桶
+     * 结算单个配额桶
      * 
      * <p>执行以下操作：
      * <ol>
      *   <li>确保桶记录存在（INSERT IGNORE）</li>
-     *   <li>获取带锁的当前使用量（SELECT ... FOR UPDATE）</li>
-     *   <li>检查是否会超限</li>
-     *   <li>如果通过检查，添加到待结算列表</li>
+     *   <li>直接累加真实Token使用量</li>
      * </ol>
      * </p>
      * 
-     * @param buckets           待结算桶列表
      * @param userId            用户ID
      * @param scope             范围（daily/monthly）
      * @param bucketStart       桶起始日期
      * @param limit             配额限制
      * @param currentCallTokens 当前调用的Token消耗
-     * @throws TokenQuotaExceededException 当累加后超过配额时抛出
      */
-    private void addLockedBucket(List<SettlementBucket> buckets, String userId, String scope, LocalDate bucketStart,
-                                 Long limit, long currentCallTokens) {
+    private void settleBucket(String userId, String scope, LocalDate bucketStart, Long limit, long currentCallTokens) {
         // 无限制则跳过
         if (limit == null || limit <= 0) {
             return;
@@ -258,18 +278,9 @@ public class TokenQuotaService {
         
         // Step 1: 确保桶记录存在
         quotaUsageMapper.insertIgnoreBucket(userId, scope, bucketStart);
-        
-        // Step 2: 获取带锁的当前使用量（并发安全）
-        long used = lockedUsedTokens(userId, scope, bucketStart);
-        
-        // Step 3: 检查是否会超限
-        long nextUsed = used + currentCallTokens;
-        if (nextUsed > limit) {
-            throw new TokenQuotaExceededException(userId, scope, nextUsed, limit);
-        }
-        
-        // Step 4: 添加到待结算列表
-        buckets.add(new SettlementBucket(scope, bucketStart));
+
+        // Step 2: 真实用量后置结算不拒绝已完成调用
+        quotaUsageMapper.incrementUsedTokens(userId, scope, bucketStart, currentCallTokens);
     }
 
     /**
@@ -284,7 +295,6 @@ public class TokenQuotaService {
         TokenTotals safeTotals = totals == null ? new TokenTotals(0, 0, 0, 0) : totals;
         Long dailyLimit = quota == null ? null : quota.getDailyLimitTokens();
         Long monthlyLimit = quota == null ? null : quota.getMonthlyLimitTokens();
-        int threshold = quota == null ? 80 : quota.getWarningThresholdPercent();
         TokenQuotaStatus status = quota == null ? TokenQuotaStatus.ACTIVE : quota.getStatus();
         
         // 获取今日和本月使用量
@@ -301,7 +311,6 @@ public class TokenQuotaService {
             user.getStatus() == UserAccountStatus.ACTIVE,
             dailyLimit,
             monthlyLimit,
-            threshold,
             status,
             todayUsed,
             monthUsed,
@@ -311,8 +320,6 @@ public class TokenQuotaService {
             monthlyPercent,
             exceeded(todayUsed, dailyLimit),
             exceeded(monthUsed, monthlyLimit),
-            warning(dailyPercent, threshold),
-            warning(monthlyPercent, threshold),
             quota == null ? null : quota.getUpdatedAt()
         );
     }
@@ -349,21 +356,6 @@ public class TokenQuotaService {
     }
 
     /**
-     * 获取Token使用量（加锁，用于并发安全的结算）
-     * 
-     * <p>使用SELECT ... FOR UPDATE获取行锁，确保并发环境下的数据一致性。</p>
-     * 
-     * @param userId      用户ID
-     * @param scope       范围（daily/monthly）
-     * @param bucketStart 桶起始日期
-     * @return Token使用量
-     */
-    private long lockedUsedTokens(String userId, String scope, LocalDate bucketStart) {
-        Long used = quotaUsageMapper.selectUsedTokensForUpdate(userId, scope, bucketStart);
-        return used == null ? 0 : used;
-    }
-
-    /**
      * 规范化配额限制（小于等于0转为null）
      * 
      * @param value 输入值
@@ -371,19 +363,6 @@ public class TokenQuotaService {
      */
     private Long normalizeLimit(Long value) {
         return value == null || value <= 0 ? null : value;
-    }
-
-    /**
-     * 规范化预警阈值（默认80，范围1-100）
-     * 
-     * @param value 输入值
-     * @return 规范化后的值
-     */
-    private int normalizeThreshold(Integer value) {
-        if (value == null) {
-            return 80;
-        }
-        return Math.max(1, Math.min(100, value));
     }
 
     /**
@@ -395,17 +374,6 @@ public class TokenQuotaService {
      */
     private boolean exceeded(long used, Long limit) {
         return limit != null && used >= limit;
-    }
-
-    /**
-     * 判断是否达到预警阈值
-     * 
-     * @param percent   使用百分比
-     * @param threshold 预警阈值
-     * @return true表示达到预警
-     */
-    private boolean warning(double percent, int threshold) {
-        return percent >= threshold && percent < 100;
     }
 
     /**
@@ -467,12 +435,4 @@ public class TokenQuotaService {
         return value == null ? 0 : Long.parseLong(String.valueOf(value));
     }
 
-    /**
-     * 结算桶记录（内部使用）
-     * 
-     * @param scope       范围（daily/monthly）
-     * @param bucketStart 桶起始日期
-     */
-    private record SettlementBucket(String scope, LocalDate bucketStart) {
-    }
 }

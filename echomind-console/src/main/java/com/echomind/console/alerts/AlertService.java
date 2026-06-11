@@ -67,7 +67,6 @@ public class AlertService {
     public AlertRuleListResponse listRules() {
         ensureDefaultRules();
         return new AlertRuleListResponse(ruleCache.allRules(ruleMapper::selectAllOrderByAlertTypeAsc).stream()
-            .filter(rule -> !isHistoricalUserQuotaType(rule.getAlertType()))
             .map(this::ruleView)
             .toList(), feishuWebhookClient.hasDefaultWebhookUrl());
     }
@@ -84,10 +83,6 @@ public class AlertService {
         if (request != null && request.rules() != null) {
             for (AlertRuleView view : request.rules()) {
                 if (view == null || view.alertType() == null) {
-                    continue;
-                }
-                // 跳过已废弃的用户配额告警类型
-                if (isHistoricalUserQuotaType(view.alertType())) {
                     continue;
                 }
                 // 根据ruleId或alertType获取或创建规则实体
@@ -471,7 +466,6 @@ public class AlertService {
      *
      * <p>遍历所有告警类型：
      * <ul>
-     *   <li>废弃类型：删除已存在的规则</li>
      *   <li>有效类型但不存在：创建默认规则</li>
      *   <li>有效类型且已存在：跳过</li>
      * </ul>
@@ -480,15 +474,6 @@ public class AlertService {
     private void ensureDefaultRules() {
         boolean changed = false;
         for (AlertType type : AlertType.values()) {
-            if (isHistoricalUserQuotaType(type)) {
-                // 删除已废弃的用户配额告警规则
-                ruleMapper.selectOneByAlertType(type)
-                    .ifPresent(rule -> {
-                        ruleMapper.deleteById(rule.getRuleId());
-                        ruleCache.invalidateRules();
-                    });
-                continue;
-            }
             if (ruleCache.ruleByType(type, () -> ruleMapper.selectOneByAlertType(type)).isPresent()) {
                 // 规则已存在，跳过
                 continue;
@@ -537,8 +522,6 @@ public class AlertService {
             case ERROR_RATE -> "错误率阈值";
             case PROVIDER_TOKEN_BUDGET_EXCEEDED -> "Provider Token 预算超限";
             case PROVIDER_TOKEN_BUDGET_WARNING -> "Provider Token 预算预警";
-            case TOKEN_QUOTA_EXCEEDED -> "用户 Token 配额超限（历史）";
-            case TOKEN_QUOTA_WARNING -> "用户 Token 配额预警（历史）";
             case SENSITIVE_DATA -> "敏感数据事件";
         };
     }
@@ -551,8 +534,8 @@ public class AlertService {
      */
     private AlertSeverity defaultSeverity(AlertType type) {
         return switch (type) {
-            case PROVIDER_TOKEN_BUDGET_EXCEEDED, TOKEN_QUOTA_EXCEEDED -> AlertSeverity.CRITICAL;
-            case SENSITIVE_DATA, CALL_ERROR, ERROR_RATE, PROVIDER_TOKEN_BUDGET_WARNING, TOKEN_QUOTA_WARNING ->
+            case PROVIDER_TOKEN_BUDGET_EXCEEDED -> AlertSeverity.CRITICAL;
+            case SENSITIVE_DATA, CALL_ERROR, ERROR_RATE, PROVIDER_TOKEN_BUDGET_WARNING ->
                 AlertSeverity.WARNING;
         };
     }
@@ -565,8 +548,8 @@ public class AlertService {
      */
     private int defaultQuietMinutes(AlertType type) {
         return switch (type) {
-            case PROVIDER_TOKEN_BUDGET_WARNING, TOKEN_QUOTA_WARNING -> 120;
-            case PROVIDER_TOKEN_BUDGET_EXCEEDED, TOKEN_QUOTA_EXCEEDED -> 60;
+            case PROVIDER_TOKEN_BUDGET_WARNING -> 120;
+            case PROVIDER_TOKEN_BUDGET_EXCEEDED -> 60;
             case CALL_ERROR, ERROR_RATE -> 15;
             case SENSITIVE_DATA -> 30;
         };
@@ -698,18 +681,6 @@ public class AlertService {
     private boolean isProviderBudgetType(AlertType type) {
         return type == AlertType.PROVIDER_TOKEN_BUDGET_WARNING
             || type == AlertType.PROVIDER_TOKEN_BUDGET_EXCEEDED;
-    }
-
-    /**
-     * 判断是否为已废弃的用户配额类型告警
-     *
-     * <p>用户配额告警已迁移到新的实现方式，这两个类型已废弃。</p>
-     *
-     * @param type 告警类型
-     * @return true表示是已废弃类型
-     */
-    private boolean isHistoricalUserQuotaType(AlertType type) {
-        return type == AlertType.TOKEN_QUOTA_WARNING || type == AlertType.TOKEN_QUOTA_EXCEEDED;
     }
 
     /**

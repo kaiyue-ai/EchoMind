@@ -33,18 +33,6 @@ public interface TokenQuotaUsageMapper {
                           @Param("scope") String scope,
                           @Param("bucketStart") LocalDate bucketStart);
 
-    @Select("""
-        SELECT used_tokens
-        FROM echomind_token_quota_usage
-        WHERE user_id = #{userId}
-          AND scope = #{scope}
-          AND bucket_start = #{bucketStart}
-        FOR UPDATE
-        """)
-    Long selectUsedTokensForUpdate(@Param("userId") String userId,
-                                   @Param("scope") String scope,
-                                   @Param("bucketStart") LocalDate bucketStart);
-
     @Update("""
         UPDATE echomind_token_quota_usage
         SET used_tokens = used_tokens + #{tokens},

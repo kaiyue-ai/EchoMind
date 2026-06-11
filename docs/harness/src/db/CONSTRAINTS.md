@@ -13,14 +13,16 @@
 | 用户账号 | MySQL `echomind_users`，含用户名、密码哈希、状态和 `avatar_uri` | 头像二进制在 OSS / 本地对象存储 |
 | 管理端账号 | MySQL `echomind_admin_users`，独立于客户端账号 | 独立 admin JWT，不进入客户端用户统计 |
 | AI 调用用量 | MySQL `echomind_ai_call_usage`，按客户端 `user_id` 记录 TraceID、模型、token、延迟和状态 | 管理端仪表盘和 Trace 跳转 |
-| 用户 Token 配额 | MySQL `echomind_token_quotas` 保存用户日/月限额配置；`echomind_token_quota_usage` 按 `user_id + scope + bucket_start` 保存已结算 token | 请求前快速检查已满额用户；模型返回真实 provider usage 后行锁结算 |
+| 用户 Token 配额 | MySQL `echomind_token_quotas` 保存用户日/月限额配置；`echomind_token_quota_usage` 按 `user_id + scope + bucket_start` 保存真实已用 token | Redis `echomind:quota:*` 保存当前 bucket 的 used 热镜像和 in-flight reserved 冻结额度 |
+| Provider Token 预算 | MySQL `echomind_provider_token_budgets` 保存 Provider 日/周/月预算配置；`echomind_provider_token_budget_usage` 按 `provider_id + scope + bucket_start` 保存真实已用 token | Redis `echomind:provider-budget:*` 保存当前 bucket 的 used 热镜像和 in-flight reserved 冻结额度 |
 | 敏感数据治理 | MySQL `echomind_sensitive_rules` 保存规则，`echomind_sensitive_events` 保存脱敏后事件样本；请求侧 `BLOCK` 样本保存替代词结果 | Redis `echomind:sensitive:rules:*` 只做规则热缓存；`ChatApplicationService` 请求/响应治理钩子 |
 | 告警治理 | MySQL `echomind_alert_rules` 保存阈值、静默期和升级策略，`echomind_alert_events` 保存推送结果、升级标记和飞书响应摘要 | 飞书 Webhook 客户端，不作为事实来源；地址来自后端运行环境变量 `Webhook` |
-| 用户长期记忆 | Milvus `echomind_user_memory_v2` 按 `userId` 保存细粒度事实；Redis `echomind:user-profile:snapshot:*` 保存画像快照 | 主应用 Pipeline 读取画像快照并按 `userId` KNN 召回相关事实 |
-| Agent 知识库文档 | MySQL 文档表 + 对象存储文件 | Milvus 保存切片正文、切片元数据和知识库向量索引 |
+| RabbitMQ 死信归档 | MySQL `echomind_rabbitmq_dead_letters` 保存 DLQ payload、错误 headers、业务 key、traceId、补偿和重放状态 | RabbitMQ DLQ 只保留待归档消息；管理端接口按记录 id 受控重放 |
+| 用户长期记忆 | Milvus `echomind_user_memory_spring_ai_v1` 按 `userId` 保存细粒度事实；Redis `echomind:user-profile:snapshot:*` 保存画像快照 | Spring AI VectorStore 负责 embedding 和中心向量召回；旧 collection 保留但不再读取 |
+| Agent 知识库文档 | MySQL 文档表 + 对象存储文件 | Milvus `echomind_agent_knowledge_spring_ai_v1` 保存切片正文、切片元数据和知识库向量索引 |
 | 上传文件 | 阿里云 OSS 或本地对象目录 | 数据库只保存引用信息 |
 | 外部 MCP 运行状态 | 配置文件或后续 MySQL 配置表 | `ExternalMcpRuntimeService` 持有的 Spring AI MCP client 和工具 provider |
-| Team 定义和执行记录 | MySQL `echomind_agent_teams` / `members` / `runs` / `steps` / `events` | `TaskExecutor` 运行中任务 |
+| Team 定义和执行记录 | MySQL `echomind_agent_teams` / `members` / `runs` / `steps` / `events` | `TeamExecutionEngine` 调度的本地 `TaskExecutor` 运行中任务 |
 
 ## 禁止事项
 
@@ -43,8 +45,10 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 - 会话摘要。
 - 客户端用户账号和管理端用户账号，但两者必须分表、分 JWT、分接口。
 - AI 调用用量审计，包含 `trace_id`、客户端 `user_id`、`operation`、模型、prompt/completion/total token、耗时、状态和错误信息。
-- 用户 Token 配额配置和日/月结算账本；账本行按 `user_id + scope + bucket_start` 唯一，结算时必须锁行，不能只从审计表聚合判断并发 quota。
+- 用户 Token 配额配置和日/月真实已用账本；账本行按 `user_id + scope + bucket_start` 唯一，不能只从审计表聚合判断 quota。
+- Provider Token 预算配置和日/周/月真实已用账本；迁移会从 `echomind_ai_call_usage` 回填已有 provider bucket 用量。
 - 敏感数据规则、脱敏事件、告警规则和告警事件。敏感事件只能保存脱敏后的样本或请求侧 `BLOCK` 替代词结果，不允许落原始手机号、身份证、邮箱、银行卡等命中文本。
+- RabbitMQ 死信归档记录，包含消息去重 hash、DLQ 名称、消息类型、业务 key、traceId、原始 payload、错误 headers、状态、重放次数和最后一次重放错误。
 - Agent 知识库文档元数据和原文件引用。
 - 后续 Agent Team 的 Team、Member、Run、Step。
 
@@ -64,8 +68,10 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 Redis 和 Milvus 负责速度、短期上下文和向量检索；用户长期事实和知识库向量由 Milvus 承担事实来源：
 
 - 单会话短期上下文热缓存，按总字数预算和最大条数双重裁剪，是 LLM prompt 的聊天历史来源。
-- Agent 知识库切片正文、切片元数据和向量索引，KNN 检索和窗口扩展只走 Milvus。
+- 用户 quota 和 Provider budget 的当前 bucket used 热镜像与 in-flight reserved 冻结额度；预留、释放和结算必须用 Redis Lua 原子执行，Redis 不可用时新 LLM 调用失败关闭，避免预算穿透。
+- Agent 知识库切片正文、切片元数据和向量索引，中心 KNN 检索走 Spring AI VectorStore，窗口扩展只用小型 Milvus native adapter 查询同文档前后切片。
 - 用户长期事实向量，按 `userId` 全局隔离，事实带 `firstObservedAt`、`lastObservedAt` 和 `updatedAt`；召回和合并旧事实必须同时过滤事实置信度和 Milvus COSINE 向量相似度，不能只取无阈值 TopK。
+- 旧手写 Milvus collection 保留但不再读取；新数据写入 Spring AI collection，需要重新索引旧知识库文件和重新沉淀用户长期事实。
 - 用户画像快照，存 Redis Hash，是长期事实的固定长度压缩摘要。
 - 可以重建的临时检索结构。
 
@@ -98,14 +104,24 @@ AI 模型调用。`echomind_ai_call_usage.trace_id` 必须能关联到导出到 
 `usage_source` 固定为 `PROVIDER`；模型未返回原生 usage 时不允许写入本地预估 Token。
 管理端仪表盘的请求量、Token、平均响应、模型分布、趋势和最近调用都只能从该表的真实记录聚合；
 项目没有落库的成本、余额、API 密钥消费等数据不能在管理端展示为真实指标。
-用户日/月 quota 不做请求前 token 预留；请求前只读取 `echomind_token_quota_usage` 快速拒绝已经满额的用户。
+用户日/月 quota 和 Provider 日/周/月 budget 都会在模型调用前用 Redis 原子预留：
+普通聊天在 `ChatApplicationService.submitAsync` 入队前按“输入估算 + 输出上限”同时做用户 quota
+和 Provider budget initial reservation；Team 内部 LLM 调用通过 `TeamUsageRecorder` 在每次调用前按本轮
+prompt 显式预留两类额度。RabbitMQ 聊天请求死信重放会在重新入队前重建两类 reservation。
+Agent Pipeline 在 `ResultAggregationStage` 生成完整 `ProviderRequest` 后执行 final preflight，按 system
+prompt、当前问题、工具 schema、附件元信息和输出上限重新估算，并只补 initial reservation 不足的 delta。
+Redis 不可用或配额/预算不足时新 LLM 调用失败关闭，拒绝结果必须携带结构化 `ErrorDetail`，不能改写成普通 LLM 失败。
 模型返回真实 provider usage 后，`AiCallUsageService` 先保留 `echomind_ai_call_usage` 审计记录，再用
-`echomind_token_quota_usage` 在事务内 `INSERT IGNORE` 初始化 bucket、`SELECT ... FOR UPDATE` 锁行并递增
-`used_tokens`。若 `used + currentCallTokens > limit`，必须抛 `TokenQuotaExceededException` 返回配额错误；
-这类结算失败不能发普通 `CALL_ERROR` 告警，也不能删除本次真实审计记录。
+`echomind_token_quota_usage` 和 `echomind_provider_token_budget_usage` 在事务内结算真实已用；
+事务提交后才把 Redis reserved 转入 used，事务回滚或模型未返回原生 usage 时释放 reserved。
+同一次调用可能同时携带 initial 和 final delta 多段 reservation，结算必须按
+`ownerType + ownerId + scope + bucketStart` 合并 reserved，只把真实 provider usage 对每个 bucket 累加一次。
+后置结算不拒绝已经完成的模型调用；若本次真实 usage 使 bucket 超过限额，仍保留并结算，
+下一次请求前预留会返回用户配额或 Provider 预算错误。
 项目三 AI Infra 是当前 Agent 项目的管理端，不新增独立网关或应用 API Key；配额仍按客户端用户维度执行。
 脱敏/告警属于管理端治理事实，必须落 MySQL，不能只放内存 Map；请求侧命中 `BLOCK` 会阻止进入 Agent/RabbitMQ 管线并返回替代词拼接结果，响应侧命中 `BLOCK` 仍走阻断异常。飞书自定义机器人 Webhook 只负责通知，不是告警事实来源。Webhook 地址只来自后端运行环境变量 `Webhook`，不在管理端前端配置规则级 Webhook。
 敏感规则可以进入 Redis 热缓存来减少聊天治理链路反复查库，但 MySQL 仍是事实来源；规则写入成功后必须删除对应 Redis 缓存，让下一次读取回源刷新。
+RabbitMQ 死信表是 DLQ 归档和人工重放的审计事实来源。聊天请求死信归档后必须释放入队前冻结的用户 reservation，并向 SSE buffer 写入 `failure` 终态；状态从 `ARCHIVED` 更新为 `COMPENSATED`。聊天记忆和用户记忆死信不自动重放，避免重复写普通聊天历史或重复沉淀长期事实。管理端重放成功后状态为 `REPLAYED`，失败后状态为 `REPLAY_FAILED` 并保存错误摘要。
 
 每次聊天进入提示词的内容应该是：
 
@@ -113,7 +129,7 @@ AI 模型调用。`echomind_ai_call_usage.trace_id` 必须能关联到导出到 
 - 当前用户消息。
 - Redis 单会话短期历史，按字符预算和最大条数裁剪。
 - 按 `userId` 读取的用户画像快照。
-- 按 `userId` 从 Milvus 召回的相关用户长期事实。
+- 按 `userId` 从 Spring AI Milvus VectorStore 召回的相关用户长期事实。
 - Agent 知识库召回片段。
 
 不要从 MySQL 全量或回源拼接历史。`prompt-max-chars`、`prompt-max-history-message-chars` 等配置必须生效。
@@ -126,8 +142,8 @@ Agent 知识库支持 txt、pdf 等文件上传后切片和向量化。
 
 - 原文件进入 OSS 或本地对象存储。
 - 文档元数据进 MySQL，包括可空 `object_uri` 和 `content_type`；旧文档允许没有原文件对象。
-- 切片文本、切片元数据和向量进入 Milvus 知识库索引，不再进入 MySQL 分片表。
-- 检索只走 Milvus：先向量命中中心片段，再扩展同文档前后窗口，不使用 MySQL 关键词或线性向量兜底。
+- 切片文本、切片元数据和向量进入 Spring AI Milvus 知识库索引，不再进入 MySQL 分片表。
+- 检索只走 Milvus：先由 Spring AI VectorStore 向量命中中心片段，再用 native query 扩展同文档前后窗口，不使用 MySQL 关键词或线性向量兜底。
 - 删除文档时，必须删除或标记删除对应切片、向量，并尽力删除原文件对象。
 - 修改文档时，不要在旧向量上追加新版本；应明确版本、重建或清理旧切片。
 
@@ -137,13 +153,14 @@ Team 协作不能长期只放内存。当前 Team v2 表结构方向：
 
 - `echomind_agent_teams`：团队定义，全局资源。
 - `echomind_agent_team_members`：成员 Agent、角色、能力标签、排序；可配置 `PLANNER`、多个 `EXECUTOR`、必选 `REVIEWER`，可选 `SUB_REVIEWER` / `MERGER`。
-- `echomind_agent_team_runs`：一次任务执行，也是 Team 黑板首页；按 `user_id` 隔离；保存 `task_level`、`merge_output`、`global_review_json`、`conflict_report_json`、`arbitration_json`、最终报告、澄清字段、规划重试、局部重规划、整体重规划和仲裁次数。
-- `echomind_agent_team_steps`：Planner 拆出的 DAG 子任务、`client_step_id`、依赖 Step、风险等级、质量状态、分配 Agent、输入、原始输出、SubReviewer 审查、Reflexion 重试上下文。
+- `echomind_agent_team_runs`：一次任务执行，也是 Team 黑板首页；按 `user_id` 隔离；保存 `task_level`、每次 Run 的 `plan_review_enabled` / `sub_review_enabled` / `global_review_enabled` / `simple_fast_path_enabled` 审查策略、`merge_output`、`global_review_json`、`conflict_report_json`、`arbitration_json`、最终报告、计划阶段澄清字段、规划重试、历史重规划计数和仲裁次数。`sub_review_enabled` 字段名保留作兼容，新语义是“每步 Review”。
+- `echomind_agent_team_steps`：Planner 拆出的 DAG 子任务、`client_step_id`、依赖 Step、风险等级、质量状态、分配 Agent、输入、原始输出、StepReviewer 审查、Reflexion 重做上下文。
 - `echomind_agent_team_events`：协作事件流，前端时间线和 Mermaid 从这里恢复。
 
 Team 黑板是角色记忆互通的事实来源。Planner、Executor、Reviewer 不依赖同一个聊天 session 互相“碰上下文”，而是由后端从 Run / Step / Event 组装最小必要上下文。
 Team 内部调用不能落入 `echomind_chat_sessions` / `echomind_chat_messages`；普通会话历史只保存用户在 Chat 页面发起的真实对话。
 删除 Team 是硬删除：必须同时删除 members、runs、steps、events，不保留逻辑删除标记。
+当前 GlobalReviewer 不再修改 DAG：它只允许通过、要求 MergeAgent 重新合并或失败。旧的局部/整体重规划计数字段保留用于历史 Run 展示，新流程不再把终审作为重规划入口。
 
 Team v2 迁移 `20260521_team_v2_dag_reflexion.sql` 会清空旧 Team 数据，避免旧消息总线/旧 Step 格式混入新 DAG 状态机。后续数据迁移如果要保留历史，需要先写显式升级脚本，不要让运行时代码兼容过多旧结构。
 

@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { normalizeChatMessages } from '../utils/chatMessages'
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
@@ -15,7 +16,7 @@ export const useChatStore = defineStore('chat', {
   actions: {
     setHistory(sessionId, messages) {
       this.sessionId = sessionId
-      this.messages = Array.isArray(messages) ? messages : []
+      this.messages = normalizeChatMessages(messages)
       this.attachments = []
       this.input = ''
       this.loading = false

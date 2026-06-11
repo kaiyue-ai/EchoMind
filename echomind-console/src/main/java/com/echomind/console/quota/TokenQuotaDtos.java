@@ -8,24 +8,22 @@ public final class TokenQuotaDtos {
     }
 
     public record TokenQuotaView(
-        String userId,
+        String userId, // 用户名
         String username,
-        boolean active,
-        Long dailyLimitTokens,
-        Long monthlyLimitTokens,
-        int warningThresholdPercent,
-        TokenQuotaStatus status,
-        long todayUsedTokens,
-        long monthUsedTokens,
-        long totalUsedTokens,
-        long callCount,
-        double dailyUsagePercent,
-        double monthlyUsagePercent,
-        boolean dailyExceeded,
-        boolean monthlyExceeded,
-        boolean dailyWarning,
-        boolean monthlyWarning,
-        Instant updatedAt
+        boolean active, // 是否激活
+        Long dailyLimitTokens, // 每日tokens限制
+        Long monthlyLimitTokens, // 每月tokens限制
+        TokenQuotaStatus status, // 状态
+        long todayUsedTokens, // 今日已用tokens
+        long monthUsedTokens, // 本月已用tokens
+        long totalUsedTokens, // 总已用tokens
+        long callCount, // 调用次数
+        double dailyUsagePercent, // 今日使用百分比
+        double monthlyUsagePercent, // 本月使用百分比
+        boolean dailyExceeded, // 是否超过每日限制
+        boolean monthlyExceeded, // 是否超过每月限制
+
+        Instant updatedAt // 更新时间
     ) {
     }
 
@@ -35,7 +33,6 @@ public final class TokenQuotaDtos {
     public record UpdateTokenQuotaRequest(
         Long dailyLimitTokens,
         Long monthlyLimitTokens,
-        Integer warningThresholdPercent,
         TokenQuotaStatus status
     ) {
     }

@@ -2,6 +2,7 @@ package com.echomind.console.service;
 
 import com.echomind.agent.team.runtime.TeamBlackboardService;
 import com.echomind.agent.team.runtime.TeamMemberSpec;
+import com.echomind.agent.team.runtime.TeamReviewOptions;
 import com.echomind.agent.team.state.TeamRole;
 import com.echomind.console.auth.AuthContext;
 import com.echomind.console.dto.TeamCreateRequest;
@@ -46,7 +47,10 @@ public class TeamApplicationService {
 
     public TeamRunView createRun(String teamId, TeamRunCreateRequest request) {
         String task = request == null ? null : request.task();
-        return TeamRunView.from(blackboardService.createRun(teamId, AuthContext.userId(), task));
+        TeamReviewOptions reviewOptions = request == null || request.reviewOptions() == null
+            ? TeamReviewOptions.QUALITY_FIRST
+            : request.reviewOptions().toRuntimeOptions();
+        return TeamRunView.from(blackboardService.createRun(teamId, AuthContext.userId(), task, reviewOptions));
     }
 
     public List<TeamRunView> listRuns(String teamId) {

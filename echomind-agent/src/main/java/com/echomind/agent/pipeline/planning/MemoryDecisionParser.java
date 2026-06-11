@@ -79,7 +79,7 @@ public class MemoryDecisionParser {
 
             额外内部要求：正常回答用户后，在最后追加一段隐藏记忆决策，格式必须严格如下：
             <ECHOMIND_MEMORY_DECISION>{"rememberFacts":false,"refreshProfile":false,"reason":""}</ECHOMIND_MEMORY_DECISION>
-            rememberFacts=true 表示本轮对话包含值得长期保存的用户事实、偏好、稳定背景或明确否定旧事实。
+            rememberFacts=true 表示本轮对话包含值得保存的会话事件、纠正、偏好或技术事实。
             refreshProfile=true 表示本轮对话会影响用户长期画像摘要。
             一次性任务、临时链接、普通闲聊、工具查询过程通常为 false。
             JSON 字段 rememberFacts 和 refreshProfile 必须是 boolean，不要写成字符串。

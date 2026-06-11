@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Agent持久化服务。
@@ -49,6 +50,19 @@ public class AgentPersistenceService {
         return agentMapper.selectAll().stream()
             .map(this::toConfig)
             .toList();
+    }
+
+    /**
+     * 从MySQL事实来源读取单个Agent配置。
+     *
+     * @param agentId Agent标识
+     * @return Agent配置；不存在或参数为空时返回空
+     */
+    public Optional<AgentConfig> find(String agentId) {
+        if (agentId == null || agentId.isBlank()) {
+            return Optional.empty();
+        }
+        return agentMapper.selectOptionalById(agentId).map(this::toConfig);
     }
 
     /**

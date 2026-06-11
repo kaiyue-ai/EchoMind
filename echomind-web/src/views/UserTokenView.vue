@@ -233,6 +233,7 @@ const pagedRows = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return filteredRows.value.slice(start, start + pageSize.value)
 })
+const quotaByUserId = computed(() => new Map(quotas.value.map(quota => [quota.userId, quota])))
 const pageStart = computed(() => filteredRows.value.length ? ((currentPage.value - 1) * pageSize.value) + 1 : 0)
 const pageEnd = computed(() => Math.min(currentPage.value * pageSize.value, filteredRows.value.length))
 
@@ -274,7 +275,7 @@ function openUserUsage(userId) {
 }
 
 function quotaFor(userId) {
-  return quotas.value.find(quota => quota.userId === userId) || null
+  return quotaByUserId.value.get(userId) || null
 }
 
 function quotaTone(userId) {

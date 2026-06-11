@@ -89,10 +89,6 @@ echomind:
       concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_CONSUMERS:20}
       max-concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_MAX_CONSUMERS:20}
       prefetch: ${ECHOMIND_RABBITMQ_CHAT_REQUEST_PREFETCH:1}
-    chat-stream-event:
-      concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_STREAM_EVENT_CONSUMERS:${ECHOMIND_RABBITMQ_CHAT_RESPONSE_CONSUMERS:4}}
-      max-concurrent-consumers: ${ECHOMIND_RABBITMQ_CHAT_STREAM_EVENT_MAX_CONSUMERS:${ECHOMIND_RABBITMQ_CHAT_RESPONSE_MAX_CONSUMERS:4}}
-      prefetch: ${ECHOMIND_RABBITMQ_CHAT_STREAM_EVENT_PREFETCH:${ECHOMIND_RABBITMQ_CHAT_RESPONSE_PREFETCH:50}}
   observability:
     exporter:
       traces-exporter: ${OTEL_TRACES_EXPORTER:none}
@@ -109,20 +105,24 @@ echomind:
   alerts:
     feishu:
       webhook-url: ${Webhook:}
+  governance:
+    token-reservation:
+      # 请求入队和模型调用前的并发保护预留值；真实用量仍以 provider usage 后置结算。
+      default-reserve-tokens: ${ECHOMIND_GOVERNANCE_TOKEN_RESERVATION_DEFAULT_TOKENS:4096}
+      ttl-seconds: ${ECHOMIND_GOVERNANCE_TOKEN_RESERVATION_TTL_SECONDS:900}
   team:
     runtime:
       # Team 协作会触发多次模型调用；默认保持保守，避免 Reviewer/Planner 循环把一次任务拖得过长。
       max-plan-retries: ${ECHOMIND_TEAM_MAX_PLAN_RETRIES:2}
-      max-result-replans: ${ECHOMIND_TEAM_MAX_RESULT_REPLANS:2}
       max-step-retries: ${ECHOMIND_TEAM_MAX_STEP_RETRIES:3}
       max-reviewer-format-repairs: ${ECHOMIND_TEAM_MAX_REVIEWER_FORMAT_REPAIRS:3}
       max-arbitrations: ${ECHOMIND_TEAM_MAX_ARBITRATIONS:2}
-      max-concurrent-steps: ${ECHOMIND_TEAM_MAX_CONCURRENT_STEPS:3}
+      max-merge-attempts: ${ECHOMIND_TEAM_MAX_MERGE_ATTEMPTS:2}
+      max-concurrent-steps: ${ECHOMIND_TEAM_MAX_CONCURRENT_STEPS:7}
       step-timeout-seconds: ${ECHOMIND_TEAM_STEP_TIMEOUT_SECONDS:300}
       run-timeout-seconds: ${ECHOMIND_TEAM_RUN_TIMEOUT_SECONDS:1800}
-      step-poll-interval-ms: ${ECHOMIND_TEAM_STEP_POLL_INTERVAL_MS:2000}
   models:
-    default-provider: deepseek
+    default-provider: aliyun-bailian
     providers:
       deepseek:
         api-key: ${DEEPSEEK_API_KEY:${ANTHROPIC_API_KEY:}}
@@ -138,10 +138,10 @@ echomind:
         models:
           - name: qwen3.7-max
             capabilities: [text, function]
-            default: true
+            default: false
           - name: qwen3.6-plus
             capabilities: [text, function, vision]
-            default: false
+            default: true
           - name: qwen3.6-flash
             capabilities: [text, function]
             default: false
@@ -176,13 +176,15 @@ echomind:
     # MySQL 保存完整会话供前端展示；Redis 只保存最近 short-term-window 条且不超过 short-term-max-chars 的 LLM 上下文。
     redis-ttl-seconds: 604800
     embedding-enabled: true
-    embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com}
+    embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     embedding-api-key: ${ALIYUN_BAILIAN_API_KEY:}
-    embedding-model: tongyi-embedding-vision-plus
+    embedding-model: ${ECHOMIND_EMBEDDING_MODEL:text-embedding-v4}
+    embedding-dimension: ${ECHOMIND_EMBEDDING_DIMENSION:1024}
+    embedding-query-max-chars: ${ECHOMIND_EMBEDDING_QUERY_MAX_CHARS:8000}
     milvus-host: ${ECHOMIND_MILVUS_HOST:localhost}
     milvus-port: ${ECHOMIND_MILVUS_PORT:19530}
-    milvus-user-memory-collection: ${ECHOMIND_MILVUS_USER_MEMORY_COLLECTION:echomind_user_memory_v2}
-    milvus-knowledge-collection: ${ECHOMIND_MILVUS_KNOWLEDGE_COLLECTION:echomind_agent_knowledge}
+    milvus-user-memory-collection: ${ECHOMIND_MILVUS_USER_MEMORY_COLLECTION:echomind_user_memory_spring_ai_v1}
+    milvus-knowledge-collection: ${ECHOMIND_MILVUS_KNOWLEDGE_COLLECTION:echomind_agent_knowledge_spring_ai_v1}
     persist-queue-name: ${ECHOMIND_MEMORY_PERSIST_QUEUE_NAME:echomind.chat-memory.persist.requests}
     persist-exchange-name: ${ECHOMIND_MEMORY_PERSIST_EXCHANGE_NAME:echomind.chat-memory.persist.exchange}
     # 普通聊天记忆按 sessionId hash 到多个队列；每个分片单消费者，避免同一会话乱序。
@@ -193,7 +195,7 @@ echomind:
     knowledge-top-k: ${ECHOMIND_MEMORY_KNOWLEDGE_TOP_K:4}
     knowledge-chunk-size: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_SIZE:500}
     knowledge-chunk-overlap-ratio: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_OVERLAP_RATIO:0.15}
-    knowledge-min-vector-similarity: ${ECHOMIND_MEMORY_KNOWLEDGE_MIN_VECTOR_SIMILARITY:0.25}
+    knowledge-min-vector-similarity: ${ECHOMIND_MEMORY_KNOWLEDGE_MIN_VECTOR_SIMILARITY:0.40}
     knowledge-ocr-enabled: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_ENABLED:true}
     knowledge-ocr-language: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_LANGUAGE:chi_sim+eng}
     knowledge-ocr-dpi: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_DPI:200}
@@ -204,6 +206,7 @@ echomind:
     prompt-max-chars: ${ECHOMIND_MEMORY_PROMPT_MAX_CHARS:24000}
     prompt-max-system-message-chars: ${ECHOMIND_MEMORY_PROMPT_MAX_SYSTEM_MESSAGE_CHARS:12000}
     prompt-max-history-message-chars: ${ECHOMIND_MEMORY_PROMPT_MAX_HISTORY_MESSAGE_CHARS:4000}
+    retrieval-query-rewrite-model-id: ${ECHOMIND_MEMORY_RETRIEVAL_QUERY_REWRITE_MODEL_ID:aliyun-bailian:qwen3.6-plus}
   user-memory:
     enabled: ${USER_MEMORY_ENABLED:true}
     queue-name: ${USER_MEMORY_QUEUE_NAME:echomind.user-memory.requests}
@@ -216,7 +219,7 @@ echomind:
     max-extracted-entries: ${USER_MEMORY_MAX_EXTRACTED_ENTRIES:10}
     related-fact-top-k: ${USER_MEMORY_RELATED_FACT_TOP_K:12}
     profile-max-chars: ${USER_MEMORY_PROFILE_MAX_CHARS:2000}
-    extractor-model-id: ${USER_MEMORY_EXTRACTOR_MODEL_ID:deepseek:deepseek-v4-flash}
+    extractor-model-id: ${USER_MEMORY_EXTRACTOR_MODEL_ID:aliyun-bailian:qwen3.6-plus}
   skill:
     auto-load-path: ./skills/
     hot-reload: true
@@ -291,13 +294,28 @@ echomind:
       default-skill-merge-ids: [markdown-code, date-query, github-intel, 12306, travel-planning]
       model-migrations:
         - from-prefix: anthropic:claude-
-          to-model-id: deepseek:deepseek-v4-flash
+          to-model-id: aliyun-bailian:qwen3.6-plus
         - from-prefix: openai:gpt-
-          to-model-id: deepseek:deepseek-v4-flash
+          to-model-id: aliyun-bailian:qwen3.6-plus
         - from: deepseek:deepseek-chat
-          to-model-id: deepseek:deepseek-v4-flash
+          to-model-id: aliyun-bailian:qwen3.6-plus
+        - from: deepseek:deepseek-v4-flash
+          to-model-id: aliyun-bailian:qwen3.6-plus
+      knowledge-seeds:
+        - agent-id: jvm-master
+          file-name: jvm-master-private-knowledge.txt
+          resource: classpath:/knowledge-seeds/jvm-master-private-knowledge.txt
+          content-type: text/plain
+        - agent-id: os-master
+          file-name: os-master-private-knowledge.txt
+          resource: classpath:/knowledge-seeds/os-master-private-knowledge.txt
+          content-type: text/plain
+        - agent-id: zhangxuefeng
+          file-name: zhangxuefeng-volunteer-knowledge.txt
+          resource: classpath:/knowledge-seeds/zhangxuefeng-volunteer-knowledge.txt
+          content-type: text/plain
     retired-skills:
-      skill-ids: [qq-mail, web-search]
+      skill-ids: [qq-mail, web-search, zhangxuefeng-perspective, geng-academic-fraud-detector]
       prompt-replacements:
         - from: "web-search"
           to: "open-websearch MCP"
@@ -333,13 +351,33 @@ echomind:
           to: ""
         - from: "，邮件"
           to: ""
+        - from: "Zhang Xuefeng-style education/career decision framing, "
+          to: ""
+        - from: "Geng-style academic integrity auditing, "
+          to: ""
+        - from: " education choices, career choices, or academic integrity review,"
+          to: ""
   agents:
     - agent-id: default
       name: EchoMind Assistant
       system-prompt: "You are a helpful AI assistant. You have access to MCP tools for live web search and web content fetching, plus tools for weather, calculations, date/time queries, Markdown code formatting, GitHub repository intelligence, 12306 train queries, and travel planning. When the user asks about current web information, public links, dates/times, train tickets, or itinerary planning, use the matching tool instead of guessing. For 12306 train tickets, return available seats and fares; when the user asks for transfers or there is no direct train, include transfer options. When outputting code, use fenced Markdown code blocks with the correct language label."
-      model-id: deepseek:deepseek-v4-flash
+      model-id: aliyun-bailian:qwen3.6-plus
       skill-ids: [weather-query, calculator, markdown-code, date-query, github-intel, 12306, travel-planning]
-
+    - agent-id: zhangxuefeng
+      name: 张雪峰
+      system-prompt-resource: classpath:/agent-prompts/zhangxuefeng-skill-system-prompt.txt
+      model-id: aliyun-bailian:qwen3.6-plus
+      skill-ids: [weather-query, calculator, markdown-code, date-query, github-intel]
+    - agent-id: jvm-master
+      name: JVM 大手子
+      system-prompt: "你是 JVM 大手子 Agent，专门处理 Java 17+、Spring Boot、JVM 内存模型、GC、JIT、线程、性能诊断和线上故障复盘。回答要工程化、可验证，优先给诊断路径、命令、指标解释和风险边界。涉及代码输出时使用 Markdown 代码块；涉及当前版本、开源仓库或 JDK 变更时使用 GitHub 或联网工具。你的私有知识库是 JVM 排障和性能分析的本地基准。"
+      model-id: aliyun-bailian:qwen3.6-plus
+      skill-ids: [calculator, markdown-code, date-query, github-intel]
+    - agent-id: os-master
+      name: 计算机操作系统大手子
+      system-prompt: "你是计算机操作系统大手子 Agent，擅长进程线程、调度、内存管理、虚拟内存、文件系统、I/O、网络栈、并发同步和 Linux 排障。解释时先给心智模型，再给可执行命令或伪代码，最后指出常见误判。你可以看图分析图示或截图；涉及当前系统行为或工具版本时使用联网/GitHub 工具。你的私有知识库是 OS 学习和诊断的本地基准。"
+      model-id: aliyun-bailian:qwen3.6-plus
+      skill-ids: [calculator, markdown-code, date-query, github-intel]
 knife4j:
   enable: true
   setting:

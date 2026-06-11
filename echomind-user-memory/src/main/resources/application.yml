@@ -51,17 +51,19 @@ echomind:
     merge-min-similarity: ${USER_MEMORY_MERGE_MIN_SIMILARITY:${USER_MEMORY_MIN_SIMILARITY:0.65}}
     related-fact-top-k: ${USER_MEMORY_RELATED_FACT_TOP_K:12}
     profile-max-chars: ${USER_MEMORY_PROFILE_MAX_CHARS:2000}
-    extractor-model-id: ${USER_MEMORY_EXTRACTOR_MODEL_ID:deepseek:deepseek-v4-flash}
+    extractor-model-id: ${USER_MEMORY_EXTRACTOR_MODEL_ID:aliyun-bailian:qwen3.6-plus}
     milvus-host: ${ECHOMIND_MILVUS_HOST:localhost}
     milvus-port: ${ECHOMIND_MILVUS_PORT:19530}
-    milvus-user-memory-collection: ${ECHOMIND_MILVUS_USER_MEMORY_COLLECTION:echomind_user_memory_v2}
-    embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com}
+    milvus-user-memory-collection: ${ECHOMIND_MILVUS_USER_MEMORY_COLLECTION:echomind_user_memory_spring_ai_v1}
+    embedding-base-url: ${ALIYUN_BAILIAN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     embedding-api-key: ${ALIYUN_BAILIAN_API_KEY:}
-    embedding-model: ${USER_MEMORY_EMBEDDING_MODEL:tongyi-embedding-vision-plus}
+    embedding-model: ${USER_MEMORY_EMBEDDING_MODEL:text-embedding-v4}
+    embedding-dimension: ${USER_MEMORY_EMBEDDING_DIMENSION:1024}
+    embedding-query-max-chars: ${USER_MEMORY_EMBEDDING_QUERY_MAX_CHARS:8000}
     deep-seek-api-key: ${DEEPSEEK_API_KEY:${ANTHROPIC_API_KEY:}}
     deep-seek-base-url: ${DEEPSEEK_BASE_URL:${ANTHROPIC_BASE_URL:https://api.deepseek.com}}
     deep-seek-model: ${USER_MEMORY_DEEPSEEK_MODEL:deepseek-v4-flash}
     open-ai-compatible-provider: ${USER_MEMORY_OPENAI_PROVIDER:aliyun-bailian}
     open-ai-compatible-api-key: ${ALIYUN_BAILIAN_API_KEY:${OPENAI_API_KEY:}}
     open-ai-compatible-base-url: ${ALIYUN_BAILIAN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
-    open-ai-compatible-model: ${USER_MEMORY_OPENAI_MODEL:qwen-plus}
+    open-ai-compatible-model: ${USER_MEMORY_OPENAI_MODEL:qwen3.6-plus}

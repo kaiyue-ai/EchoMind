@@ -2,22 +2,21 @@ package com.echomind.memory.usermemory;
 
 import java.util.Locale;
 
-/** 用户画像分类。 */
+/** 会话事件分类。 */
 public enum UserMemoryCategory {
-    PERSONA, // 画像
-    BACKGROUND, // 背景
+    EPISODE,    // 事件
+    CORRECTION, // 纠正
     PREFERENCE, // 偏好
-    KNOWLEDGE, // 知识
-    INTEREST; // 关注
+    KNOWLEDGE;  // 知识
 
     public static UserMemoryCategory from(String value) {
         if (value == null || value.isBlank()) {
-            return INTEREST;
+            return EPISODE;
         }
         try {
             return UserMemoryCategory.valueOf(value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException ignored) {
-            return INTEREST;
+            return EPISODE;
         }
     }
 
@@ -27,11 +26,10 @@ public enum UserMemoryCategory {
 
     public String displayName() {
         return switch (this) {
-            case PERSONA -> "画像";
-            case BACKGROUND -> "背景";
+            case EPISODE -> "事件";
+            case CORRECTION -> "纠正";
             case PREFERENCE -> "偏好";
             case KNOWLEDGE -> "知识";
-            case INTEREST -> "关注";
         };
     }
 }

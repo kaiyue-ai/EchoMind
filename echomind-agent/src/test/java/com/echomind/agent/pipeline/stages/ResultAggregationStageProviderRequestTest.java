@@ -6,7 +6,9 @@ import com.echomind.agent.pipeline.planning.MemoryDecisionParser;
 import com.echomind.agent.tool.core.Tool;
 import com.echomind.agent.tool.core.ToolResult;
 import com.echomind.agent.tool.router.ToolRouter;
+import com.echomind.common.exception.ModelInvocationRejectedException;
 import com.echomind.common.model.AgentMessage;
+import com.echomind.common.model.ErrorDetail;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.TokenUsage;
 import com.echomind.llm.provider.dto.ProviderResponse;
@@ -22,9 +24,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ResultAggregationStageProviderRequestTest {
 
@@ -91,8 +95,6 @@ class ResultAggregationStageProviderRequestTest {
             "test.png",
             123L
         ));
-        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("open_web_search"));
-
         stage.process(ctx);
 
         assertThat(ctx.getFinalResponse()).isEqualTo("ok");
@@ -145,7 +147,6 @@ class ResultAggregationStageProviderRequestTest {
         ctx.setResolvedModel(model);
         ctx.setUserMessage("查询[LOCATION]到上海的火车票");
         ctx.getAttributes().put(PipelineContext.ATTR_RAW_USER_MESSAGE, "查询重庆到上海的火车票");
-        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("12306"));
 
         stage.process(ctx);
 
@@ -156,7 +157,7 @@ class ResultAggregationStageProviderRequestTest {
     }
 
     @Test
-    void processKeepsRailwayToolAvailableForShortDateFollowUp() {
+    void processExposesAllToolsForFollowUpCorrection() {
         ModelProviderRegistry registry = new ModelProviderRegistry();
         AtomicReference<ProviderRequest> captured = new AtomicReference<>();
         ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
@@ -164,29 +165,247 @@ class ResultAggregationStageProviderRequestTest {
         ToolRouter toolRouter = new ToolRouter();
         toolRouter.register(new RailwayTool());
         toolRouter.register(new DateTool());
+        toolRouter.register(new StubTool());
         ResultAggregationStage stage = stage(registry, toolRouter);
 
         PipelineContext ctx = new PipelineContext();
         ctx.setSessionId("session-1");
         ctx.setModelId("mock:tool-model");
         ctx.setResolvedModel(model);
-        ctx.setUserMessage("查后天的");
-        ctx.getMessages().add(AgentMessage.user("查询重庆到临沂的火车票"));
-        ctx.getMessages().add(AgentMessage.assistant("需要我帮你查其他日期吗？"));
-        ctx.getMessages().add(AgentMessage.user("查后天的"));
-        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, List.of("12306", "date-query"));
+        ctx.setUserMessage("高考两天???你确定吗???");
+        ctx.getMessages().add(AgentMessage.user("搜搜今天的新闻"));
+        ctx.getMessages().add(AgentMessage.assistant("已查询今日新闻。"));
+        ctx.getMessages().add(AgentMessage.user("高考两天???你确定吗???"));
 
         stage.process(ctx);
 
         ProviderRequest request = captured.get();
         assertThat(request.tools()).extracting(tool -> tool.name())
-            .containsExactlyInAnyOrder("tool_12306", "date_query");
-        assertThat(request.userMessage()).contains("短句追问");
-        assertThat(request.userMessage()).contains("继续完成原业务任务");
-        assertThat(request.userMessage()).contains("不要再次叠加相同偏移");
+            .containsExactlyInAnyOrder("tool_12306", "date_query", "open_web_search");
+        assertThat(request.systemPrompt()).contains("先调用 date_query");
         assertThat(request.requiredToolName()).isNull();
-        assertThat(ctx.getAttributes())
-            .containsEntry(PipelineContext.ATTR_CONTEXT_MATCHED_TOOLS, List.of("12306"));
+    }
+
+    @Test
+    void toolInstructionAllowsSkippingWebSearchForSimpleGreeting() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("你好");
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(request.systemPrompt()).doesNotContain("事实核验与联网搜索规则");
+        assertThat(request.systemPrompt()).contains("联网搜索用于事实取证");
+        assertThat(request.systemPrompt()).contains("简短寒暄");
+        assertThat(request.systemPrompt()).contains("open_web_search");
+    }
+
+    @Test
+    void toolInstructionKeepsWebSearchAsPromptOnlyRequirement() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("随便聊两句");
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(request.systemPrompt()).contains("回答前必须至少调用一次 open_web_search 获取证据");
+        assertThat(request.systemPrompt()).contains("可以不联网的少数情况");
+        assertThat(request.systemPrompt()).contains("open_web_search");
+    }
+
+    @Test
+    void toolInstructionNudgesWebSearchForFreshnessSensitiveQuestionWithoutRequiredTool() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("OpenAI 最新模型是什么？");
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(request.systemPrompt()).contains("联网搜索用于事实取证");
+        assertThat(request.systemPrompt()).contains("当前或近期状态");
+        assertThat(request.systemPrompt()).contains("回答前必须至少调用一次 open_web_search 获取证据");
+    }
+
+    @Test
+    void toolInstructionNudgesWebSearchWhenUserExplicitlyAsksToSearchWithoutRequiredTool() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("联网搜索一下 EchoMind");
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(request.systemPrompt()).contains("回答前必须至少调用一次 open_web_search 获取证据");
+    }
+
+    @Test
+    void toolInstructionStillPrefersWebSearchForKnowledgeQuestionsWithKnowledgeHits() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("JVM G1 原理是什么？");
+        ctx.getAttributes().put(PipelineContext.ATTR_KNOWLEDGE_HITS, List.of("G1 知识库片段"));
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(request.systemPrompt()).doesNotContain("事实核验与联网搜索规则");
+        assertThat(request.systemPrompt()).contains("知识解释");
+        assertThat(request.systemPrompt()).contains("回答前必须至少调用一次 open_web_search 获取证据");
+    }
+
+    @Test
+    void toolInstructionNudgesWebSearchForKnowledgeQuestionWithoutRequiredTool() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("JVM G1 原理是什么？");
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(request.systemPrompt()).contains("知识解释");
+        assertThat(request.systemPrompt()).contains("回答前必须至少调用一次 open_web_search 获取证据");
+    }
+
+    @Test
+    void toolInstructionFallsBackToSafetyInstructionWhenWebSearchToolIsMissing() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new WeatherTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("OpenAI 最新模型是什么？");
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(request.systemPrompt()).contains("本轮没有可用的联网搜索工具");
+        assertThat(request.systemPrompt()).contains("不要给出确定性事实答案");
+    }
+
+    @Test
+    void toolInstructionIsSkippedWhenToolExposureIsDisabled() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("OpenAI 最新模型是什么？");
+        ctx.getAttributes().put(PipelineContext.ATTR_TOOL_EXPOSURE_DISABLED, true);
+
+        stage.process(ctx);
+
+        ProviderRequest request = captured.get();
+        assertThat(request.tools()).isEmpty();
+        assertThat(request.requiredToolName()).isNull();
+        assertThat(request.systemPrompt()).doesNotContain("事实核验与联网搜索规则");
+        assertThat(request.systemPrompt()).doesNotContain("联网搜索用于事实取证");
+    }
+
+    @Test
+    void processHidesToolsWhenExposureIsDisabledForInternalCalls() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        ModelSpec model = model("mock", "tool-model", ModelCapability.TEXT, ModelCapability.FUNCTION);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ToolRouter toolRouter = new ToolRouter();
+        toolRouter.register(new StubTool());
+        ResultAggregationStage stage = stage(registry, toolRouter);
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:tool-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("只输出 JSON");
+        ctx.getAttributes().put(PipelineContext.ATTR_TOOL_EXPOSURE_DISABLED, true);
+
+        stage.process(ctx);
+
+        assertThat(captured.get().tools()).isEmpty();
+        assertThat(captured.get().systemPrompt()).doesNotContain("工具使用规则");
     }
 
     @Test
@@ -261,6 +480,53 @@ class ResultAggregationStageProviderRequestTest {
     }
 
     @Test
+    void processRunsPreflightBeforeProviderCall() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicReference<ProviderRequest> captured = new AtomicReference<>();
+        AtomicReference<ProviderRequest> preflightRequest = new AtomicReference<>();
+        ModelSpec model = model("mock", "preflight-model", ModelCapability.TEXT);
+        registry.registerProvider(new CapturingProvider("mock", captured), List.of(model));
+        ResultAggregationStage stage = new ResultAggregationStage(registry, new ToolRouter(),
+            new PromptBudget(4000, 2000, 800), (ctx, request) -> preflightRequest.set(request));
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:preflight-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("你好");
+
+        stage.process(ctx);
+
+        assertThat(preflightRequest.get()).isNotNull();
+        assertThat(captured.get()).isSameAs(preflightRequest.get());
+    }
+
+    @Test
+    void processRethrowsPreflightRejectionWithoutCallingProvider() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicBoolean providerCalled = new AtomicBoolean(false);
+        ModelSpec model = model("mock", "rejected-model", ModelCapability.TEXT);
+        registry.registerProvider(new ThrowingProvider(providerCalled), List.of(model));
+        ErrorDetail detail = new ErrorDetail("USER_TOKEN_QUOTA_EXCEEDED", "Token 配额已超限",
+            "FINAL_PREFLIGHT", "daily", 100L, 100L, null, 1L, 0L, null);
+        ResultAggregationStage stage = new ResultAggregationStage(registry, new ToolRouter(),
+            new PromptBudget(4000, 2000, 800), (ctx, request) -> {
+                throw new ModelInvocationRejectedException(detail);
+            });
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:rejected-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("你好");
+
+        assertThatThrownBy(() -> stage.process(ctx))
+            .isInstanceOf(ModelInvocationRejectedException.class);
+        assertThat(providerCalled).isFalse();
+        assertThat(ctx.getErrorDetail()).isEqualTo(detail);
+    }
+
+    @Test
     void streamResponseBuffersSmallChunksWithoutNullMapperFailure() {
         ModelProviderRegistry registry = new ModelProviderRegistry();
         ModelSpec model = model("mock", "small-chunk-stream", ModelCapability.TEXT);
@@ -299,6 +565,30 @@ class ResultAggregationStageProviderRequestTest {
     }
 
     @Test
+    void streamResponseRethrowsPreflightRejectionWithoutCallingProvider() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        AtomicBoolean providerCalled = new AtomicBoolean(false);
+        ModelSpec model = model("mock", "stream-rejected-model", ModelCapability.TEXT);
+        registry.registerProvider(new ThrowingProvider(providerCalled), List.of(model));
+        ErrorDetail detail = new ErrorDetail("PROVIDER_TOKEN_BUDGET_EXCEEDED",
+            "模型服务预算不足，请稍后重试或切换模型", "FINAL_PREFLIGHT", "daily",
+            null, null, null, 1L, null, null);
+        ResultAggregationStage stage = new ResultAggregationStage(registry, new ToolRouter(),
+            new PromptBudget(4000, 2000, 800), (ctx, request) -> {
+                throw new ModelInvocationRejectedException(detail);
+            });
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock:stream-rejected-model");
+        ctx.setResolvedModel(model);
+        ctx.setUserMessage("你好");
+
+        assertThatThrownBy(() -> stage.streamResponse(ctx).collectList().block())
+            .isInstanceOf(ModelInvocationRejectedException.class);
+        assertThat(providerCalled).isFalse();
+        assertThat(ctx.getErrorDetail()).isEqualTo(detail);
+    }
+
     private ResultAggregationStage stage(ModelProviderRegistry registry, ToolRouter toolRouter) {
         return new ResultAggregationStage(registry, toolRouter, new PromptBudget(4000, 2000, 800));
     }
@@ -403,11 +693,47 @@ class ResultAggregationStageProviderRequestTest {
         }
     }
 
+    private static class ThrowingProvider implements com.echomind.llm.provider.ModelProvider {
+
+        private final AtomicBoolean called;
+
+        private ThrowingProvider(AtomicBoolean called) {
+            this.called = called;
+        }
+
+        @Override
+        public String providerId() {
+            return "mock";
+        }
+
+        @Override
+        public boolean supports(ModelSpec model) {
+            return "mock".equals(model.providerId());
+        }
+
+        @Override
+        public ProviderResponse chatWithUsage(ProviderRequest request) {
+            called.set(true);
+            throw new AssertionError("provider should not be called");
+        }
+
+        @Override
+        public Flux<ProviderStreamChunk> streamWithUsage(ProviderRequest request) {
+            called.set(true);
+            return Flux.error(new AssertionError("provider should not be called"));
+        }
+    }
+
     private static class WeatherTool extends StubTool {
 
         @Override
         public String name() {
             return "weather-query";
+        }
+
+        @Override
+        public String description() {
+            return "天气查询";
         }
 
         @Override
@@ -418,6 +744,11 @@ class ResultAggregationStageProviderRequestTest {
         @Override
         public List<String> keywords() {
             return List.of("天气");
+        }
+
+        @Override
+        public String sourceId() {
+            return "mcp:weather";
         }
     }
 

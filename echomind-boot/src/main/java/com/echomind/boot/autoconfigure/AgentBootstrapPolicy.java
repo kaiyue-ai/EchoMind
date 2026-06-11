@@ -2,7 +2,12 @@ package com.echomind.boot.autoconfigure;
 
 import com.echomind.agent.AgentConfig;
 import com.echomind.boot.properties.EchoMindProperties;
+import org.springframework.core.io.DefaultResourceLoader;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -13,9 +18,15 @@ import java.util.Objects;
 final class AgentBootstrapPolicy {
 
     private final EchoMindProperties.AgentBootstrap config;
+    private final ResourceLoader resourceLoader;
 
     AgentBootstrapPolicy(EchoMindProperties.AgentBootstrap config) {
+        this(config, new DefaultResourceLoader());
+    }
+
+    AgentBootstrapPolicy(EchoMindProperties.AgentBootstrap config, ResourceLoader resourceLoader) {
         this.config = config == null ? new EchoMindProperties.AgentBootstrap() : config;
+        this.resourceLoader = resourceLoader == null ? new DefaultResourceLoader() : resourceLoader;
     }
 
     boolean mergeConfiguredDefaults(AgentConfig persisted, EchoMindProperties.AgentDef configuredAgent) {
@@ -43,10 +54,26 @@ final class AgentBootstrapPolicy {
         }
         agent.setAgentId(def.getAgentId());
         agent.setName(def.getName());
-        agent.setSystemPrompt(def.getSystemPrompt());
+        agent.setSystemPrompt(systemPrompt(def));
         agent.setModelId(def.getModelId());
         agent.setSkillIds(def.getSkillIds());
         return agent;
+    }
+
+    private String systemPrompt(EchoMindProperties.AgentDef def) {
+        String resourceLocation = trim(def.getSystemPromptResource());
+        if (resourceLocation.isBlank()) {
+            return def.getSystemPrompt();
+        }
+        Resource resource = resourceLoader.getResource(resourceLocation);
+        if (!resource.exists()) {
+            throw new IllegalArgumentException("Agent system prompt resource does not exist: " + resourceLocation);
+        }
+        try {
+            return resource.getContentAsString(StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Failed to read agent system prompt resource: " + resourceLocation, e);
+        }
     }
 
     private boolean mergeDefaultSkills(AgentConfig persisted, List<String> configuredSkillIds) {
@@ -105,5 +132,9 @@ final class AgentBootstrapPolicy {
         }
         String prefix = migration.getFromPrefix();
         return prefix != null && !prefix.isBlank() && modelId.startsWith(prefix);
+    }
+
+    private String trim(String value) {
+        return value == null ? "" : value.trim();
     }
 }

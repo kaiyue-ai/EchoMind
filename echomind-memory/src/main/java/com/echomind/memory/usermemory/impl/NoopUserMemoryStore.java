@@ -15,7 +15,7 @@ public class NoopUserMemoryStore implements UserMemoryStore {
 
     @Override
     public List<UserMemoryHit> search(String sessionId,
-                                      double[] queryVector,
+                                      String query,
                                       int topK,
                                       double minConfidence,
                                       double minSimilarity) {

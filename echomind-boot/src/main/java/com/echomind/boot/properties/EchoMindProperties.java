@@ -23,7 +23,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *   memory:
      *     short-term-window: 50
  *     redis-ttl-seconds: 604800
- *     embedding-model: tongyi-embedding-vision-plus
+ *     embedding-model: text-embedding-v4
  *   skill:
  *     auto-load-path: ./skills/
  *     hot-reload: true
@@ -132,12 +132,16 @@ public class EchoMindProperties {
         private long redisTtlSeconds = 604800;
         /** 向量检索开关。 */
         private boolean embeddingEnabled = true;
-        /** 百炼向量接口 Base URL，默认使用 DashScope 原生地址。 */
-        private String embeddingBaseUrl = "https://dashscope.aliyuncs.com";
+        /** OpenAI-compatible 向量接口 Base URL；DashScope 使用 compatible-mode，Spring AI 会追加 /v1/embeddings。 */
+        private String embeddingBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode";
         /** 百炼向量 API Key，默认从 ALIYUN_BAILIAN_API_KEY 读取。 */
         private String embeddingApiKey;
-        /** 向量模型，按需求默认使用 tongyi-embedding-vision-plus。 */
-        private String embeddingModel = "tongyi-embedding-vision-plus";
+        /** OpenAI-compatible 文本向量模型。 */
+        private String embeddingModel = "text-embedding-v4";
+        /** 向量维度；需与 embeddingModel 实际输出保持一致。 */
+        private int embeddingDimension = 1024;
+        /** 进入 embedding 前的检索文本最大字符数，超出后保留头尾裁剪。 */
+        private int embeddingQueryMaxChars = 8000;
         /** 普通聊天记忆持久化 RabbitMQ 队列名。 */
         private String persistQueueName = "echomind.chat-memory.persist.requests";
         /** 普通聊天记忆持久化 RabbitMQ Direct Exchange 名。 */
@@ -162,10 +166,10 @@ public class EchoMindProperties {
         private String milvusHost = "localhost";
         /** Milvus 向量数据库端口。 */
         private int milvusPort = 19530;
-        /** Milvus 用户长期事实 Collection 名；v2 schema 包含三类时间戳。 */
-        private String milvusUserMemoryCollection = "echomind_user_memory_v2";
-        /** Milvus Agent 知识库 Collection 名。 */
-        private String milvusKnowledgeCollection = "echomind_agent_knowledge";
+        /** Spring AI Milvus 用户长期事实 Collection 名；旧 collection 保留但不再读取。 */
+        private String milvusUserMemoryCollection = "echomind_user_memory_spring_ai_v1";
+        /** Spring AI Milvus Agent 知识库 Collection 名；旧 collection 保留但不再读取。 */
+        private String milvusKnowledgeCollection = "echomind_agent_knowledge_spring_ai_v1";
         /** 是否启用扫描版 PDF OCR。 */
         private boolean knowledgeOcrEnabled = true;
         /** OCR 语言包，chi_sim+eng 表示简体中文和英文混合识别。 */
@@ -187,7 +191,7 @@ public class EchoMindProperties {
         /** 向量检索前是否启用轻量模型查询改写。 */
         private boolean retrievalQueryRewriteEnabled = true;
         /** 查询改写使用的轻量模型 ID，格式 provider:model。 */
-        private String retrievalQueryRewriteModelId = "deepseek:deepseek-v4-flash";
+        private String retrievalQueryRewriteModelId = "aliyun-bailian:qwen3.6-plus";
         /** 查询改写超时时间，失败会回退原句。 */
         private int retrievalQueryRewriteTimeoutMs = 1500;
         /** 查询改写结果最大字符数，过长会回退原句。 */
@@ -220,7 +224,7 @@ public class EchoMindProperties {
         /** 单次提取最多写入多少条用户事实。 */
         private int maxExtractedEntries = 10;
         /** 轻量级用户记忆模型，默认 DeepSeek V4 Flash。 */
-        private String extractorModelId = "deepseek:deepseek-v4-flash";
+        private String extractorModelId = "aliyun-bailian:qwen3.6-plus";
     }
 
     /**
@@ -320,6 +324,8 @@ public class EchoMindProperties {
         private List<ModelMigration> modelMigrations = List.of();
         /** 极端情况下没有 MySQL Agent 且没有配置 Agent 时使用的兜底 Agent。 */
         private AgentDef fallbackAgent = defaultFallbackAgent();
+        /** 启动时为默认 Agent 私有知识库补齐的种子文档。 */
+        private List<KnowledgeSeed> knowledgeSeeds = List.of();
 
         private static AgentDef defaultFallbackAgent() {
             AgentDef config = new AgentDef();
@@ -365,6 +371,28 @@ public class EchoMindProperties {
     }
 
     /**
+     * Agent 私有知识库种子文档。
+     *
+     * <p>启动时只在目标 Agent 没有同名文档时写入，文档原文会进入对象存储，
+     * 文档元数据进入 MySQL，切片正文和向量进入 Milvus。</p>
+     */
+    @Data
+    public static class KnowledgeSeed {
+        /** 是否启用该 seed。 */
+        private boolean enabled = true;
+        /** 目标 Agent ID。 */
+        private String agentId;
+        /** 展示在知识库列表里的文件名。 */
+        private String fileName = "seed-knowledge.txt";
+        /** classpath:/ 或 file:/ 资源位置；与 content 二选一。 */
+        private String resource;
+        /** 内联文本；适合很短的 seed。 */
+        private String content;
+        /** 原文件 Content-Type。 */
+        private String contentType = "text/plain";
+    }
+
+    /**
      * 单个 Agent 的配置定义 —— 用于在配置文件中声明式定义 Agent。
      *
      * <p>每个 Agent 定义包括：唯一标识、显示名称、系统提示词、
@@ -378,6 +406,8 @@ public class EchoMindProperties {
         private String name;
         /** 系统提示词，定义 Agent 的角色和行为 */
         private String systemPrompt;
+        /** 系统提示词资源位置；适合较长提示词，例如 classpath:/agent-prompts/example.txt */
+        private String systemPromptResource;
         /** 绑定的模型 ID，格式为 "providerId:modelName" */
         private String modelId;
         /** 可调用的技能 ID 列表 */

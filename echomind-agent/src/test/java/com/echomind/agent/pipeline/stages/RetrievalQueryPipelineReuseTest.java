@@ -2,40 +2,33 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.RetrievalQueryRewriter;
-import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
 import com.echomind.memory.usermemory.UserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshotStore;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RetrievalQueryPipelineReuseTest {
 
     @Test
-    void userMemoryAndKnowledgeStagesShareRewrittenQueryAndEmbedding() {
-        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
+    void userMemoryAndKnowledgeStagesShareRewrittenQuery() {
         UserMemoryStore userMemoryStore = mock(UserMemoryStore.class);
         AgentKnowledgeService knowledgeService = mock(AgentKnowledgeService.class);
         CountingRewriter rewriter = new CountingRewriter("今天苹果的价格");
-        double[] vector = new double[] {0.8, 0.2};
-        when(embeddingClient.embed("今天苹果的价格")).thenReturn(Optional.of(vector));
-        when(userMemoryStore.search("user:default", vector, 5, 0.3, 0.40)).thenReturn(List.of());
-        when(knowledgeService.search("agent-1", "今天苹果多少钱", vector, 4)).thenReturn(List.of());
+        when(userMemoryStore.search("user:default", "今天苹果的价格", 5, 0.3, 0.40)).thenReturn(List.of());
+        when(knowledgeService.search("agent-1", "今天苹果的价格", 4)).thenReturn(List.of());
 
         PipelineContext ctx = new PipelineContext();
         ctx.setSessionId("session-1");
         ctx.setAgentId("agent-1");
         ctx.setUserMessage("今天苹果多少钱");
         new UserMemoryRetrievalStage(
-            embeddingClient,
             userMemoryStore,
             UserProfileSnapshotStore.noop(),
             true,
@@ -43,12 +36,11 @@ class RetrievalQueryPipelineReuseTest {
             0.3,
             rewriter
         ).process(ctx);
-        new KnowledgeRetrievalStage(knowledgeService, embeddingClient, 4, rewriter).process(ctx);
+        new KnowledgeRetrievalStage(knowledgeService, 4, rewriter).process(ctx);
 
         assertThat(rewriter.calls).isEqualTo(1);
-        verify(embeddingClient, times(1)).embed("今天苹果的价格");
-        verify(userMemoryStore).search("user:default", vector, 5, 0.3, 0.40);
-        verify(knowledgeService).search("agent-1", "今天苹果多少钱", vector, 4);
+        verify(userMemoryStore).search("user:default", "今天苹果的价格", 5, 0.3, 0.40);
+        verify(knowledgeService).search("agent-1", "今天苹果的价格", 4);
     }
 
     private static class CountingRewriter extends RetrievalQueryRewriter {

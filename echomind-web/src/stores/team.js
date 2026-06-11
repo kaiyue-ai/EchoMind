@@ -1,6 +1,10 @@
 import { defineStore } from 'pinia'
 import api from '../api'
 
+const POLLING_INITIAL_DELAY_MS = 1000
+const POLLING_MAX_DELAY_MS = 3000
+const POLLING_BACKOFF_MS = 500
+
 /**
  * Agent Team状态中心。
  *
@@ -12,11 +16,15 @@ export const useTeamStore = defineStore('team', {
     teams: [],
     selectedTeam: null,
     taskInput: '',
+    reviewPreset: 'quality',
+    reviewOptions: defaultReviewOptions(),
     teamResult: null,
     currentRun: null,
     userRuns: [],
     teamRuns: [],
     pollingTimer: null,
+    pollingDelay: POLLING_INITIAL_DELAY_MS,
+    lastRunSnapshot: '',
     loading: false,
     loadingRuns: false,
     creating: false,
@@ -119,14 +127,14 @@ export const useTeamStore = defineStore('team', {
         this.deleting = false
       }
     },
-    async executeTask(task = this.taskInput) {
+    async executeTask(task = this.taskInput, reviewOptions = this.reviewOptions) {
       if (!this.selectedTeam || !task?.trim()) return null
       this.executing = true
       this.error = null
       this.teamResult = null
       this.currentRun = null
       try {
-        this.currentRun = await api.team.createRun(this.selectedTeam.teamId, task)
+        this.currentRun = await api.team.createRun(this.selectedTeam.teamId, task, normalizeReviewOptions(reviewOptions))
         await this.loadTeamRuns(this.selectedTeam.teamId).catch(() => {})
         this.startPolling(this.currentRun.runId)
         return this.currentRun
@@ -140,13 +148,22 @@ export const useTeamStore = defineStore('team', {
     async refreshRun(runId = this.currentRun?.runId) {
       if (!this.selectedTeam || !runId) return null
       try {
-        this.currentRun = await api.team.getRun(this.selectedTeam.teamId, runId)
-        if (this.isTerminalRun(this.currentRun.status)) {
+        const nextRun = await api.team.getRun(this.selectedTeam.teamId, runId)
+        const nextSnapshot = stableRunSnapshot(nextRun)
+        if (nextSnapshot !== this.lastRunSnapshot) {
+          this.currentRun = nextRun
+          this.lastRunSnapshot = nextSnapshot
+          this.pollingDelay = POLLING_INITIAL_DELAY_MS
+        } else {
+          this.pollingDelay = Math.min(this.pollingDelay + POLLING_BACKOFF_MS, POLLING_MAX_DELAY_MS)
+        }
+        if (this.isTerminalRun(nextRun.status)) {
           this.stopPolling()
-          this.teamResult = this.currentRun
+          this.currentRun = nextRun
+          this.teamResult = nextRun
           this.loadTeamRuns(this.selectedTeam.teamId).catch(() => {})
         }
-        return this.currentRun
+        return nextRun
       } catch (error) {
         this.error = api.parseError(error, '刷新团队任务失败')
         this.stopPolling()
@@ -155,16 +172,24 @@ export const useTeamStore = defineStore('team', {
     },
     startPolling(runId) {
       this.stopPolling()
-      this.pollingTimer = window.setInterval(() => {
-        this.refreshRun(runId).catch(() => {})
-      }, 250)
-      this.refreshRun(runId).catch(() => {})
+      this.pollingDelay = POLLING_INITIAL_DELAY_MS
+      this.lastRunSnapshot = ''
+      const tick = () => {
+        this.refreshRun(runId)
+          .catch(() => {})
+          .finally(() => {
+            if (!this.pollingTimer || this.isTerminalRun(this.currentRun?.status)) return
+            this.pollingTimer = window.setTimeout(tick, this.pollingDelay)
+          })
+      }
+      this.pollingTimer = window.setTimeout(tick, 0)
     },
     stopPolling() {
       if (this.pollingTimer) {
-        window.clearInterval(this.pollingTimer)
+        window.clearTimeout(this.pollingTimer)
         this.pollingTimer = null
       }
+      this.pollingDelay = POLLING_INITIAL_DELAY_MS
     },
     isTerminalRun(status) {
       return ['COMPLETED', 'FAILED', 'NEEDS_CLARIFICATION'].includes(status)
@@ -189,3 +214,31 @@ export const useTeamStore = defineStore('team', {
     }
   }
 })
+
+function defaultReviewOptions() {
+  return {
+    planReviewEnabled: true,
+    subReviewEnabled: true,
+    globalReviewEnabled: true,
+    simpleFastPathEnabled: false
+  }
+}
+
+function normalizeReviewOptions(options) {
+  return {
+    ...defaultReviewOptions(),
+    ...(options || {})
+  }
+}
+
+function stableRunSnapshot(run) {
+  if (!run) return ''
+  return JSON.stringify({
+    status: run.status,
+    updatedAt: run.updatedAt,
+    finalOutput: run.finalOutput,
+    mermaidDiagram: run.mermaidDiagram,
+    steps: run.steps,
+    events: run.events
+  })
+}

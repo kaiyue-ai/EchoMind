@@ -15,13 +15,14 @@ $RemotePass = "214424"
 $RemotePath = "/opt/echomind"
 $LocalBase  = "D:\claudeWorkSpace\ai-agent"
 
+$ErrorActionPreference = "Stop"
 $SshTarget = "${RemoteUser}@${RemoteHost}"
 
 function Remote-Exec($cmd) {
     Write-Host "`n>>> SSH: $cmd" -ForegroundColor Cyan
     ssh -o StrictHostKeyChecking=no -p $RemotePort $SshTarget $cmd
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "!!! Command failed (exit $LASTEXITCODE)" -ForegroundColor Red
+        throw "Remote command failed (exit $LASTEXITCODE): $cmd"
     }
 }
 
@@ -30,7 +31,7 @@ function Scp-Upload($localPath, $remotePath) {
     Write-Host "  SCP: $localPath -> $remoteFull" -ForegroundColor Gray
     scp -o StrictHostKeyChecking=no -P $RemotePort $localPath $remoteFull
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "!!! SCP failed" -ForegroundColor Red
+        throw "SCP failed: $localPath -> $remoteFull"
     }
 }
 
@@ -39,7 +40,7 @@ function Scp-UploadDir($localDir, $remotePath) {
     Write-Host "  SCP -r: $localDir -> $remoteFull" -ForegroundColor Gray
     scp -o StrictHostKeyChecking=no -P $RemotePort -r $localDir $remoteFull
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "!!! SCP failed" -ForegroundColor Red
+        throw "SCP failed: $localDir -> $remoteFull"
     }
 }
 
@@ -58,7 +59,9 @@ $requiredFiles = @(
     "$LocalBase\Dockerfile.runtime",
     "$LocalBase\Dockerfile.user-memory",
     "$LocalBase\docker\mysql\init.sql",
-    "$LocalBase\docker\otel\collector-config.yaml"
+    "$LocalBase\docker\open-websearch\Dockerfile",
+    "$LocalBase\docker\otel\collector-config.yaml",
+    "$LocalBase\scripts\apply-mysql-migrations.sh"
 )
 
 $missing = $false
@@ -103,6 +106,13 @@ if ($missing) {
     return
 }
 
+$migrationFiles = @(Get-ChildItem "$LocalBase\docker\mysql\migrations\*.sql" -ErrorAction SilentlyContinue)
+if (-not $migrationFiles) {
+    Write-Host "`n!!! 缺少 MySQL migration 文件：$LocalBase\docker\mysql\migrations\*.sql" -ForegroundColor Red
+    return
+}
+Write-Host "  OK: MySQL migrations ($($migrationFiles.Count) files)" -ForegroundColor Green
+
 # ============================================================
 # Step 1: SSH 连接测试 + 检查旧版部署
 # ============================================================
@@ -141,7 +151,7 @@ Write-Host " Step 4: 上传项目文件" -ForegroundColor Yellow
 Write-Host "========================================" -ForegroundColor Yellow
 
 # 创建远程目录结构
-Remote-Exec "mkdir -p ${RemotePath}/{echomind-app/target,echomind-user-memory/target,external-mcp,skills,docker/mysql,docker/otel,echomind-web/dist,echomind-web/dist-admin,scripts}"
+Remote-Exec "rm -rf ${RemotePath}/docker/mysql/migrations ${RemotePath}/docker/open-websearch; mkdir -p ${RemotePath}/{echomind-app/target,echomind-user-memory/target,external-mcp,skills,docker/mysql,docker/open-websearch,docker/otel,echomind-web/dist,echomind-web/dist-admin,scripts}"
 
 # 核心配置文件
 Scp-Upload "$LocalBase\docker-compose.yml" "$RemotePath/docker-compose.yml"
@@ -151,7 +161,10 @@ Scp-Upload "$LocalBase\Dockerfile" "$RemotePath/Dockerfile"
 
 # Docker 配置
 Scp-Upload "$LocalBase\docker\mysql\init.sql" "$RemotePath/docker/mysql/init.sql"
+Scp-UploadDir "$LocalBase\docker\mysql\migrations" "$RemotePath/docker/mysql/"
+Scp-Upload "$LocalBase\docker\open-websearch\Dockerfile" "$RemotePath/docker/open-websearch/Dockerfile"
 Scp-Upload "$LocalBase\docker\otel\collector-config.yaml" "$RemotePath/docker/otel/collector-config.yaml"
+Scp-Upload "$LocalBase\scripts\apply-mysql-migrations.sh" "$RemotePath/scripts/apply-mysql-migrations.sh"
 
 # 后端 JAR
 Write-Host "`n  上传后端 JAR (约108MB，请耐心等待)..." -ForegroundColor Yellow
@@ -205,7 +218,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 OPENAI_API_KEY=
 ALIYUN_BAILIAN_API_KEY=
 ALIYUN_BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-ALIYUN_BAILIAN_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com
+ALIYUN_BAILIAN_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode
 ALIBABA_CLOUD_ACCESS_KEY_ID=
 ALIBABA_CLOUD_ACCESS_KEY_SECRET=
 ECHOMIND_STORAGE_MODE=oss
@@ -223,6 +236,8 @@ fi
 Write-Host "`n========================================" -ForegroundColor Yellow
 Write-Host " Step 6: 构建 Docker 镜像并启动" -ForegroundColor Yellow
 Write-Host "========================================" -ForegroundColor Yellow
+
+Remote-Exec "cd $RemotePath && chmod +x scripts/apply-mysql-migrations.sh && ./scripts/apply-mysql-migrations.sh --start-database"
 
 Remote-Exec "cd $RemotePath && docker compose build --no-cache 2>&1 | tail -30"
 

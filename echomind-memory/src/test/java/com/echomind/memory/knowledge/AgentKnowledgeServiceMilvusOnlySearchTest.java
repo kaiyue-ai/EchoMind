@@ -1,22 +1,26 @@
 package com.echomind.memory.knowledge;
 
-import com.echomind.memory.embedding.EmbeddingClient;
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 import com.echomind.memory.knowledge.entity.AgentKnowledgeDocumentEntity;
 import com.echomind.memory.knowledge.mapper.AgentKnowledgeDocumentMapper;
-import com.echomind.memory.milvus.MilvusVectorStoreSupport;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
-class AgentKnowledgeServiceMilvusOnlySearchTest {
+class AgentKnowledgeServiceSpringAiSearchTest {
 
     @Test
-    void doesNotFallBackToMysqlSearchWhenMilvusIsUnavailable() {
-        AgentKnowledgeService service = service(text -> Optional.of(new double[] {1, 0}), 0.6);
+    void doesNotFallBackToMysqlSearchWhenVectorStoreIsUnavailable() {
+        AgentKnowledgeService service = service(null, 0.6);
 
         List<AgentKnowledgeHit> hits = service.search("agent-1", "进程退出", 3);
 
@@ -24,36 +28,77 @@ class AgentKnowledgeServiceMilvusOnlySearchTest {
     }
 
     @Test
-    void milvusDistanceIsConvertedToSimilarity() {
-        assertThat(MilvusVectorStoreSupport.distanceToSimilarity(0.2f)).isEqualTo(0.8);
-        assertThat(MilvusVectorStoreSupport.distanceToSimilarity(1.3f)).isZero();
+    void springAiMilvusSearchReturnsVectorHitsAndScopesRequestToAgent() {
+        RecordingVectorStore vectorStore = new RecordingVectorStore(List.of(
+            Document.builder()
+                .id("hit-1")
+                .text("银杏计划发布窗口是每周二 09:30 到 11:00，回滚口令是 gingko-rollback-7429。")
+                .metadata(Map.of(
+                    AgentKnowledgeService.META_AGENT_ID, "agent-1",
+                    AgentKnowledgeService.META_DOCUMENT_ID, 42L,
+                    AgentKnowledgeService.META_CHUNK_ID, 4203L,
+                    AgentKnowledgeService.META_CHUNK_INDEX, 3,
+                    AgentKnowledgeService.META_FILE_NAME, "fixture.txt"
+                ))
+                .score(0.91)
+                .build()
+        ));
+        AgentKnowledgeService service = service(vectorStore, 0.25);
+
+        List<AgentKnowledgeHit> hits = service.search("agent-1", "银杏计划发布窗口", 3);
+
+        assertThat(hits).hasSize(1);
+        assertThat(hits.get(0).content()).contains("gingko-rollback-7429");
+        assertThat(hits.get(0).score()).isEqualTo(0.91);
+        assertThat(vectorStore.requests).hasSize(1);
+        SearchRequest request = vectorStore.requests.get(0);
+        assertThat(request.getQuery()).isEqualTo("银杏计划发布窗口");
+        assertThat(request.getTopK()).isEqualTo(9);
+        assertThat(request.getSimilarityThreshold()).isEqualTo(0.25);
+        assertThat(request.getFilterExpression().toString()).contains("agent-1");
     }
 
     @Test
-    void milvusCosineScoreIsAlreadySimilarity() {
-        assertThat(MilvusVectorStoreSupport.cosineScoreToSimilarity(0.8f)).isEqualTo(0.8);
-        assertThat(MilvusVectorStoreSupport.cosineScoreToSimilarity(-2f)).isEqualTo(-1);
-        assertThat(MilvusVectorStoreSupport.cosineScoreToSimilarity(Float.NaN)).isZero();
+    void springAiMilvusSearchTrimsOverlongQueryBeforeVectorSearch() {
+        RecordingVectorStore vectorStore = new RecordingVectorStore(List.of());
+        AgentKnowledgeService service = service(vectorStore, 0.25, new EmbeddingInputPolicy(30));
+
+        service.search("agent-1", "HEAD-" + "x".repeat(80) + "-TAIL", 3);
+
+        assertThat(vectorStore.requests).hasSize(1);
+        assertThat(vectorStore.requests.get(0).getQuery())
+            .hasSize(30)
+            .startsWith("HEAD-")
+            .contains("\n...\n")
+            .endsWith("-TAIL");
     }
 
     @Test
-    void milvusWindowExpressionExpandsCenterChunkByFiveNeighbors() {
-        String expr = AgentKnowledgeService.windowFilterExpr("agent-1", 42L, 7);
+    void springAiMilvusWindowExpressionExpandsCenterChunkByFiveNeighbors() {
+        String expr = KnowledgeWindowQuery.windowFilterExpr("agent-1", 42L, 7);
 
         assertThat(expr).isEqualTo(
-            "agent_id == " + AgentKnowledgeService.hashAgentId("agent-1")
-                + " && document_id == 42"
-                + " && chunk_index >= 2"
-                + " && chunk_index <= 12"
+            "metadata[\"agentId\"] == \"agent-1\""
+                + " && metadata[\"documentId\"] == 42"
+                + " && metadata[\"chunkIndex\"] >= 2"
+                + " && metadata[\"chunkIndex\"] <= 12"
         );
     }
 
     @Test
-    void milvusWindowExpressionDoesNotStartBelowZero() {
-        String expr = AgentKnowledgeService.windowFilterExpr("agent-1", 42L, 3);
+    void springAiMilvusWindowExpressionDoesNotStartBelowZero() {
+        String expr = KnowledgeWindowQuery.windowFilterExpr("agent-1", 42L, 3);
 
-        assertThat(expr).contains("chunk_index >= 0");
-        assertThat(expr).contains("chunk_index <= 8");
+        assertThat(expr).contains("metadata[\"chunkIndex\"] >= 0");
+        assertThat(expr).contains("metadata[\"chunkIndex\"] <= 8");
+    }
+
+    @Test
+    void vectorDocumentIdIsStableAndScopedByAgentDocumentAndChunk() {
+        assertThat(AgentKnowledgeService.vectorDocumentId("agent-1", 42L, 7))
+            .isEqualTo(AgentKnowledgeService.vectorDocumentId("agent-1", 42L, 7));
+        assertThat(AgentKnowledgeService.vectorDocumentId("agent-1", 42L, 7))
+            .isNotEqualTo(AgentKnowledgeService.vectorDocumentId("agent-2", 42L, 7));
     }
 
     @Test
@@ -75,14 +120,18 @@ class AgentKnowledgeServiceMilvusOnlySearchTest {
         assertThat(view.hasOriginalFile()).isTrue();
     }
 
-    private AgentKnowledgeService service(EmbeddingClient embeddingClient,
+    private AgentKnowledgeService service(VectorStore vectorStore,
                                           double minSimilarity) {
+        return service(vectorStore, minSimilarity, EmbeddingInputPolicy.defaults());
+    }
+
+    private AgentKnowledgeService service(VectorStore vectorStore,
+                                          double minSimilarity,
+                                          EmbeddingInputPolicy embeddingInputPolicy) {
         return new AgentKnowledgeService(
             mock(AgentKnowledgeDocumentMapper.class),
-            embeddingClient,
-            null,
+            vectorStore,
             true,
-            "echomind_agent_knowledge_test",
             500,
             0.15,
             minSimilarity,
@@ -91,7 +140,37 @@ class AgentKnowledgeServiceMilvusOnlySearchTest {
             200,
             80,
             20,
-            "tesseract"
+            "tesseract",
+            "echomind_agent_knowledge_test",
+            embeddingInputPolicy
         );
+    }
+
+    private static class RecordingVectorStore implements VectorStore {
+
+        private final List<Document> results;
+        private final List<SearchRequest> requests = new ArrayList<>();
+
+        private RecordingVectorStore(List<Document> results) {
+            this.results = results;
+        }
+
+        @Override
+        public void add(List<Document> documents) {
+        }
+
+        @Override
+        public void delete(List<String> idList) {
+        }
+
+        @Override
+        public void delete(Filter.Expression filterExpression) {
+        }
+
+        @Override
+        public List<Document> similaritySearch(SearchRequest request) {
+            requests.add(request);
+            return results;
+        }
     }
 }

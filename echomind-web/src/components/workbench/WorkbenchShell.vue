@@ -25,19 +25,22 @@
     </header>
 
     <template #scrim>
-      <div v-if="mobileSidebarOpen" class="mobile-sidebar-scrim" @click="uiStore.closeMobileSidebar()"></div>
+      <Transition name="scrim-fade">
+        <div v-if="mobileSidebarOpen" class="mobile-sidebar-scrim" @click="uiStore.closeMobileSidebar()"></div>
+      </Transition>
     </template>
 
     <aside class="workbench-sidebar">
       <div class="brand-row">
         <UserAvatarButton />
-        <div v-if="!sidebarCollapsed" class="brand-copy">
+        <div class="brand-copy" :aria-hidden="sidebarCollapsed">
           <strong>EchoMind</strong>
           <span>Agent Workbench</span>
         </div>
       </div>
 
-      <nav class="workbench-nav">
+      <nav class="workbench-nav" :style="navIndicatorStyle">
+        <span class="nav-active-indicator" aria-hidden="true"></span>
         <router-link
           v-for="item in navItems"
           :key="item.path"
@@ -49,7 +52,7 @@
           @click="uiStore.closeMobileSidebar()"
         >
           <el-icon><component :is="item.icon" /></el-icon>
-          <span v-if="!sidebarCollapsed">{{ item.label }}</span>
+          <span class="nav-label" :aria-hidden="sidebarCollapsed">{{ item.label }}</span>
         </router-link>
       </nav>
 
@@ -90,9 +93,11 @@
 
     <main class="workbench-main">
       <router-view v-slot="{ Component, route }">
-        <keep-alive include="ChatView">
-          <component :is="Component" :key="route.meta.keepAlive ? route.name : route.fullPath" />
-        </keep-alive>
+        <Transition name="route-soft" mode="out-in">
+          <keep-alive include="ChatView">
+            <component :is="Component" :key="route.meta.keepAlive ? route.name : route.fullPath" />
+          </keep-alive>
+        </Transition>
       </router-view>
     </main>
   </ResponsiveShell>
@@ -148,6 +153,19 @@ const navItems = [
   { path: '/mcp', label: 'MCP', icon: Connection },
   { path: '/team', label: 'Team', icon: Cpu }
 ]
+
+const currentNavIndex = computed(() => {
+  const index = navItems.findIndex(item => currentRoute.value === item.path || currentRoute.value.startsWith(`${item.path}/`))
+  return index >= 0 ? index : 0
+})
+
+const navIndicatorStyle = computed(() => {
+  const gap = sidebarCollapsed.value ? 14 : 8
+  const top = sidebarCollapsed.value ? 18 : 14
+  return {
+    '--nav-indicator-y': `${top + currentNavIndex.value * (44 + gap)}px`
+  }
+})
 
 async function logout() {
   await authStore.logout()

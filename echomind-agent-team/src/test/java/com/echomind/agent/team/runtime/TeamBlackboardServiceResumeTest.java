@@ -16,7 +16,7 @@ import com.echomind.agent.team.store.TeamRunMapper;
 import com.echomind.agent.team.store.TeamStepEntity;
 import com.echomind.agent.team.store.TeamStepMapper;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.task.TaskExecutor;
+
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -60,7 +60,7 @@ class TeamBlackboardServiceResumeTest {
         assertThat(run.getResultReviewJson()).isNull();
         assertThat(run.getFinalOutput()).isNull();
         assertThat(run.getMermaidDiagram()).isNull();
-        assertThat(scheduled).hasSize(1);
+        assertThat(run.getStatus()).isEqualTo(TeamRunStatus.PENDING);
         verify(stepMapper).deleteByRunId("run-1");
     }
 
@@ -86,7 +86,6 @@ class TeamBlackboardServiceResumeTest {
         assertThat(run.getArbitrationJson()).isNull();
         assertThat(run.getFinalOutput()).isNull();
         assertThat(run.getMermaidDiagram()).isNull();
-        assertThat(scheduled).hasSize(1);
         verify(stepMapper, never()).deleteByRunId("run-1");
     }
 
@@ -116,7 +115,6 @@ class TeamBlackboardServiceResumeTest {
         assertThat(json.stringList(runningStep.getPreviousOutputsJson())).isEmpty();
         assertThat(run.getMergeOutput()).isNull();
         assertThat(run.getGlobalReviewJson()).isNull();
-        assertThat(scheduled).hasSize(1);
     }
 
     @Test
@@ -162,7 +160,6 @@ class TeamBlackboardServiceResumeTest {
         assertThat(snapshot.status()).isEqualTo(TeamRunStatus.PENDING);
         assertThat(askedStep.getStatus()).isEqualTo(TeamStepStatus.RETRYING);
         assertThat(completedStep.getStatus()).isEqualTo(TeamStepStatus.COMPLETED);
-        assertThat(scheduled).hasSize(1);
     }
 
     @Test
@@ -214,7 +211,6 @@ class TeamBlackboardServiceResumeTest {
     }
 
     private TeamBlackboardService service() {
-        TaskExecutor executor = scheduled::add;
         return new TeamBlackboardService(
             teamMapper,
             memberMapper,
@@ -222,8 +218,7 @@ class TeamBlackboardServiceResumeTest {
             stepMapper,
             eventMapper,
             agentFactory,
-            null,
-            executor
+            null
         );
     }
 

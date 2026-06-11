@@ -4,8 +4,6 @@ import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
 import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.common.model.AgentMessage;
-import com.echomind.memory.embedding.EmbeddingClient;
-import com.echomind.memory.embedding.QueryEmbeddingCache;
 import com.echomind.memory.usermemory.UserMemoryHit;
 import com.echomind.memory.usermemory.UserMemoryStore;
 import com.echomind.memory.usermemory.UserProfileSnapshot;
@@ -20,7 +18,6 @@ import java.util.stream.Collectors;
 @Slf4j
 public class UserMemoryRetrievalStage implements PipelineStage {
 
-    private final EmbeddingClient embeddingClient; // 向量嵌入客户端
     // 用户长期记忆的向量存储,用向量搜索跟用户相关的历史事实
     private final UserMemoryStore vectorStore;
     // 用户画像快照存储,存的是压缩后的长期用户画像摘要
@@ -35,36 +32,32 @@ public class UserMemoryRetrievalStage implements PipelineStage {
     private final double minSimilarity;
     private final RetrievalQueryRewriter queryRewriter;
 
-    public UserMemoryRetrievalStage(EmbeddingClient embeddingClient,
-                                    UserMemoryStore vectorStore,
+    public UserMemoryRetrievalStage(UserMemoryStore vectorStore,
                                     UserProfileSnapshotStore snapshotStore,
                                     boolean enabled,
                                     int topK,
                                     double minConfidence) {
-        this(embeddingClient, vectorStore, snapshotStore, enabled, topK, minConfidence,
+        this(vectorStore, snapshotStore, enabled, topK, minConfidence,
             0.40, RetrievalQueryRewriter.disabled());
     }
 
-    public UserMemoryRetrievalStage(EmbeddingClient embeddingClient,
-                                    UserMemoryStore vectorStore,
+    public UserMemoryRetrievalStage(UserMemoryStore vectorStore,
                                     UserProfileSnapshotStore snapshotStore,
                                     boolean enabled,
                                     int topK,
                                     double minConfidence,
                                     RetrievalQueryRewriter queryRewriter) {
-        this(embeddingClient, vectorStore, snapshotStore, enabled, topK, minConfidence,
+        this(vectorStore, snapshotStore, enabled, topK, minConfidence,
             0.40, queryRewriter);
     }
 
-    public UserMemoryRetrievalStage(EmbeddingClient embeddingClient,
-                                    UserMemoryStore vectorStore,
+    public UserMemoryRetrievalStage(UserMemoryStore vectorStore,
                                     UserProfileSnapshotStore snapshotStore,
                                     boolean enabled,
                                     int topK,
                                     double minConfidence,
                                     double minSimilarity,
                                     RetrievalQueryRewriter queryRewriter) {
-        this.embeddingClient = embeddingClient;
         this.vectorStore = vectorStore;
         this.snapshotStore = snapshotStore;
         this.enabled = enabled;
@@ -83,7 +76,7 @@ public class UserMemoryRetrievalStage implements PipelineStage {
     public PipelineContext process(PipelineContext ctx) {
         // 如果不需要获取用户画像和历史事实的记忆就直接跳过
         if (!enabled || ctx.getUserMemoryKey() == null || ctx.getUserMemoryKey().isBlank()) {
-            log.debug("Skip user memory retrieval enabled={} userMemoryKey={}", enabled, ctx.getUserMemoryKey());
+            log.info("Skip user memory retrieval enabled={} userMemoryKey={}", enabled, ctx.getUserMemoryKey());
             return ctx;
         }
         // 获取用户画像,如果存在,就直接存入系统提示词里面,作为依据
@@ -93,18 +86,11 @@ public class UserMemoryRetrievalStage implements PipelineStage {
         }
         // 从历史事实向量数据库
         String retrievalQuery = queryRewriter.queryFor(ctx);
-        return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, retrievalQuery)
-            .map(vector -> {
-                List<UserMemoryHit> hits = vectorStore.search(ctx.getUserMemoryKey(), vector, topK, minConfidence,
-                    minSimilarity);
-                log.debug("User memory retrieval userMemoryKey={} store={} hits={}",
-                    ctx.getUserMemoryKey(), vectorStore.getClass().getSimpleName(), hits.size());
-                return injectHits(ctx, hits);
-            })
-            .orElseGet(() -> {
-                log.debug("User memory retrieval userMemoryKey={} skipped: query embedding unavailable", ctx.getUserMemoryKey());
-                return ctx;
-            });
+        List<UserMemoryHit> hits = vectorStore.search(ctx.getUserMemoryKey(), retrievalQuery, topK, minConfidence,
+            minSimilarity);
+        log.info("User memory retrieval userMemoryKey={} store={} hits={}",
+            ctx.getUserMemoryKey(), vectorStore.getClass().getSimpleName(), hits.size());
+        return injectHits(ctx, hits);
     }
 
     private void injectSnapshot(PipelineContext ctx, UserProfileSnapshot snapshot) {
@@ -136,15 +122,28 @@ public class UserMemoryRetrievalStage implements PipelineStage {
 
     private String buildPrompt(List<UserMemoryHit> hits) {
         String body = hits.stream()
-            .map(hit -> "[%s] %s".formatted(hit.category().displayName(), hit.content()))
+            .map(hit -> "[%s · %s] %s".formatted(
+                hit.category().displayName(),
+                formatDate(hit.lastObservedAt()),
+                hit.content()))
             .collect(Collectors.joining("\n"));
         return """
-            === 用户相关长期事实 ===
-            下面是与本轮问题相关的用户长期事实。回答时可用它理解用户背景、偏好和稳定约束；如果与本轮问题无关，不要强行提及。
+            === 历史会话事实 ===
+            下面是与本轮问题相关的历史对话事实，按时间从新到旧排列。
+            回答时可参考这些事实理解上下文和用户背景；如果与本轮问题无关，不要强行提及。
+            时间戳可帮助你判断事实的新旧，较新的事实通常更可信。
 
             %s
-            === End 用户相关长期事实 ===
+            === End 历史会话事实 ===
             """.formatted(body);
+    }
+
+    private String formatDate(java.time.Instant instant) {
+        if (instant == null) {
+            return "未知";
+        }
+        return java.time.format.DateTimeFormatter.ISO_LOCAL_DATE.format(
+            instant.atZone(java.time.ZoneId.systemDefault()));
     }
 
     private double clampSimilarity(double value) {

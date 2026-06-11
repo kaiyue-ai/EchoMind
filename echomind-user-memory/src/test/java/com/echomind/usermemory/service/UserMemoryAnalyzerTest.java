@@ -36,26 +36,23 @@ class UserMemoryAnalyzerTest {
                 {"type":"preference","content":"用户希望注释使用中文","evidence":"用户说中文注释","confidence":0.9}
               ],
               "factsToUpdate": [
-                {"factId":"known","type":"background","content":"用户项目是 EchoMind","evidence":"用户提到项目","confidence":0.8},
+                {"factId":"known","type":"preference","content":"用户项目是 EchoMind","evidence":"用户提到项目","confidence":0.8},
                 {"factId":"unknown","content":"不应该采纳","confidence":0.8}
               ],
               "factsToDelete": [
                 {"factId":"known","reason":"被覆盖"},
                 {"factId":"unknown","reason":"无效"}
-              ],
-              "profileSnapshot": "用户使用 EchoMind，偏好中文注释。"
+              ]
             }
             """);
         UserMemoryAnalyzer analyzer = analyzer(provider);
 
-        UserMemoryAnalysisResult result = analyzer.analyze(
+        UserMemoryAnalysisResult result = analyzer.analyzeEpisodes(
             "user:default",
             "旧画像",
             turn("default", "session-1", AgentMessage.user("以后注释用中文")),
             List.of(new UserMemoryHit("known", UserMemoryCategory.PREFERENCE, "旧事实", "", 0.8,
-                Instant.now(), Instant.now(), Instant.now(), 0.9)),
-            true,
-            true
+                Instant.now(), Instant.now(), Instant.now(), 0.9))
         );
 
         assertThat(result.factsToAdd()).hasSize(1);
@@ -64,33 +61,47 @@ class UserMemoryAnalyzerTest {
             .containsExactly("known");
         assertThat(result.factsToDelete()).extracting(UserMemoryAnalysisResult.FactToDelete::factId)
             .containsExactly("known");
-        assertThat(result.profileSnapshot()).contains("中文注释");
     }
 
     @Test
-    void sendsSwitchesOldProfileConversationAndFactTimestampsToLlm() {
+    void sendsOldProfileConversationAndFactTimestampsToLlm() {
         ModelProvider provider = mock(ModelProvider.class);
         when(provider.providerId()).thenReturn("mock");
-        when(provider.chat(any(ProviderRequest.class))).thenReturn("{\"profileSnapshot\":\"旧画像\"}");
+        when(provider.chat(any(ProviderRequest.class))).thenReturn("{}");
         UserMemoryAnalyzer analyzer = analyzer(provider);
 
-        analyzer.analyze(
+        analyzer.analyzeEpisodes(
             "user:default",
             "旧画像",
             turn("default", "session-1", AgentMessage.user("我用 Windows")),
-            List.of(new UserMemoryHit("fact-1", UserMemoryCategory.BACKGROUND, "用户使用 PowerShell", "", 0.9,
+            List.of(new UserMemoryHit("fact-1", UserMemoryCategory.PREFERENCE, "用户使用 PowerShell", "", 0.9,
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-02-01T00:00:00Z"),
                 Instant.parse("2026-02-02T00:00:00Z"),
-                0.8)),
-            false,
-            true
+                0.8))
         );
 
         var captor = forClass(ProviderRequest.class);
         verify(provider).chat(captor.capture());
         assertThat(captor.getValue().userMessage())
-            .contains("rememberFacts=false", "refreshProfile=true", "旧画像", "我用 Windows", "factId=fact-1", "2026-01-01T00:00:00Z");
+            .contains("旧画像", "我用 Windows", "factId=fact-1", "2026-01-01T00:00:00Z");
+    }
+
+    @Test
+    void refreshProfileReturnsProfileText() {
+        ModelProvider provider = mock(ModelProvider.class);
+        when(provider.providerId()).thenReturn("mock");
+        when(provider.chat(any(ProviderRequest.class))).thenReturn("用户使用 EchoMind，偏好中文注释和 PowerShell 脚本。");
+        UserMemoryAnalyzer analyzer = analyzer(provider);
+
+        String profile = analyzer.refreshProfile("user-a", "旧画像", List.of(
+            new UserMemoryHit("f1", UserMemoryCategory.PREFERENCE, "用户偏好中文注释", "", 0.9,
+                Instant.now(), Instant.now(), Instant.now(), 0.9),
+            new UserMemoryHit("f2", UserMemoryCategory.EPISODE, "用户完成了数据库迁移", "", 0.85,
+                Instant.now(), Instant.now(), Instant.now(), 0.85)
+        ));
+
+        assertThat(profile).contains("中文注释");
     }
 
     private UserMemoryAnalyzer analyzer(ModelProvider provider) {

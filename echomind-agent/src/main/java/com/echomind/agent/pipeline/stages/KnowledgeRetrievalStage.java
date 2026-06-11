@@ -4,8 +4,6 @@ import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
 import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.common.model.AgentMessage;
-import com.echomind.memory.embedding.EmbeddingClient;
-import com.echomind.memory.embedding.QueryEmbeddingCache;
 import com.echomind.memory.knowledge.AgentKnowledgeHit;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
 
@@ -22,24 +20,19 @@ public class KnowledgeRetrievalStage implements PipelineStage {
 
     // 知识库服务
     private final AgentKnowledgeService knowledgeService;
-    // 计算向量数据的客户端
-    private final EmbeddingClient embeddingClient;
     // 向量搜索结果数量
     private final int topK;
     private final RetrievalQueryRewriter queryRewriter;
 
     public KnowledgeRetrievalStage(AgentKnowledgeService knowledgeService,
-                                   EmbeddingClient embeddingClient,
                                    int topK) {
-        this(knowledgeService, embeddingClient, topK, RetrievalQueryRewriter.disabled());
+        this(knowledgeService, topK, RetrievalQueryRewriter.disabled());
     }
 
     public KnowledgeRetrievalStage(AgentKnowledgeService knowledgeService,
-                                   EmbeddingClient embeddingClient,
                                    int topK,
                                    RetrievalQueryRewriter queryRewriter) {
         this.knowledgeService = knowledgeService;
-        this.embeddingClient = embeddingClient;
         this.topK = topK;
         this.queryRewriter = queryRewriter == null ? RetrievalQueryRewriter.disabled() : queryRewriter;
     }
@@ -53,15 +46,13 @@ public class KnowledgeRetrievalStage implements PipelineStage {
     // 搜素与用户消息相关的向量数据库的三四条消息
     public PipelineContext process(PipelineContext ctx) {
         String retrievalQuery = queryRewriter.queryFor(ctx);
-        return QueryEmbeddingCache.getOrEmbed(ctx.getAttributes(), embeddingClient, retrievalQuery)
-            .map(vector -> knowledgeService.search(ctx.getAgentId(), ctx.getUserMessage(), vector, topK))
-            .map(hits -> injectHits(ctx, hits))
-            .orElse(ctx);
+        List<AgentKnowledgeHit> hits = knowledgeService.search(ctx.getAgentId(), retrievalQuery, topK);
+        return injectHits(ctx, hits);
     }
 
     private PipelineContext injectHits(PipelineContext ctx, List<AgentKnowledgeHit> hits) {
         if (!hits.isEmpty()) {
-            ctx.getAttributes().put("knowledgeHits", hits);
+            ctx.getAttributes().put(PipelineContext.ATTR_KNOWLEDGE_HITS, hits);
             ctx.getMessages().add(0, AgentMessage.system(buildKnowledgePrompt(hits)));
         }
         return ctx;

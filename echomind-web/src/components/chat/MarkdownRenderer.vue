@@ -1,14 +1,16 @@
 <template>
-  <div class="markdown-body" v-html="html" @click="handleClick"></div>
+  <div :class="['markdown-body', { 'markdown-streaming': streaming }]" v-html="html" @click="handleClick"></div>
 </template>
 
 <script setup>
 import { computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
+import { copyText } from '../../utils/clipboard'
 
 const props = defineProps({
-  content: { type: String, default: '' }
+  content: { type: String, default: '' },
+  streaming: { type: Boolean, default: false }
 })
 
 const renderer = new marked.Renderer()
@@ -27,7 +29,7 @@ renderer.image = (href, title, text) => {
   const safeHref = safeUrl(href)
   if (!safeHref) return escapeHtml(text)
   const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
-  return `<img src="${safeHref}" alt="${escapeHtml(text)}"${titleAttr}>`
+  return `<img src="${safeHref}" alt="${escapeHtml(text)}"${titleAttr} loading="lazy" decoding="async">`
 }
 renderer.code = (code, language) => {
   const normalizedLanguage = sanitizeCodeLanguage(language)
@@ -44,7 +46,25 @@ renderer.code = (code, language) => {
 
 marked.setOptions({ breaks: true, gfm: true, renderer, tokenizer })
 
-const html = computed(() => props.content ? marked.parse(props.content) : '')
+const htmlCache = new Map()
+const MAX_HTML_CACHE_SIZE = 120
+
+const html = computed(() => {
+  const content = props.content || ''
+  if (!content) return ''
+  if (props.streaming) {
+    return marked.parse(content)
+  }
+  const cacheKey = `f:${content}`
+  const cached = htmlCache.get(cacheKey)
+  if (cached) return cached
+  const parsed = marked.parse(content)
+  htmlCache.set(cacheKey, parsed)
+  if (htmlCache.size > MAX_HTML_CACHE_SIZE) {
+    htmlCache.delete(htmlCache.keys().next().value)
+  }
+  return parsed
+})
 
 async function handleClick(event) {
   const button = event.target?.closest?.('.code-copy-btn')
@@ -63,24 +83,6 @@ async function handleClick(event) {
   } catch (e) {
     ElMessage.error('复制失败，请手动选择代码复制')
   }
-}
-
-async function copyText(text) {
-  if (navigator.clipboard && window.isSecureContext) {
-    await navigator.clipboard.writeText(text)
-    return
-  }
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', '')
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  textarea.style.top = '-9999px'
-  document.body.appendChild(textarea)
-  textarea.select()
-  const copied = document.execCommand('copy')
-  document.body.removeChild(textarea)
-  if (!copied) throw new Error('copy failed')
 }
 
 function escapeHtml(value) {

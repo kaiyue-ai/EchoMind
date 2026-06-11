@@ -7,7 +7,9 @@
     collapsed-width="82px"
   >
     <template #scrim>
-      <div v-if="mobileSidebarOpen" class="admin-mobile-scrim" @click="uiStore.closeMobileSidebar()"></div>
+      <Transition name="scrim-fade">
+        <div v-if="mobileSidebarOpen" class="admin-mobile-scrim" @click="uiStore.closeMobileSidebar()"></div>
+      </Transition>
     </template>
 
     <aside class="admin-sidebar">
@@ -19,7 +21,8 @@
         </div>
       </div>
 
-      <nav class="admin-nav">
+      <nav class="admin-nav" :style="adminNavIndicatorStyle">
+        <span class="admin-nav-active-indicator" aria-hidden="true"></span>
         <router-link
           v-for="item in navItems"
           :key="item.path"
@@ -101,7 +104,11 @@
       </header>
 
       <main class="admin-content">
-        <router-view />
+        <router-view v-slot="{ Component, route: viewRoute }">
+          <transition name="admin-route" mode="out-in">
+            <component :is="Component" :key="viewRoute.path" class="admin-route-view" />
+          </transition>
+        </router-view>
       </main>
     </section>
   </ResponsiveShell>
@@ -154,6 +161,15 @@ const navItems = [
 ]
 
 const userInitial = computed(() => String(authStore.user?.username || 'A').slice(0, 1).toUpperCase())
+const currentNavIndex = computed(() => {
+  const index = navItems.findIndex(item => isActive(item.path))
+  return index >= 0 ? index : 0
+})
+const adminNavIndicatorStyle = computed(() => {
+  return {
+    '--admin-nav-indicator-y': `${16 + currentNavIndex.value * 52}px`
+  }
+})
 
 function isActive(path) {
   return route.path === path || route.path.startsWith(`${path}/`)

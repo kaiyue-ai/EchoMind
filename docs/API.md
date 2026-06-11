@@ -30,8 +30,8 @@
 `GET /api/chat/stream/{requestId}` 订阅 `meta`、`token`、`tool_start`、`tool_end`、`result`
 或 `failure` SSE 事件。
 后端实际链路是 `ChatRabbitProducer -> echomind.chat.requests -> ChatRabbitConsumer`；
-消费者执行流式 Agent 后，再把事件发布到 `echomind.chat.stream-events`，由 `SsePushService`
-消费并转发给 SSE 订阅方。
+消费者执行流式 Agent 后，直接把事件交给 `SsePushService` 转发给 SSE 订阅方。
+公开聊天不提供同步执行 HTTP 入口。
 
 ### GET `/api/chat/stream/{requestId}` — 订阅异步聊天事件
 ```text
@@ -54,33 +54,9 @@ event: failure
 data: {"error":"模型调用失败","traceId":"1f2e3d4c..."}
 ```
 
-### POST `/api/chat/sync` — 同步执行聊天
-```json
-// 请求
-{
-  "agentId": "default",
-  "sessionId": "uuid-optional",
-  "message": "北京今天天气怎么样？",
-  "modelId": "deepseek:deepseek-v4-flash"
-}
-
-// 响应
-{
-  "sessionId": "a1b2c3d4-...",
-  "agentId": "default",
-  "modelId": "deepseek:deepseek-v4-flash",
-  "traceId": "1f2e3d4c...",
-  "response": "北京今天晴天，22°C...",
-  "skillResults": ["[weather-query]: Weather for Beijing: Sunny, 22C"],
-  "tokenUsage": {
-    "promptTokens": 120,
-    "completionTokens": 60,
-    "totalTokens": 180
-  }
-}
-```
-
 ### GET `/api/chat/sessions` — 获取会话摘要列表
+`lastMessage` 使用最近一条可展示消息，内部工具调用消息不会作为侧边栏预览。
+
 ```json
 // 响应
 [
@@ -94,6 +70,8 @@ data: {"error":"模型调用失败","traceId":"1f2e3d4c..."}
 ```
 
 ### GET `/api/chat/{sessionId}/history` — 获取会话历史
+返回前端可展示的消息角色：`user`、`assistant`、`system`。内部 `tool` 消息仍保留在 MySQL 审计历史中，但不会从展示历史接口返回。
+
 ```json
 // 响应
 [
@@ -236,21 +214,6 @@ data: {"error":"模型调用失败","traceId":"1f2e3d4c..."}
 }
 
 // 响应: Agent 实体
-```
-
-### POST `/api/agents/{agentId}/execute` — 执行Agent
-```json
-// 请求
-{
-  "message": "1+1等于几？",
-  "sessionId": "optional-uuid"
-}
-
-// 响应
-{
-  "sessionId": "uuid",
-  "response": "1+1等于2"
-}
 ```
 
 ---
@@ -412,7 +375,15 @@ Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进
 ### POST `/api/teams/{teamId}/runs` — 创建异步团队 Run
 ```json
 // 请求
-{ "task": "策划一场60人户外团建活动" }
+{
+  "task": "策划一场60人户外团建活动",
+  "reviewOptions": {
+    "planReviewEnabled": true,
+    "subReviewEnabled": true,
+    "globalReviewEnabled": true,
+    "simpleFastPathEnabled": false
+  }
+}
 
 // 响应
 {
@@ -422,10 +393,20 @@ Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进
   "task": "策划一场60人户外团建活动",
   "status": "PENDING",
   "taskLevel": "COMPLEX",
+  "reviewOptions": {
+    "planReviewEnabled": true,
+    "subReviewEnabled": true,
+    "globalReviewEnabled": true,
+    "simpleFastPathEnabled": false
+  },
   "steps": [],
   "events": []
 }
 ```
+
+`reviewOptions` 可省略，默认是质量优先：PlanReview、SubReview、GlobalReview 全开，SIMPLE 直返关闭。
+关闭某个 Review 会跳过对应 LLM 审查并写入审计 JSON；开启 `simpleFastPathEnabled` 后，Planner 判定
+`SIMPLE` 且只有一个可执行 Step 时直接由单 Executor 输出最终结果。
 
 ### GET `/api/teams/{teamId}/runs` — 查询当前用户在该团队下的 Run
 ```json
@@ -449,6 +430,12 @@ Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进
   "runId": "uuid",
   "status": "EXECUTING",
   "taskLevel": "COMPLEX",
+  "reviewOptions": {
+    "planReviewEnabled": true,
+    "subReviewEnabled": true,
+    "globalReviewEnabled": true,
+    "simpleFastPathEnabled": false
+  },
   "clarificationStage": null,
   "planReviewJson": "{\"action\":\"CONTINUE\"}",
   "resultReviewJson": null,

@@ -6,7 +6,11 @@ import com.echomind.agent.pipeline.ExecutionPipeline;
 import com.echomind.agent.store.AgentPersistenceService;
 import com.echomind.boot.properties.EchoMindProperties;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -15,6 +19,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentRuntimeBootstrapperTest {
+
+    @TempDir
+    Path tempDir;
 
     @Test
     void restoresPersistedAgentsAndMigratesOnlyStartupDefaults() {
@@ -136,6 +143,32 @@ class AgentRuntimeBootstrapperTest {
             "fallback".equals(agent.getAgentId())
                 && "mock:mock-model".equals(agent.getModelId())
                 && agent.getSkillIds().equals(List.of("calculator"))));
+    }
+
+    @Test
+    void createsConfiguredAgentFromSystemPromptResource() throws Exception {
+        Path promptFile = tempDir.resolve("prompt.txt");
+        Files.writeString(promptFile, "resource prompt", StandardCharsets.UTF_8);
+
+        EchoMindProperties props = new EchoMindProperties();
+        EchoMindProperties.AgentDef zhang = new EchoMindProperties.AgentDef();
+        zhang.setAgentId("zhangxuefeng");
+        zhang.setName("张雪峰");
+        zhang.setSystemPromptResource(promptFile.toUri().toString());
+        zhang.setModelId("aliyun-bailian:qwen3.6-plus");
+        zhang.setSkillIds(List.of("date-query"));
+        props.setAgents(List.of(zhang));
+
+        AgentPersistenceService persistence = mock(AgentPersistenceService.class);
+        when(persistence.loadAll()).thenReturn(List.of());
+        when(persistence.exists("zhangxuefeng")).thenReturn(false);
+
+        new AgentRuntimeBootstrapper(props).restore(mock(ExecutionPipeline.class), props, persistence);
+
+        verify(persistence).save(org.mockito.ArgumentMatchers.argThat(agent ->
+            "zhangxuefeng".equals(agent.getAgentId())
+                && "resource prompt".equals(agent.getSystemPrompt())
+                && "aliyun-bailian:qwen3.6-plus".equals(agent.getModelId())));
     }
 
     private EchoMindProperties.ModelMigration exactMigration(String from, String to) {

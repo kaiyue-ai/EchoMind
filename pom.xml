@@ -41,8 +41,6 @@
 
         <spring-boot.version>3.5.14</spring-boot.version>
         <spring-ai.version>1.1.6</spring-ai.version>
-        <spring-shell.version>3.3.3</spring-shell.version>
-
         <jackson.version>2.17.2</jackson.version>
         <okhttp.version>4.12.0</okhttp.version>
         <exp4j.version>0.4.8</exp4j.version>
@@ -53,7 +51,6 @@
         <knife4j.version>4.5.0</knife4j.version>
         <aliyun-oss.version>3.18.1</aliyun-oss.version>
         <pdfbox.version>2.0.31</pdfbox.version>
-        <milvus-sdk.version>2.6.20</milvus-sdk.version>
         <opentelemetry.instrumentation.version>2.26.0</opentelemetry.instrumentation.version>
 
         <maven-surefire-plugin.version>3.3.1</maven-surefire-plugin.version>
@@ -84,12 +81,6 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-            <dependency>
-                <groupId>org.springframework.shell</groupId>
-                <artifactId>spring-shell-starter</artifactId>
-                <version>${spring-shell.version}</version>
-            </dependency>
-
             <!-- Internal modules -->
             <dependency>
                 <groupId>com.echomind</groupId>
@@ -192,11 +183,6 @@
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${pdfbox.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.milvus</groupId>
-                <artifactId>milvus-sdk-java</artifactId>
-                <version>${milvus-sdk.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

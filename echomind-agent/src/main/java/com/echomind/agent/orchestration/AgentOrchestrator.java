@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import reactor.core.publisher.Flux;
@@ -67,11 +68,24 @@ public class AgentOrchestrator {
         return executeInternal("default", agentId, sessionId, userMessage, toolExposureEnabled);
     }
 
+    /** 执行内部任务，并允许调用方在 PipelineContext 创建时写入初始属性。 */
+    public PipelineContext executeInternal(String agentId, String sessionId, String userMessage,
+                                           boolean toolExposureEnabled, Map<String, Object> initialAttributes) {
+        return executeInternal("default", agentId, sessionId, userMessage, toolExposureEnabled, initialAttributes);
+    }
+
     /** 执行内部任务，可指定用量归属用户，但仍不写普通聊天记忆。 */
     public PipelineContext executeInternal(String userId, String agentId, String sessionId, String userMessage,
                                            boolean toolExposureEnabled) {
         return execute(userId, agentId, sessionId, userMessage, null, List.of(), false, toolExposureEnabled,
             null);
+    }
+
+    /** 执行内部任务，可指定用量归属用户和初始 PipelineContext 属性。 */
+    public PipelineContext executeInternal(String userId, String agentId, String sessionId, String userMessage,
+                                           boolean toolExposureEnabled, Map<String, Object> initialAttributes) {
+        return execute(userId, agentId, sessionId, userMessage, null, List.of(), false, toolExposureEnabled,
+            null, initialAttributes);
     }
 
     private Agent resolveAgent(String agentId) {
@@ -95,6 +109,13 @@ public class AgentOrchestrator {
     private PipelineContext buildPipelineContext(String userId, Agent agent, String sessionId, String userMessage,
                                                   String modelId, List<MessageAttachment> attachments,
                                                   String rawUserMessage) {
+        return buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments, rawUserMessage,
+            Map.of());
+    }
+
+    private PipelineContext buildPipelineContext(String userId, Agent agent, String sessionId, String userMessage,
+                                                  String modelId, List<MessageAttachment> attachments,
+                                                  String rawUserMessage, Map<String, Object> initialAttributes) {
         PipelineContext ctx = new PipelineContext();
         ctx.setUserId(normalizeUserId(userId));
         ctx.setAgentId(agent.getAgentId());
@@ -106,9 +127,11 @@ public class AgentOrchestrator {
         if (attachments != null) {
             ctx.getAttachments().addAll(attachments);
         }
-        ctx.getAttributes().put(PipelineContext.ATTR_AGENT_SKILL_IDS, agent.getSkillIds());
         if (rawUserMessage != null && !rawUserMessage.isBlank()) {
             ctx.getAttributes().put(PipelineContext.ATTR_RAW_USER_MESSAGE, rawUserMessage);
+        }
+        if (initialAttributes != null && !initialAttributes.isEmpty()) {
+            ctx.getAttributes().putAll(initialAttributes);
         }
         return ctx;
     }
@@ -149,6 +172,14 @@ public class AgentOrchestrator {
     private PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
                                     List<MessageAttachment> attachments, boolean memoryPersistenceEnabled,
                                     boolean toolExposureEnabled, String rawUserMessage) {
+        return execute(userId, agentId, sessionId, userMessage, modelId, attachments, memoryPersistenceEnabled,
+            toolExposureEnabled, rawUserMessage, Map.of());
+    }
+
+    private PipelineContext execute(String userId, String agentId, String sessionId, String userMessage, String modelId,
+                                    List<MessageAttachment> attachments, boolean memoryPersistenceEnabled,
+                                    boolean toolExposureEnabled, String rawUserMessage,
+                                    Map<String, Object> initialAttributes) {
         // 1. 解析并获取 Agent 实例
         Agent agent = resolveAgent(agentId);
         if (agent == null) {
@@ -162,7 +193,7 @@ public class AgentOrchestrator {
 
         // 2. 构建执行上下文
         PipelineContext ctx = buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments,
-            rawUserMessage);
+            rawUserMessage, initialAttributes);
         // 设置记忆持久化标志
         ctx.setMemoryPersistenceEnabled(memoryPersistenceEnabled);
 
@@ -204,9 +235,41 @@ public class AgentOrchestrator {
                                                      String userMessage, String modelId,
                                                      List<MessageAttachment> attachments,
                                                      String rawUserMessage) {
+        return executeStreamContext(userId, agentId, sessionId, userMessage, modelId, attachments, rawUserMessage,
+            Map.of());
+    }
+
+    /**
+     * 执行流式对话，并在结束时保留 PipelineContext 给调用层读取原生 token usage。
+     *
+     * <p>核心流程：
+     * 1. 解析 Agent（不存在则返回失败上下文）
+     * 2. 构建 PipelineContext
+     * 3. 创建追踪 Span
+     * 4. 调用 Agent.chatStream() 获取 token 流
+     * 5. 返回 StreamExecution（包含上下文和流）
+     *
+     * @param userId 用户ID
+     * @param agentId Agent ID
+     * @param sessionId 会话ID
+     * @param userMessage 用户消息
+     * @param modelId 模型ID（可选，覆盖Agent默认模型）
+     * @param attachments 消息附件（图片等）
+     * @param rawUserMessage 原始用户消息（用于审计）
+     * @param initialAttributes 初始上下文属性
+     * @return Mono<StreamExecution> 流式执行结果
+     */
+    public Mono<StreamExecution> executeStreamContext(String userId, String agentId, String sessionId,
+                                                     String userMessage, String modelId,
+                                                     List<MessageAttachment> attachments,
+                                                     String rawUserMessage,
+                                                     Map<String, Object> initialAttributes) {
+        // 使用 Mono.defer() 延迟执行，只在订阅时才创建上下文和调用Agent
         return Mono.defer(() -> {
+            // 1. 解析 Agent（不存在则回退到第一个可用Agent，仍不存在则返回失败）
             Agent agent = resolveAgent(agentId);
             if (agent == null) {
+                // Agent 不存在，构建失败上下文
                 PipelineContext missing = new PipelineContext();
                 missing.setUserId(normalizeUserId(userId));
                 missing.setAgentId(agentId);
@@ -218,21 +281,32 @@ public class AgentOrchestrator {
                 return Mono.just(new StreamExecution(missing, Flux.just(missing.getFinalResponse())));
             }
 
+            // 2. 构建执行上下文
             PipelineContext ctx = buildPipelineContext(userId, agent, sessionId, userMessage, modelId, attachments,
-                rawUserMessage);
+                rawUserMessage, initialAttributes);
 
+            // 3. 记录日志（截断消息到50字符）
             log.info("[Orchestrator:stream] Agent={} model={} session={} msg={}", agent.getAgentId(),
                 ctx.getModelId(), ctx.getSessionId(),
                 userMessage.substring(0, Math.min(50, userMessage.length())));
 
+            // 4. 创建 OpenTelemetry 追踪 Span
             Span span = orchestrationSpan("echomind.agent.orchestrate_stream", ctx);
             try (Scope ignored = span.makeCurrent()) {
+                // 设置追踪ID到上下文
                 ctx.setTraceId(EchoMindTrace.traceId(span));
+                
+                // 5. 调用 Agent 的流式对话方法
                 Flux<String> tokens = agent.chatStream(ctx)
+                    // 错误时记录异常到追踪
                     .doOnError(error -> EchoMindTrace.recordException(span, error))
+                    // 流结束时结束追踪Span
                     .doFinally(signalType -> span.end());
-                return Mono.just(new StreamExecution(ctx, tokens));
+                
+                // 6. 返回 StreamExecution（包含上下文和token流） 使用Mono来包装流的上下文
+                return Mono.just(new StreamExecution(ctx, tokens)); // 返回一个Mono
             } catch (RuntimeException e) {
+                // 同步异常处理：记录到追踪并重新抛出
                 EchoMindTrace.recordException(span, e);
                 span.end();
                 throw e;

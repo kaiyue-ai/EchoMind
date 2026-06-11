@@ -142,15 +142,10 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import * as echarts from 'echarts/core'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
-import { LineChart, PieChart } from 'echarts/charts'
-import { CanvasRenderer } from 'echarts/renderers'
 import { Bell, Box, Coin, DataLine, Document, Lock, Refresh, Timer, User, Warning } from '@element-plus/icons-vue'
 import api from '../api/admin'
 import { useUiStore } from '../stores/ui'
-
-echarts.use([GridComponent, LegendComponent, TooltipComponent, LineChart, PieChart, CanvasRenderer])
+import { runWhenIdle } from '../utils/scheduler'
 
 const uiStore = useUiStore()
 const loading = ref(false)
@@ -178,6 +173,9 @@ const modelPieRef = ref(null)
 const trendChartRef = ref(null)
 let modelChart = null
 let trendChart = null
+let chartLibrary = null
+let chartLibraryPromise = null
+let cancelChartBootstrap = null
 
 const rangeLabel = computed(() => {
   const labels = { '1d': '近 24 小时', '7d': '近 7 天', '30d': '近 30 天', '90d': '近 90 天', all: '全部时间' }
@@ -191,9 +189,11 @@ watch(() => uiStore.theme, renderCharts)
 onMounted(async () => {
   await refresh()
   window.addEventListener('resize', resizeCharts)
+  cancelChartBootstrap = runWhenIdle(() => renderCharts(), 900)
 })
 
 onBeforeUnmount(() => {
+  cancelChartBootstrap?.()
   window.removeEventListener('resize', resizeCharts)
   modelChart?.dispose()
   trendChart?.dispose()
@@ -208,7 +208,7 @@ async function refresh() {
     modelDistribution.value = res.modelDistribution || []
     tokenTrend.value = res.tokenTrend || []
     await nextTick()
-    renderCharts()
+    runWhenIdle(() => renderCharts(), 600)
   } catch (e) {
     error.value = api.parseError(e, '加载仪表盘失败')
   } finally {
@@ -223,7 +223,9 @@ function renderCharts() {
   })
 }
 
-function renderModelChart() {
+async function renderModelChart() {
+  if (!modelPieRef.value) return
+  const echarts = await loadChartLibrary()
   if (!modelPieRef.value) return
   modelChart = modelChart || echarts.init(modelPieRef.value)
   const theme = chartTheme()
@@ -248,7 +250,9 @@ function renderModelChart() {
   })
 }
 
-function renderTrendChart() {
+async function renderTrendChart() {
+  if (!trendChartRef.value) return
+  const echarts = await loadChartLibrary()
   if (!trendChartRef.value) return
   trendChart = trendChart || echarts.init(trendChartRef.value)
   const theme = chartTheme()
@@ -302,6 +306,30 @@ function smoothLine(name, data, area = false) {
 function resizeCharts() {
   modelChart?.resize()
   trendChart?.resize()
+}
+
+async function loadChartLibrary() {
+  if (chartLibrary) return chartLibrary
+  if (!chartLibraryPromise) {
+    chartLibraryPromise = Promise.all([
+      import('echarts/core'),
+      import('echarts/components'),
+      import('echarts/charts'),
+      import('echarts/renderers')
+    ]).then(([echartsCore, components, charts, renderers]) => {
+      echartsCore.use([
+        components.GridComponent,
+        components.LegendComponent,
+        components.TooltipComponent,
+        charts.LineChart,
+        charts.PieChart,
+        renderers.CanvasRenderer
+      ])
+      chartLibrary = echartsCore
+      return chartLibrary
+    })
+  }
+  return chartLibraryPromise
 }
 
 function formatNumber(value) {

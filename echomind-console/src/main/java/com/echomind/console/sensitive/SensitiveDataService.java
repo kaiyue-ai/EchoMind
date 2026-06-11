@@ -19,6 +19,8 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -33,6 +35,7 @@ public class SensitiveDataService {
     private final SensitiveEventMapper eventMapper;
     private final AlertService alertService;
     private final SensitiveRuleCache ruleCache;
+    private final ConcurrentMap<String, Pattern> compiledPatternCache = new ConcurrentHashMap<>();
 
     @Transactional
     public GovernedText inspectRequest(AuthUser user, String traceId, String agentId, String sessionId, String text) {
@@ -205,15 +208,20 @@ public class SensitiveDataService {
 
     private void invalidateRulesAfterCommit() {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            ruleCache.invalidateRules();
+            invalidateRuleCaches();
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                ruleCache.invalidateRules();
+                invalidateRuleCaches();
             }
         });
+    }
+
+    private void invalidateRuleCaches() {
+        ruleCache.invalidateRules();
+        compiledPatternCache.clear();
     }
 
     private List<SensitiveRuleEntity> defaultRules() {
@@ -282,6 +290,10 @@ public class SensitiveDataService {
     }
 
     private Pattern compile(String pattern) {
+        return compiledPatternCache.computeIfAbsent(pattern, this::compileUncached);
+    }
+
+    private Pattern compileUncached(String pattern) {
         try {
             return Pattern.compile(pattern);
         } catch (PatternSyntaxException e) {

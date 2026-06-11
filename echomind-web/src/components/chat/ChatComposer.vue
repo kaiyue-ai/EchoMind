@@ -1,15 +1,22 @@
 <template>
   <form class="chat-composer" aria-label="聊天输入" @submit.prevent="requestSend">
-    <div v-if="attachments.length" class="attachment-preview-row">
+    <TransitionGroup v-if="attachments.length" name="attachment-soft" tag="div" class="attachment-preview-row">
       <div v-for="att in attachments" :key="att.uri || att.url" class="attachment-preview">
         <img :src="att.url" :alt="att.fileName || '图片'" />
         <button type="button" class="attachment-remove" aria-label="移除图片" @click="$emit('removeAttachment', att)">
           <el-icon><Close /></el-icon>
         </button>
       </div>
-    </div>
+    </TransitionGroup>
     <div
-      :class="['composer-row', { 'has-content': hasContent, 'is-busy': loading || uploading }]"
+      :class="[
+        'composer-row',
+        {
+          'has-content': hasContent,
+          'is-busy': loading || uploading,
+          'is-near-limit': isNearLimit
+        }
+      ]"
       :aria-busy="loading || uploading"
     >
       <el-input
@@ -17,8 +24,9 @@
         :model-value="modelValue"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 5 }"
+        :maxlength="maxLength"
         resize="none"
-        :disabled="loading"
+        :readonly="loading"
         :placeholder="loading ? '正在生成回复...' : '输入任务或问题...'"
         @update:model-value="$emit('update:modelValue', $event)"
         @compositionstart="isComposing = true"
@@ -27,6 +35,13 @@
       />
       <input ref="imageInput" type="file" accept="image/*" class="hidden-input" @change="handleImageSelected" />
       <div class="composer-actions">
+        <span
+          v-if="showCharacterCount"
+          :class="['composer-char-count', { 'is-warning': isNearLimit }]"
+          aria-live="polite"
+        >
+          {{ remainingChars }}
+        </span>
         <el-button
           circle
           class="composer-tool-button"
@@ -42,16 +57,23 @@
         <el-button
           type="primary"
           circle
-          :class="['composer-send-button', { 'is-ready': !disabled }]"
-          native-type="submit"
-          :loading="loading"
-          :disabled="disabled"
-          title="发送消息"
-          aria-label="发送消息"
+          :class="['composer-send-button', { 'is-ready': !disabled, 'is-stopping': loading }]"
+          :native-type="loading ? 'button' : 'submit'"
+          :disabled="uploading || (!loading && disabled)"
+          :title="loading ? '停止生成' : '发送消息'"
+          :aria-label="loading ? '停止生成' : '发送消息'"
+          @click="handlePrimaryAction"
         >
-          <el-icon><Promotion /></el-icon>
+          <el-icon v-if="loading"><Close /></el-icon>
+          <el-icon v-else><Promotion /></el-icon>
         </el-button>
       </div>
+    </div>
+    <div class="composer-footnote" aria-live="polite">
+      <span v-if="uploading">正在上传图片...</span>
+      <span v-else-if="loading">正在生成，点击停止按钮可中断。</span>
+      <span v-else-if="attachments.length">已附加 {{ attachments.length }} 张图片。</span>
+      <span v-else></span>
     </div>
   </form>
 </template>
@@ -64,18 +86,29 @@ const props = defineProps({
   modelValue: { type: String, default: '' },
   attachments: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
-  uploading: { type: Boolean, default: false }
+  uploading: { type: Boolean, default: false },
+  maxLength: { type: Number, default: 20000 }
 })
 
-const emit = defineEmits(['update:modelValue', 'send', 'selectImage', 'removeAttachment'])
+const emit = defineEmits(['update:modelValue', 'send', 'cancel', 'selectImage', 'removeAttachment'])
 const imageInput = ref(null)
 const isComposing = ref(false)
 
 const hasContent = computed(() => props.modelValue.trim().length > 0 || props.attachments.length > 0)
 const disabled = computed(() => props.loading || props.uploading || (!props.modelValue.trim() && props.attachments.length === 0))
+const remainingChars = computed(() => Math.max(0, props.maxLength - props.modelValue.length))
+const isNearLimit = computed(() => remainingChars.value <= Math.min(1000, Math.ceil(props.maxLength * 0.12)))
+const showCharacterCount = computed(() => props.modelValue.length > 0 || isNearLimit.value)
 
 function requestSend() {
   if (!disabled.value) emit('send')
+}
+
+function handlePrimaryAction(event) {
+  if (props.loading) {
+    event?.preventDefault()
+    emit('cancel')
+  }
 }
 
 function handleEnter(event) {

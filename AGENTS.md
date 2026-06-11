@@ -21,10 +21,10 @@ EchoMind 是一个 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 - 管理面：MVC Controller + Application Service。
 - 智能执行：`AgentOrchestrator -> Agent -> ExecutionPipeline`。
 - 工具能力：已启用 Skill 和已挂载外部 MCP 工具统一进入 `CapabilityRegistry`。
-- 工具路由：`ToolRouter` 只做入口；`ToolMatchScorer` 只基于工具显式 `keywords`、`aliases`、`tags` 和工具名做预匹配，参数由模型正式 tool call 生成并按 schema 校验。
+- 工具路由：`ToolRouter` 只做运行时注册表；普通聊天直接把所有已启用 Skill 和已挂载外部 MCP 工具交给模型，参数由模型正式 tool call 生成并按 schema 校验。
 - 模型协议：`echomind-llm` 通过 Spring AI adapter 接入 OpenAI-compatible 和 DeepSeek Chat Completions；EchoMind 的 Agent、Skill、MCP、Memory 边界不交给 Spring AI 接管。
 - 记忆和知识库：MySQL 保存普通聊天历史和知识库文档元数据；Redis 做近期上下文和用户画像快照；Milvus 做用户长期事实向量以及知识库切片正文和向量。
-- RabbitMQ：只用于异步聊天请求、聊天 SSE 事件、普通聊天记忆分片写入和用户长期记忆事件；Team Run 当前仍由 `TaskExecutor` 推进 MySQL 黑板，不走 RabbitMQ。
+- RabbitMQ：只用于异步聊天请求、普通聊天记忆分片写入和用户长期记忆事件；聊天 token/tool/result/failure 事件由消费者直接交给 SSE 推送服务；Team Run 当前仍由 `TaskExecutor` 推进 MySQL 黑板，不走 RabbitMQ。
 - 前端：Vue 3 + Pinia，跨页面状态必须放 store，不要只放组件局部变量。
 
 ## 最高优先级规则
@@ -37,7 +37,7 @@ EchoMind 是一个 Java 17 / Spring Boot 3.5 + Vue 3 的 AI Agent 平台。
 - 主项目只接入外部 MCP Server，不恢复“主项目暴露 MCP Server”的旧功能。
 - Skill 只进入 Agent 工具视图，不要自动暴露成 MCP Server。
 - 禁用 Skill 或卸载 MCP 后，必须同步移除 `CapabilityRegistry` 中的工具。
-- Provider 不要按具体 Skill 名称硬编码工具参数、工具选择或最终答案策略；使用工具 metadata，例如 `keywords`、`aliases`。
+- Provider 不要按具体 Skill 名称硬编码工具参数、工具选择或最终答案策略；工具是否调用交给模型基于工具描述和 schema 自主决定。
 - Controller 只做 HTTP 适配；业务流程放 Application Service；执行能力放运行时模块。
 - 单 Agent 执行逻辑放 `echomind-agent`；团队协作编排放 `echomind-agent-team`。
 - 不要回滚不属于当前任务的改动。工作区可能本来就是脏的。

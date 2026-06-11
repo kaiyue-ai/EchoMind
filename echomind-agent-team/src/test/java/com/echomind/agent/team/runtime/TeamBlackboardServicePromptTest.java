@@ -14,10 +14,12 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -163,7 +165,7 @@ class TeamBlackboardServicePromptTest {
     void reviewerDecisionRepairsInvalidJsonOnce() {
         AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
         TeamBlackboardService service = new TeamBlackboardService(
-            null, null, null, null, null, null, orchestrator, null
+            null, null, null, null, null, null, orchestrator
         );
         TeamRunEntity run = new TeamRunEntity();
         run.setRunId("run-1");
@@ -184,5 +186,47 @@ class TeamBlackboardServicePromptTest {
         assertThat(decision.reason()).isEqualTo("格式已修复");
         assertThat(decision.finalReport()).isEqualTo("最终报告");
         verify(orchestrator).executeInternal("reviewer", "team-run-run-1-reviewer", "原始审查提示", false);
+    }
+
+    @Test
+    void teamCallPassesUsageReservationsIntoInternalPipelineContext() {
+        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+        TeamBlackboardService service = new TeamBlackboardService(
+            null, null, null, null, null, null, orchestrator
+        );
+        TeamUsageRecorder recorder = mock(TeamUsageRecorder.class);
+        TeamUsageReservation reservation = new TeamUsageReservation(
+            List.of("user-reservation"),
+            List.of("provider-reservation")
+        );
+        service.setUsageRecorder(recorder);
+        TeamRunEntity run = new TeamRunEntity();
+        run.setRunId("run-1");
+        run.setUserId("user-a");
+        TeamMember reviewer = new TeamMember("reviewer", "Reviewer", TeamRole.REVIEWER, List.of("review"), 30, null);
+        PipelineContext ctx = new PipelineContext();
+        ctx.setFinalResponse("""
+            {"action":"CONTINUE","reason":"通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
+            """);
+        when(recorder.reserveUsage("user-a", "reviewer", "team-run-run-1-reviewer", "原始审查提示"))
+            .thenReturn(reservation);
+        when(orchestrator.executeInternal(eq("user-a"), eq("reviewer"), eq("team-run-run-1-reviewer"),
+            eq("原始审查提示"), eq(false), argThat(TeamBlackboardServicePromptTest::containsUsageReservations)))
+            .thenReturn(ctx);
+
+        var decision = service.executeReviewerDecision(reviewer, run, "原始审查提示", true);
+
+        assertThat(decision.finalReport()).isEqualTo("最终报告");
+        assertThat(ctx.getAttributes())
+            .containsEntry(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS, List.of("user-reservation"))
+            .containsEntry(PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS, List.of("provider-reservation"));
+        verify(recorder).record(eq("echomind.team.reviewer"), eq("user-a"), eq("reviewer"),
+            eq("team-run-run-1-reviewer"), eq(ctx), org.mockito.ArgumentMatchers.anyLong(), eq(false), eq(null));
+    }
+
+    private static boolean containsUsageReservations(Map<String, Object> attributes) {
+        return attributes != null
+            && List.of("user-reservation").equals(attributes.get(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS))
+            && List.of("provider-reservation").equals(attributes.get(PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS));
     }
 }

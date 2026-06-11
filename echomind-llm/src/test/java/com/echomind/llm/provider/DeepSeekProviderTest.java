@@ -105,6 +105,39 @@ class DeepSeekProviderTest {
     }
 
     @Test
+    void requiredToolNameMapsToDeepSeekFunctionToolChoice() {
+        CapturingChatModel chatModel = new CapturingChatModel(prompt -> {
+            DeepSeekChatOptions options = (DeepSeekChatOptions) prompt.getOptions();
+            assertThat(options.getToolChoice()).isEqualTo(Map.of(
+                "type", "function",
+                "function", Map.of("name", "web_search")
+            ));
+            return response(options.getToolCallbacks().get(0).call("{\"query\":\"EchoMind\"}"), null);
+        });
+        DeepSeekProvider provider = new DeepSeekProvider("https://api.deepseek.com", "test-key", 4096, chatModel);
+
+        ProviderResponse response = provider.chatWithUsage(new ProviderRequest(
+            new ModelSpec("deepseek", "deepseek-v4-flash", Set.of(ModelCapability.TEXT, ModelCapability.FUNCTION), true),
+            "你是助手",
+            "搜索 EchoMind",
+            List.of(),
+            List.of(new LlmTool(
+                "web_search",
+                "Search the web",
+                Map.of(
+                    "type", "object",
+                    "properties", Map.of("query", Map.of("type", "string")),
+                    "required", List.of("query")
+                ),
+                ignored -> "EchoMind result"
+            )),
+            "web_search"
+        ));
+
+        assertThat(response.content()).isEqualTo("EchoMind result");
+    }
+
+    @Test
     void streamWithUsageMapsSpringAiChunks() {
         CapturingChatModel chatModel = new CapturingChatModel(prompt -> response("", null));
         chatModel.streamHandler = prompt -> Flux.just(

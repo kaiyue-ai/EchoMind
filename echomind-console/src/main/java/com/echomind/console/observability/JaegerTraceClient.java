@@ -29,29 +29,54 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * Jaeger Trace 查询客户端
+ *
+ * <p>负责与 Jaeger 后端交互，检索分布式追踪数据并提取业务关键字段。
+ * 支持按用户、时间范围、业务范围等条件搜索 Trace，为管理端提供可观测性支持。</p>
+ */
 @Service
 @RequiredArgsConstructor
 public class JaegerTraceClient {
 
+    /** 搜索范围：全部 Trace */
     private static final String TRACE_SCOPE_ALL = "all";
+
+    /** 搜索范围：仅业务操作 */
     private static final String TRACE_SCOPE_BUSINESS = "business";
+
+    /**
+     * 业务操作列表
+     *
+     * <p>这些操作被视为"业务级"操作，在搜索和展示时优先考虑。
+     * 非业务操作包括框架层面的 HTTP 请求处理、数据库查询等基础设施操作。</p>
+     */
     private static final List<String> BUSINESS_OPERATIONS = List.of(
-        "echomind.chat.sync",
-        "echomind.chat.submit",
-        "echomind.chat.stream.consume",
-        "echomind.team.planner",
-        "echomind.team.reviewer",
-        "echomind.team.executor",
-        "echomind.team.sub_reviewer",
-        "echomind.team.merge",
-        "echomind.team.conflict_detector",
-        "echomind.team.arbitration",
-        "echomind.team.repair"
+        "echomind.chat.submit",           // 聊天请求提交
+        "echomind.chat.stream.consume",    // 流式聊天消息消费
+        "echomind.team.planner",          // 团队规划
+        "echomind.team.reviewer",         // 团队审查
+        "echomind.team.executor",         // 团队执行
+        "echomind.team.sub_reviewer",     // 团队子审查
+        "echomind.team.merge",            // 团队合并
+        "echomind.team.conflict_detector", // 团队冲突检测
+        "echomind.team.arbitration",      // 团队仲裁
+        "echomind.team.repair"            // 团队修复
     );
 
+    /** 可观测性配置属性 */
     private final ObservabilityProperties properties;
+
+    /** JSON 对象映射器 */
     private final ObjectMapper objectMapper;
 
+    /**
+     * 获取 Trace 配置状态
+     *
+     * <p>检查 Trace 导出和查询后端的配置状态，返回友好的提示信息。</p>
+     *
+     * @return 配置响应，包含导出器和后端信息
+     */
     public TraceConfigResponse config() {
         TraceExporter exporter = exporter();
         TraceBackend backend = backend();
@@ -66,6 +91,15 @@ public class JaegerTraceClient {
         return new TraceConfigResponse(exporter, backend, message);
     }
 
+    /**
+     * 搜索 Trace 列表
+     *
+     * @param limit    返回数量限制（1-100）
+     * @param lookback 时间回溯范围（如 "1h", "30m", "1d"）
+     * @param scope    搜索范围："all" 全部 / "business" 仅业务操作
+     * @param userId   用户ID过滤（可选）
+     * @return Trace 列表响应
+     */
     public TraceListResponse search(Integer limit, String lookback, String scope, String userId) {
         TraceBackend backend = backend();
         ensureEnabled(backend);
@@ -83,6 +117,17 @@ public class JaegerTraceClient {
         return new TraceListResponse(backend, traces);
     }
 
+    /**
+     * 查询业务操作的 Trace 摘要列表
+     *
+     * <p>遍历所有业务操作，查询对应的 Trace，去重后返回。</p>
+     *
+     * @param backend    后端配置
+     * @param safeLimit  安全限制数量
+     * @param safeLookback 安全时间范围
+     * @param tags       过滤标签
+     * @return Trace 摘要列表
+     */
     private List<TraceSummary> queryBusinessSummaries(TraceBackend backend, int safeLimit, String safeLookback,
                                                       Map<String, String> tags) {
         Map<String, TraceSummary> byTraceId = new LinkedHashMap<>();
@@ -94,6 +139,16 @@ public class JaegerTraceClient {
         return new ArrayList<>(byTraceId.values());
     }
 
+    /**
+     * 查询 Trace 摘要列表（底层方法）
+     *
+     * @param backend    后端配置
+     * @param safeLimit  安全限制数量
+     * @param safeLookback 安全时间范围
+     * @param operation  操作名称过滤（可选）
+     * @param tags       过滤标签
+     * @return Trace 摘要列表
+     */
     private List<TraceSummary> querySummaries(TraceBackend backend, int safeLimit, String safeLookback, String operation,
                                              Map<String, String> tags) {
         HttpUrl url = baseUrl(backend.queryUrl()).newBuilder()
@@ -121,6 +176,13 @@ public class JaegerTraceClient {
         return traces;
     }
 
+    /**
+     * 根据 TraceID 获取 Trace 详情
+     *
+     * @param traceId TraceID
+     * @return Trace 详情响应
+     * @throws TraceNotFoundException 当 Trace 不存在时抛出
+     */
     public TraceDetailResponse getTrace(String traceId) {
         String safeTraceId = normalizeTraceId(traceId);
         TraceBackend backend = backend();
@@ -139,6 +201,11 @@ public class JaegerTraceClient {
         return new TraceDetailResponse(backend, trace);
     }
 
+    /**
+     * 获取 Jaeger 后端配置
+     *
+     * @return 后端配置
+     */
     private TraceBackend backend() {
         ObservabilityProperties.Jaeger jaeger = properties.getJaeger();
         String queryUrl = trimTrailingSlash(jaeger.getQueryUrl());
@@ -147,6 +214,11 @@ public class JaegerTraceClient {
         return new TraceBackend("jaeger", enabled, nonBlank(jaeger.getServiceName(), "echomind"), queryUrl, publicUrl);
     }
 
+    /**
+     * 获取 Trace 导出器配置
+     *
+     * @return 导出器配置
+     */
     private TraceExporter exporter() {
         ObservabilityProperties.Exporter exporter = properties.getExporter();
         String type = nonBlank(exporter.getTracesExporter(), "none").trim().toLowerCase();
@@ -160,6 +232,13 @@ public class JaegerTraceClient {
         );
     }
 
+    /**
+     * 将 Jaeger JSON 响应解析为 TraceDetail 对象
+     *
+     * @param traceNode JSON 节点
+     * @param backend   后端配置
+     * @return TraceDetail 对象（可选）
+     */
     private Optional<TraceDetail> toDetail(JsonNode traceNode, TraceBackend backend) {
         String traceId = traceNode.path("traceID").asText("");
         if (traceId.isBlank()) {
@@ -211,6 +290,12 @@ public class JaegerTraceClient {
         ));
     }
 
+    /**
+     * 从 TraceDetail 创建 TraceSummary
+     *
+     * @param detail Trace详情
+     * @return Trace摘要
+     */
     private TraceSummary summary(TraceDetail detail) {
         return new TraceSummary(
             detail.traceId(),
@@ -225,6 +310,13 @@ public class JaegerTraceClient {
         );
     }
 
+    /**
+     * 将 Jaeger Span JSON 解析为 TraceSpan 对象
+     *
+     * @param spanNode        Span JSON 节点
+     * @param processServices 进程服务映射
+     * @return TraceSpan 对象
+     */
     private TraceSpan toSpan(JsonNode spanNode, Map<String, String> processServices) {
         Map<String, Object> spanTags = tags(spanNode.path("tags"));
         String processId = spanNode.path("processID").asText("");
@@ -254,6 +346,15 @@ public class JaegerTraceClient {
         );
     }
 
+    /**
+     * 从 Span 列表中提取业务字段
+     *
+     * <p>优先从业务操作 Span 中提取字段，其次从第一个有 Token 用量的 Span 中提取。</p>
+     *
+     * @param spans        Span 列表
+     * @param displaySpan  展示用 Span
+     * @return 业务字段
+     */
     private TraceFields traceFields(List<TraceSpan> spans, TraceSpan displaySpan) {
         TraceFields displayFields = displaySpan == null ? emptyFields() : displaySpan.fields();
         TraceFields businessUsage = spans.stream()
@@ -276,6 +377,12 @@ public class JaegerTraceClient {
         return displayFields == null ? emptyFields() : displayFields;
     }
 
+    /**
+     * 从 Span 标签中提取业务字段
+     *
+     * @param tags Span 标签
+     * @return 业务字段
+     */
     private TraceFields fields(Map<String, Object> tags) {
         if (tags == null || tags.isEmpty()) {
             return emptyFields();
@@ -294,6 +401,15 @@ public class JaegerTraceClient {
         );
     }
 
+    /**
+     * 合并两个业务字段对象
+     *
+     * <p>primary 字段优先，fallback 作为后备。</p>
+     *
+     * @param primary   主字段
+     * @param fallback  后备字段
+     * @return 合并后的字段
+     */
     private TraceFields mergeFields(TraceFields primary, TraceFields fallback) {
         if (primary == null) {
             return fallback == null ? emptyFields() : fallback;
@@ -315,10 +431,21 @@ public class JaegerTraceClient {
         );
     }
 
+    /**
+     * 创建空的业务字段对象
+     *
+     * @return 空字段对象
+     */
     private TraceFields emptyFields() {
         return new TraceFields(null, null, null, null, null, null, null, null, null, null);
     }
 
+    /**
+     * 将 JSON 标签数组转换为 Map
+     *
+     * @param nodes JSON 节点数组
+     * @return 标签 Map
+     */
     private Map<String, Object> tags(JsonNode nodes) {
         Map<String, Object> result = new LinkedHashMap<>();
         if (!nodes.isArray()) {
@@ -333,6 +460,12 @@ public class JaegerTraceClient {
         return result;
     }
 
+    /**
+     * 将 JSON 日志数组转换为 TraceLog 列表
+     *
+     * @param nodes JSON 节点数组
+     * @return 日志列表
+     */
     private List<TraceLog> logs(JsonNode nodes) {
         List<TraceLog> result = new ArrayList<>();
         if (!nodes.isArray()) {
@@ -344,6 +477,12 @@ public class JaegerTraceClient {
         return result;
     }
 
+    /**
+     * 解析 JSON 值节点
+     *
+     * @param node JSON 节点
+     * @return 解析后的值
+     */
     private Object value(JsonNode node) {
         JsonNode value = node.path("value");
         if (value.isBoolean()) {
@@ -358,10 +497,25 @@ public class JaegerTraceClient {
         return value.asText("");
     }
 
+    /**
+     * 获取两个标签值中的第一个非空值
+     *
+     * @param tags   标签 Map
+     * @param first  第一个键
+     * @param second 第二个键
+     * @return 非空值
+     */
     private String firstString(Map<String, Object> tags, String first, String second) {
         return firstNonBlank(string(tags, first), string(tags, second));
     }
 
+    /**
+     * 从标签中获取字符串值
+     *
+     * @param tags 标签 Map
+     * @param key  键
+     * @return 字符串值
+     */
     private String string(Map<String, Object> tags, String key) {
         Object value = tags.get(key);
         if (value == null) {
@@ -371,6 +525,13 @@ public class JaegerTraceClient {
         return "null".equals(text) ? "" : text;
     }
 
+    /**
+     * 从标签中获取长整数值
+     *
+     * @param tags 标签 Map
+     * @param key  键
+     * @return 长整数值
+     */
     private Long number(Map<String, Object> tags, String key) {
         Object value = tags.get(key);
         if (value instanceof Number number) {
@@ -386,6 +547,12 @@ public class JaegerTraceClient {
         }
     }
 
+    /**
+     * 执行 HTTP 请求
+     *
+     * @param url 请求 URL
+     * @return JSON 响应
+     */
     private JsonNode execute(HttpUrl url) {
         OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(Duration.ofSeconds(timeoutSeconds()))
@@ -407,6 +574,12 @@ public class JaegerTraceClient {
         }
     }
 
+    /**
+     * 解析基础 URL
+     *
+     * @param url URL 字符串
+     * @return HttpUrl 对象
+     */
     private HttpUrl baseUrl(String url) {
         HttpUrl parsed = HttpUrl.parse(url);
         if (parsed == null) {
@@ -415,12 +588,23 @@ public class JaegerTraceClient {
         return parsed;
     }
 
+    /**
+     * 确保后端已启用
+     *
+     * @param backend 后端配置
+     */
     private void ensureEnabled(TraceBackend backend) {
         if (!backend.enabled()) {
             throw new TraceBackendException("Trace 查询后端未配置");
         }
     }
 
+    /**
+     * 规范化 TraceID
+     *
+     * @param traceId TraceID
+     * @return 规范化后的 TraceID
+     */
     private String normalizeTraceId(String traceId) {
         String normalized = traceId == null ? "" : traceId.trim().toLowerCase();
         if (!normalized.matches("[0-9a-f]{16}|[0-9a-f]{32}")) {
@@ -429,6 +613,12 @@ public class JaegerTraceClient {
         return normalized;
     }
 
+    /**
+     * 从 URL 中提取 TraceID
+     *
+     * @param url URL
+     * @return TraceID
+     */
     private String traceIdFromUrl(HttpUrl url) {
         List<String> segments = url.pathSegments();
         if (segments.isEmpty()) {
@@ -438,11 +628,23 @@ public class JaegerTraceClient {
         return candidate.matches("[0-9a-fA-F]{16}|[0-9a-fA-F]{32}") ? candidate.toLowerCase() : "";
     }
 
+    /**
+     * 安全化限制数量
+     *
+     * @param limit 限制数量
+     * @return 安全化后的数量（1-100）
+     */
     private int sanitizeLimit(Integer limit) {
         int value = limit == null ? properties.getJaeger().getDefaultLimit() : limit;
         return Math.max(1, Math.min(100, value));
     }
 
+    /**
+     * 安全化时间回溯范围
+     *
+     * @param lookback 时间范围
+     * @return 安全化后的时间范围
+     */
     private String sanitizeLookback(String lookback) {
         if (lookback == null || lookback.isBlank()) {
             return "1h";
@@ -450,6 +652,12 @@ public class JaegerTraceClient {
         return lookback.matches("\\d+[hdm]") ? lookback : "1h";
     }
 
+    /**
+     * 安全化搜索范围
+     *
+     * @param scope 搜索范围
+     * @return 安全化后的搜索范围
+     */
     private String sanitizeScope(String scope) {
         if (scope == null || scope.isBlank()) {
             return TRACE_SCOPE_BUSINESS;
@@ -458,10 +666,22 @@ public class JaegerTraceClient {
         return TRACE_SCOPE_ALL.equals(normalized) ? TRACE_SCOPE_ALL : TRACE_SCOPE_BUSINESS;
     }
 
+    /**
+     * 判断是否为业务操作
+     *
+     * @param operationName 操作名称
+     * @return 是否为业务操作
+     */
     private boolean isBusinessOperation(String operationName) {
         return BUSINESS_OPERATIONS.contains(operationName);
     }
 
+    /**
+     * 构建 Trace 过滤标签
+     *
+     * @param userId 用户ID
+     * @return 标签 Map
+     */
     private Map<String, String> traceTags(String userId) {
         if (userId == null || userId.isBlank()) {
             return Map.of();
@@ -469,6 +689,12 @@ public class JaegerTraceClient {
         return Map.of("echomind.user_id", userId.trim());
     }
 
+    /**
+     * 将标签转换为 JSON 字符串
+     *
+     * @param tags 标签 Map
+     * @return JSON 字符串
+     */
     private String tagsJson(Map<String, String> tags) {
         try {
             return objectMapper.writeValueAsString(tags);
@@ -477,10 +703,22 @@ public class JaegerTraceClient {
         }
     }
 
+    /**
+     * 获取超时时间（秒）
+     *
+     * @return 超时时间
+     */
     private int timeoutSeconds() {
         return Math.max(1, Math.min(30, properties.getJaeger().getTimeoutSeconds()));
     }
 
+    /**
+     * 构建外部 Trace URL
+     *
+     * @param publicUrl 公开 URL
+     * @param traceId   TraceID
+     * @return 外部 URL
+     */
     private String externalTraceUrl(String publicUrl, String traceId) {
         if (publicUrl == null || publicUrl.isBlank()) {
             return "";
@@ -488,6 +726,12 @@ public class JaegerTraceClient {
         return trimTrailingSlash(publicUrl) + "/trace/" + traceId;
     }
 
+    /**
+     * 去除 URL 末尾的斜杠
+     *
+     * @param value URL
+     * @return 去除斜杠后的 URL
+     */
     private String trimTrailingSlash(String value) {
         String normalized = value == null ? "" : value.trim();
         while (normalized.endsWith("/")) {
@@ -496,14 +740,31 @@ public class JaegerTraceClient {
         return normalized;
     }
 
+    /**
+     * 获取第一个非空字符串
+     *
+     * @param first  第一个字符串
+     * @param second 第二个字符串
+     * @return 非空字符串
+     */
     private String firstNonBlank(String first, String second) {
         return first != null && !first.isBlank() ? first : second;
     }
 
+    /**
+     * 获取非空值或后备值
+     *
+     * @param value    值
+     * @param fallback 后备值
+     * @return 非空值
+     */
     private String nonBlank(String value, String fallback) {
         return value != null && !value.isBlank() ? value : fallback;
     }
 
+    /**
+     * Trace 后端异常
+     */
     public static class TraceBackendException extends RuntimeException {
         public TraceBackendException(String message) {
             super(message);
@@ -514,6 +775,9 @@ public class JaegerTraceClient {
         }
     }
 
+    /**
+     * Trace 未找到异常
+     */
     public static class TraceNotFoundException extends RuntimeException {
         public TraceNotFoundException(String traceId) {
             super("Trace 不存在: " + traceId);

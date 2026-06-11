@@ -18,8 +18,13 @@
     </el-alert>
 
     <ResourceGridSkeleton v-if="showInitialSkeleton" />
-    <div v-else class="resource-grid" :class="{ 'is-refreshing': loading }">
-      <ResourceCard v-for="agent in agents" :key="agent.agentId" :meta="agent.agentId">
+    <TransitionGroup v-else name="resource-soft" tag="div" class="resource-grid" :class="{ 'is-refreshing': loading }">
+      <ResourceCard
+        v-for="(agent, index) in agents"
+        :key="agent.agentId"
+        :meta="agent.agentId"
+        :style="{ '--item-index': index }"
+      >
         <template #title>
           <div class="agent-title">
             <span class="avatar-token">{{ agent.name?.charAt(0) || 'A' }}</span>
@@ -37,7 +42,6 @@
         </div>
         <template #footer>
           <el-button size="small" @click="chatWithAgent(agent)">进入对话</el-button>
-          <el-button size="small" @click="testAgent(agent)">测试</el-button>
           <el-button size="small" @click="manageKnowledge(agent)">知识库</el-button>
           <el-button size="small" type="danger" text :loading="mutatingId === agent.agentId" @click="deleteAgent(agent)">
             删除
@@ -45,7 +49,7 @@
         </template>
       </ResourceCard>
       <el-empty v-if="!loading && agents.length === 0" description="暂无 Agent" />
-    </div>
+    </TransitionGroup>
 
     <DrawerForm v-model="showCreateDrawer" title="创建 Agent" size="640px">
       <el-form label-position="top" class="stack-form">
@@ -147,18 +151,6 @@
       </el-table>
       <el-empty v-if="!knowledgeLoading && selectedKnowledge.length === 0" description="暂无知识库文档" />
     </DrawerForm>
-
-    <el-dialog v-model="showTestDialog" title="测试 Agent" width="520px">
-      <el-input v-model="testMessage" placeholder="输入测试消息..." />
-      <div v-if="testResult" class="result-box">
-        <div class="result-box-title">响应</div>
-        <div class="plain-message">{{ testResult }}</div>
-      </div>
-      <template #footer>
-        <el-button @click="showTestDialog = false">关闭</el-button>
-        <el-button type="primary" :loading="testing" @click="runTest">执行</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -181,17 +173,13 @@ const agentStore = useAgentStore()
 const modelStore = useModelStore()
 const skillStore = useSkillStore()
 const chatStore = useChatStore()
-const { agents, loading, saving, testing, error, knowledgeByAgent, knowledgeLoading, knowledgeUploading } = storeToRefs(agentStore)
+const { agents, loading, saving, error, knowledgeByAgent, knowledgeLoading, knowledgeUploading } = storeToRefs(agentStore)
 const { models, loading: modelLoading, error: modelError } = storeToRefs(modelStore)
 const { skills, loading: skillLoading, error: skillError } = storeToRefs(skillStore)
 
 const mutatingId = ref(null)
 const showCreateDrawer = ref(false)
 const showKnowledgeDrawer = ref(false)
-const showTestDialog = ref(false)
-const testMessage = ref('')
-const testResult = ref('')
-const testingAgent = ref(null)
 const selectedAgent = ref(null)
 const knowledgeFiles = ref([])
 const newAgentKnowledgeFiles = ref([])
@@ -279,22 +267,6 @@ async function createAgent() {
 function chatWithAgent(agent) {
   chatStore.selectedAgent = agent.agentId
   router.push('/chat')
-}
-
-function testAgent(agent) {
-  testingAgent.value = agent
-  testMessage.value = ''
-  testResult.value = ''
-  showTestDialog.value = true
-}
-
-async function runTest() {
-  try {
-    const res = await agentStore.executeAgent(testingAgent.value.agentId, testMessage.value, crypto.randomUUID())
-    testResult.value = res.response
-  } catch (e) {
-    testResult.value = '错误: ' + (e.response?.data?.error || e.message)
-  }
 }
 
 async function manageKnowledge(agent) {

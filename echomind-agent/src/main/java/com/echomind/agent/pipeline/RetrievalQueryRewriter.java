@@ -1,5 +1,6 @@
 package com.echomind.agent.pipeline;
 
+import com.echomind.memory.embedding.EmbeddingInputPolicy;
 import com.echomind.llm.provider.ModelProvider;
 import com.echomind.llm.provider.dto.ProviderRequest;
 import com.echomind.llm.provider.dto.ProviderResponse;
@@ -20,7 +21,7 @@ public class RetrievalQueryRewriter {
     public static final String ATTR_RETRIEVAL_QUERY_FAILURE_REASON = "retrievalQueryFailureReason";
 
     private static final RetrievalQueryRewriter DISABLED = new RetrievalQueryRewriter(
-        null, null, false, 0, 0, new ObjectMapper()
+        null, null, false, 0, 0, new ObjectMapper(), EmbeddingInputPolicy.defaults()
     );
 
     private final ModelSpec model;
@@ -29,6 +30,7 @@ public class RetrievalQueryRewriter {
     private final int timeoutMs;
     private final int maxQueryChars;
     private final ObjectMapper mapper;
+    private final EmbeddingInputPolicy embeddingInputPolicy;
 
     public RetrievalQueryRewriter(ModelSpec model,
                                   ModelProvider provider,
@@ -36,16 +38,31 @@ public class RetrievalQueryRewriter {
                                   int timeoutMs,
                                   int maxQueryChars,
                                   ObjectMapper mapper) {
+        this(model, provider, enabled, timeoutMs, maxQueryChars, mapper, EmbeddingInputPolicy.defaults());
+    }
+
+    public RetrievalQueryRewriter(ModelSpec model,
+                                  ModelProvider provider,
+                                  boolean enabled,
+                                  int timeoutMs,
+                                  int maxQueryChars,
+                                  ObjectMapper mapper,
+                                  EmbeddingInputPolicy embeddingInputPolicy) {
         this.model = model;
         this.provider = provider;
         this.enabled = enabled;
         this.timeoutMs = Math.max(1, timeoutMs);
         this.maxQueryChars = Math.max(1, maxQueryChars);
         this.mapper = mapper == null ? new ObjectMapper() : mapper;
+        this.embeddingInputPolicy = embeddingInputPolicy == null ? EmbeddingInputPolicy.defaults() : embeddingInputPolicy;
     }
 
     public static RetrievalQueryRewriter disabled() {
         return DISABLED;
+    }
+
+    public static RetrievalQueryRewriter disabled(EmbeddingInputPolicy embeddingInputPolicy) {
+        return new RetrievalQueryRewriter(null, null, false, 0, 0, new ObjectMapper(), embeddingInputPolicy);
     }
 
     public String queryFor(PipelineContext ctx) {
@@ -58,34 +75,34 @@ public class RetrievalQueryRewriter {
             return query;
         }
         if (!enabled) {
-            return remember(ctx, original, false, null);
+            return remember(ctx, fallbackQuery(original), false, null);
         }
         if (model == null || provider == null) {
-            return remember(ctx, original, false, "rewrite model unavailable");
+            return remember(ctx, fallbackQuery(original), false, "rewrite model unavailable");
         }
         CompletableFuture<ProviderResponse> future = CompletableFuture
             .supplyAsync(() -> provider.chatWithUsage(request(original)));
         try {
             ProviderResponse response = future.get(timeoutMs, TimeUnit.MILLISECONDS);
             if (response.failed()) {
-                return remember(ctx, original, false, response.failureReason());
+                return remember(ctx, fallbackQuery(original), false, response.failureReason());
             }
             String rewritten = parseQuery(response.content());
             if (rewritten.isEmpty()) {
-                return remember(ctx, original, false, "empty rewrite query");
+                return remember(ctx, fallbackQuery(original), false, "empty rewrite query");
             }
             if (rewritten.length() > maxQueryChars) {
-                return remember(ctx, original, false, "rewrite query too long");
+                return remember(ctx, fallbackQuery(original), false, "rewrite query too long");
             }
             boolean changed = !rewritten.equals(original);
-            return remember(ctx, changed ? rewritten : original, changed, null);
+            return remember(ctx, embeddingInputPolicy.safeQuery(changed ? rewritten : original), changed, null);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             future.cancel(true);
-            return remember(ctx, original, false, failureReason(e));
+            return remember(ctx, fallbackQuery(original), false, failureReason(e));
         } catch (Exception e) {
             future.cancel(true);
-            return remember(ctx, original, false, failureReason(e));
+            return remember(ctx, fallbackQuery(original), false, failureReason(e));
         }
     }
 
@@ -96,7 +113,9 @@ public class RetrievalQueryRewriter {
                 You rewrite user questions into concise semantic search queries for vector retrieval.
                 Return strict JSON only: {"query":"..."}.
                 Keep named entities, dates, quantities, and constraints. Do not answer the question.
-                """,
+                The query must be no longer than %d characters.
+                For long input, keep only the core search intent, entities, error names, file names, API names, dates, quantities, and constraints.
+                """.formatted(maxQueryChars),
             "用户原句：%s".formatted(original),
             List.of(),
             List.of()
@@ -121,6 +140,10 @@ public class RetrievalQueryRewriter {
 
     private String normalize(String value) {
         return Optional.ofNullable(value).orElse("").trim();
+    }
+
+    private String fallbackQuery(String original) {
+        return embeddingInputPolicy.safeQuery(original);
     }
 
     private String failureReason(Exception error) {

@@ -1,6 +1,6 @@
 <template>
   <main class="login-page">
-    <section class="login-panel">
+    <section :class="['login-panel', { 'is-submitting': loading }]">
       <div class="login-brand">
         <span class="brand-mark miku-mark" aria-label="初音未来头像">
           <span class="miku-hair left"></span>
@@ -19,20 +19,31 @@
       </div>
 
       <el-form class="login-form" @submit.prevent="submit">
-        <el-form-item label="用户名">
-          <el-input v-model="username" autocomplete="username" placeholder="用户名" />
+        <el-form-item label="用户名" :error="fieldErrors.username">
+          <el-input
+            v-model="username"
+            autocomplete="username"
+            placeholder="用户名"
+            @input="fieldErrors.username = ''"
+          />
         </el-form-item>
-        <el-form-item label="密码">
+        <el-form-item label="密码" :error="fieldErrors.password">
           <el-input
             v-model="password"
             autocomplete="current-password"
             placeholder="密码"
             show-password
             type="password"
+            @input="fieldErrors.password = ''"
           />
         </el-form-item>
-        <el-button class="login-submit" type="primary" :loading="loading" @click="submit">
-          进入管理端
+        <el-button
+          :class="['login-submit', { 'is-ready': canSubmit }]"
+          type="primary"
+          :loading="loading"
+          @click="submit"
+        >
+          {{ loading ? '正在校验...' : '进入管理端' }}
         </el-button>
       </el-form>
     </section>
@@ -40,7 +51,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
@@ -52,10 +63,15 @@ const { loading } = storeToRefs(authStore)
 
 const username = ref('admin')
 const password = ref('')
+const fieldErrors = ref({ username: '', password: '' })
+const canSubmit = computed(() => username.value.trim().length > 0 && password.value.length > 0 && !loading.value)
 
 async function submit() {
-  if (!username.value.trim() || !password.value) {
-    ElMessage.warning('请输入用户名和密码')
+  fieldErrors.value = {
+    username: username.value.trim() ? '' : '请输入用户名',
+    password: password.value ? '' : '请输入密码'
+  }
+  if (fieldErrors.value.username || fieldErrors.value.password) {
     return
   }
   try {

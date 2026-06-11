@@ -5,9 +5,9 @@ package com.echomind.common.model;
  *      ↓
  * Controller 把请求投递到 RabbitMQ
  *      ↓ (异步)
- * 消费者执行 Agent → 流式输出 token → 逐条发布 ChatStreamEvent
+ * 消费者执行 Agent → 流式输出 token → 逐条产生 ChatStreamEvent
  *      ↓
- * SSE 层按 requestId 过滤事件 → 直接推送给前端
+ * SSE 推送服务按 requestId 过滤事件 → 直接推送给前端
  *      ↓
  * 前端收到 result/failure → 关闭 SSE
  */
@@ -19,6 +19,7 @@ public record ChatStreamEvent(
     String traceId,
     ChatResponse response,
     String error,
+    ErrorDetail errorDetail,
     String toolName,
     long durationMs,
     String traceparent
@@ -31,34 +32,39 @@ public record ChatStreamEvent(
     public static final String TYPE_TOOL_END = "tool_end";
 
     public static ChatStreamEvent meta(String requestId, String sessionId, String traceId) {
-        return new ChatStreamEvent(requestId, TYPE_META, null, sessionId, traceId, null, null, null, 0, null);
+        return new ChatStreamEvent(requestId, TYPE_META, null, sessionId, traceId, null, null, null, null, 0, null);
     }
 
     public static ChatStreamEvent token(String requestId, String token) {
-        return new ChatStreamEvent(requestId, TYPE_TOKEN, token, null, null, null, null, null, 0, null);
+        return new ChatStreamEvent(requestId, TYPE_TOKEN, token, null, null, null, null, null, null, 0, null);
     }
 
     public static ChatStreamEvent result(ChatResponse response) {
         return new ChatStreamEvent(response.requestId(), TYPE_RESULT, null,
-            response.sessionId(), response.traceId(), response, null, null, 0, response.traceparent());
+            response.sessionId(), response.traceId(), response, null, null, null, 0, response.traceparent());
     }
 
     public static ChatStreamEvent failure(String requestId, String error, String traceId) {
-        return new ChatStreamEvent(requestId, TYPE_FAILURE, null, null, traceId, null, error, null, 0, null);
+        return failure(requestId, error, null, traceId);
+    }
+
+    public static ChatStreamEvent failure(String requestId, String error, ErrorDetail errorDetail, String traceId) {
+        return new ChatStreamEvent(requestId, TYPE_FAILURE, null, null, traceId, null, error, errorDetail, null, 0,
+            null);
     }
 
     public static ChatStreamEvent toolStart(String requestId, String toolName) {
-        return new ChatStreamEvent(requestId, TYPE_TOOL_START, null, null, null, null, null, toolName, 0, null);
+        return new ChatStreamEvent(requestId, TYPE_TOOL_START, null, null, null, null, null, null, toolName, 0, null);
     }
 
     public static ChatStreamEvent toolEnd(String requestId, String toolName, long durationMs) {
-        return new ChatStreamEvent(requestId, TYPE_TOOL_END, null, null, null, null, null, toolName,
+        return new ChatStreamEvent(requestId, TYPE_TOOL_END, null, null, null, null, null, null, toolName,
             Math.max(durationMs, 0), null);
     }
 
     public ChatStreamEvent withTrace(String traceId, String traceparent) {
         return new ChatStreamEvent(requestId, type, token, sessionId,
-            firstNonBlank(this.traceId, traceId), response, error, toolName, durationMs, traceparent);
+            firstNonBlank(this.traceId, traceId), response, error, errorDetail, toolName, durationMs, traceparent);
     }
 
     public boolean terminal() {

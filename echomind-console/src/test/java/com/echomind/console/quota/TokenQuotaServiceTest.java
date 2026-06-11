@@ -20,13 +20,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -95,8 +92,6 @@ class TokenQuotaServiceTest {
         TokenQuotaUsageMapper quotaUsageMapper = mock(TokenQuotaUsageMapper.class);
         LocalDate today = LocalDate.of(2026, 6, 3);
         LocalDate month = LocalDate.of(2026, 6, 1);
-        when(quotaUsageMapper.selectUsedTokensForUpdate("user-a", "daily", today)).thenReturn(60L);
-        when(quotaUsageMapper.selectUsedTokensForUpdate("user-a", "monthly", month)).thenReturn(600L);
         TokenQuotaService service = new TokenQuotaService(
             quotaMapper,
             mock(UserAccountMapper.class),
@@ -114,13 +109,13 @@ class TokenQuotaServiceTest {
     }
 
     @Test
-    void rejectsSettlementWhenCurrentCallWouldExceedLimit() {
+    void settlesUsageEvenWhenCurrentCallWouldExceedLimit() {
         TokenQuotaEntity quota = activeQuota("user-a", 100L, 1000L);
         TokenQuotaMapper quotaMapper = mock(TokenQuotaMapper.class);
         when(quotaMapper.selectOptionalById("user-a")).thenReturn(Optional.of(quota));
-        TokenQuotaUsageMapper quotaUsageMapper = mock(TokenQuotaUsageMapper.class);
+        InMemoryQuotaUsageMapper quotaUsageMapper = new InMemoryQuotaUsageMapper();
         LocalDate today = LocalDate.of(2026, 6, 3);
-        when(quotaUsageMapper.selectUsedTokensForUpdate("user-a", "daily", today)).thenReturn(90L);
+        quotaUsageMapper.put("user-a", "daily", today, 90);
         TokenQuotaService service = new TokenQuotaService(
             quotaMapper,
             mock(UserAccountMapper.class),
@@ -129,15 +124,14 @@ class TokenQuotaServiceTest {
             FIXED_CLOCK
         );
 
-        assertThatThrownBy(() -> service.settleUsage(new AuthUser("user-a", "alice", true), 20))
-            .isInstanceOf(TokenQuotaExceededException.class)
-            .hasMessageContaining("daily used=110 limit=100");
+        service.settleUsage(new AuthUser("user-a", "alice", true), 20);
 
-        verify(quotaUsageMapper, never()).incrementUsedTokens(any(), any(), any(), any(Long.class));
+        assertThat(quotaUsageMapper.used("user-a", "daily", today)).isEqualTo(110);
+        assertThat(quotaUsageMapper.used("user-a", "monthly", LocalDate.of(2026, 6, 1))).isEqualTo(20);
     }
 
     @Test
-    void concurrentSettlementKeepsBucketWithinLimit() throws Exception {
+    void concurrentSettlementRecordsAllCompletedCalls() throws Exception {
         TokenQuotaEntity quota = activeQuota("user-a", 100L, null);
         TokenQuotaMapper quotaMapper = mock(TokenQuotaMapper.class);
         when(quotaMapper.selectOptionalById("user-a")).thenReturn(Optional.of(quota));
@@ -152,28 +146,23 @@ class TokenQuotaServiceTest {
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
-        Callable<Boolean> settlement = () -> {
+        Callable<Void> settlement = () -> {
             ready.countDown();
             assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
-            try {
-                service.settleUsage(new AuthUser("user-a", "alice", true), 60);
-                return true;
-            } catch (TokenQuotaExceededException e) {
-                return false;
-            }
+            service.settleUsage(new AuthUser("user-a", "alice", true), 60);
+            return null;
         };
 
-        Future<Boolean> first = executor.submit(settlement);
-        Future<Boolean> second = executor.submit(settlement);
+        Future<Void> first = executor.submit(settlement);
+        Future<Void> second = executor.submit(settlement);
         assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
         start.countDown();
 
-        long successes = (first.get(5, TimeUnit.SECONDS) ? 1 : 0)
-            + (second.get(5, TimeUnit.SECONDS) ? 1 : 0);
+        first.get(5, TimeUnit.SECONDS);
+        second.get(5, TimeUnit.SECONDS);
         executor.shutdownNow();
 
-        assertThat(successes).isEqualTo(1);
-        assertThat(quotaUsageMapper.used("user-a", "daily", LocalDate.of(2026, 6, 3))).isEqualTo(60);
+        assertThat(quotaUsageMapper.used("user-a", "daily", LocalDate.of(2026, 6, 3))).isEqualTo(120);
     }
 
     @Test
@@ -205,7 +194,8 @@ class TokenQuotaServiceTest {
         assertThat(view.todayUsedTokens()).isEqualTo(90);
         assertThat(view.monthUsedTokens()).isEqualTo(300);
         assertThat(view.totalUsedTokens()).isEqualTo(15);
-        assertThat(view.dailyWarning()).isTrue();
+        assertThat(view.dailyUsagePercent()).isEqualTo(90.0);
+        assertThat(view.dailyExceeded()).isFalse();
     }
 
     private TokenQuotaEntity activeQuota(String userId, Long dailyLimit, Long monthlyLimit) {
@@ -219,7 +209,6 @@ class TokenQuotaServiceTest {
 
     private static final class InMemoryQuotaUsageMapper implements TokenQuotaUsageMapper {
         private final Map<String, Long> buckets = new HashMap<>();
-        private final Map<String, ReentrantLock> locks = new HashMap<>();
 
         @Override
         public synchronized int insertIgnoreBucket(String userId, String scope, LocalDate bucketStart) {
@@ -233,25 +222,9 @@ class TokenQuotaServiceTest {
         }
 
         @Override
-        public Long selectUsedTokensForUpdate(String userId, String scope, LocalDate bucketStart) {
-            String key = key(userId, scope, bucketStart);
-            lock(key).lock();
-            synchronized (this) {
-                return buckets.get(key);
-            }
-        }
-
-        @Override
-        public int incrementUsedTokens(String userId, String scope, LocalDate bucketStart, long tokens) {
-            String key = key(userId, scope, bucketStart);
-            try {
-                synchronized (this) {
-                    buckets.merge(key, tokens, Long::sum);
-                    return 1;
-                }
-            } finally {
-                lock(key).unlock();
-            }
+        public synchronized int incrementUsedTokens(String userId, String scope, LocalDate bucketStart, long tokens) {
+            buckets.merge(key(userId, scope, bucketStart), tokens, Long::sum);
+            return 1;
         }
 
         @Override
@@ -271,12 +244,12 @@ class TokenQuotaServiceTest {
             return buckets.getOrDefault(key(userId, scope, bucketStart), 0L);
         }
 
-        private String key(String userId, String scope, LocalDate bucketStart) {
-            return userId + "|" + scope + "|" + bucketStart;
+        synchronized void put(String userId, String scope, LocalDate bucketStart, long used) {
+            buckets.put(key(userId, scope, bucketStart), used);
         }
 
-        private synchronized ReentrantLock lock(String key) {
-            return locks.computeIfAbsent(key, ignored -> new ReentrantLock());
+        private String key(String userId, String scope, LocalDate bucketStart) {
+            return userId + "|" + scope + "|" + bucketStart;
         }
     }
 }

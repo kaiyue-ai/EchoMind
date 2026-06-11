@@ -24,7 +24,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-/** 轻量模型单轮分析器：提取用户事实、合并相近事实，并按需刷新用户画像。 */
+/** 轻量模型：提取会话事件事实，并按需独立刷新用户画像。 */
 @Service
 @Slf4j
 @RequiredArgsConstructor
@@ -39,32 +39,56 @@ public class UserMemoryAnalyzer {
     private final ObjectMapper mapper;
     private final UserMemoryProperties properties;
 
-    public UserMemoryAnalysisResult analyze(String userMemoryKey,
-                                            String oldProfile,
-                                            UserMemoryTurn turn,
-                                            List<UserMemoryHit> relatedFacts,
-                                            boolean rememberFacts,
-                                            boolean refreshProfile) {
-        if (turn == null || turn.messages().isEmpty() || (!rememberFacts && !refreshProfile)) {
-            return UserMemoryAnalysisResult.failed(oldProfile);
+    /** 提取本轮会话中的有价值事件事实。不再产出 profileSnapshot。 */
+    public UserMemoryAnalysisResult analyzeEpisodes(String userMemoryKey,
+                                                     String oldProfile,
+                                                     UserMemoryTurn turn,
+                                                     List<UserMemoryHit> relatedFacts) {
+        if (turn == null || turn.messages().isEmpty()) {
+            return UserMemoryAnalysisResult.failed();
         }
         try {
             ModelSpec model = resolveModel(userMemoryKey);
             ModelProvider provider = providerRegistry.getProvider(model.providerId()).orElse(null);
             if (provider == null) {
-                return UserMemoryAnalysisResult.failed(oldProfile);
+                return UserMemoryAnalysisResult.failed();
             }
             String response = provider.chat(new ProviderRequest(
                 model,
-                systemPrompt(),
-                userPrompt(oldProfile, turn, relatedFacts, rememberFacts, refreshProfile),
+                episodeSystemPrompt(),
+                episodeUserPrompt(oldProfile, turn, relatedFacts),
                 List.of(),
                 List.of()
             ));
-            return parse(response, relatedFacts, oldProfile, rememberFacts, refreshProfile);
+            return parseEpisodeResponse(response, relatedFacts);
         } catch (Exception e) {
-            log.warn("User memory analysis failed userMemoryKey={}: {}", userMemoryKey, e.getMessage());
-            return UserMemoryAnalysisResult.failed(oldProfile);
+            log.warn("User memory episode analysis failed userMemoryKey={}: {}", userMemoryKey, e.getMessage());
+            return UserMemoryAnalysisResult.failed();
+        }
+    }
+
+    /** 独立刷新用户画像：基于 Milvus 中的事实集合生成画像摘要。 */
+    public String refreshProfile(String userId, String oldProfile, List<UserMemoryHit> facts) {
+        if (facts == null || facts.isEmpty()) {
+            return oldProfile == null ? "" : oldProfile;
+        }
+        try {
+            ModelSpec model = resolveModel("user:" + (userId == null ? "default" : userId));
+            ModelProvider provider = providerRegistry.getProvider(model.providerId()).orElse(null);
+            if (provider == null) {
+                return oldProfile == null ? "" : oldProfile;
+            }
+            String response = provider.chat(new ProviderRequest(
+                model,
+                profileSystemPrompt(),
+                profileUserPrompt(oldProfile, facts),
+                List.of(),
+                List.of()
+            ));
+            return cleanProfileResponse(response, oldProfile);
+        } catch (Exception e) {
+            log.warn("User profile refresh failed userId={}: {}", userId, e.getMessage());
+            return oldProfile == null ? "" : oldProfile;
         }
     }
 
@@ -78,33 +102,31 @@ public class UserMemoryAnalyzer {
         return router.resolve(ctx);
     }
 
-    private String systemPrompt() {
+    private String episodeSystemPrompt() {
         return """
-            你是 EchoMind 的用户长期记忆轻量分析器。你只处理主模型已经决定需要异步处理的用户事实或用户画像。
+            你是 EchoMind 的对话事件压缩器。你的任务是从本轮对话中提取有价值的"发生过的事"。
 
             必须遵守：
             - 只输出 JSON 对象，不要 Markdown，不要解释。
-            - 不要保存一次性任务、临时链接、搜索结果、工具过程、模型自己的推测。
-            - 只依据“本轮用户消息”和相近旧事实处理记忆；助手回复、工具结果、模型总结都不能作为新增、更新或删除用户事实的证据。
+            - 重点识别以下 4 类事实：
+              1. EPISODE(事件)：用户完成了一个完整的任务/操作流程、一个完整的问题解决过程
+              2. CORRECTION(纠正)：AI 犯了错误或理解偏差，用户明确指出并纠正了
+              3. PREFERENCE(偏好)：用户明确表达了偏好、习惯、风格要求或长期约束
+              4. KNOWLEDGE(知识)：对话中讨论到的技术事实、架构约束、业务规则
+            - 不要保存一次性任务、临时链接、工具查询过程、纯寒暄。
             - 不要保存密码、token、AccessKey、Cookie、手机号、身份证等敏感信息。
-            - 用户事实必须稳定、可长期复用，并且必须有本轮对话证据。
-            - 相近旧事实语义一致时优先 UPDATE，不要重复 ADD；新内容和旧内容冲突时以最新对话为准。
-            - 相关旧事实带有 firstObservedAt、lastObservedAt、updatedAt，可用于判断事实新旧和重要性。
-            - profileSnapshot 使用中文，在旧用户画像基础上调整，保留仍然有效的旧信息。
+            - 每条事实必须带 evidence（本轮对话中的原句证据）和 confidence（0~1 置信度）。
+            - 相近旧事实语义一致时优先 UPDATE 而非 ADD；冲突时以最新对话为准。
+            - 旧事实带有 firstObservedAt、lastObservedAt、updatedAt，可用于判断新旧和重要性。
+            - 只从本轮用户消息中提取证据；助手回复、工具结果不能作为证据。
             """;
     }
 
-    private String userPrompt(String oldProfile,
-                              UserMemoryTurn turn,
-                              List<UserMemoryHit> relatedFacts,
-                              boolean rememberFacts,
-                              boolean refreshProfile) {
+    private String episodeUserPrompt(String oldProfile,
+                                      UserMemoryTurn turn,
+                                      List<UserMemoryHit> relatedFacts) {
         return """
-            本轮处理开关：
-            rememberFacts=%s
-            refreshProfile=%s
-
-            旧用户画像：
+            旧用户画像（上下文参考）：
             %s
 
             相近旧事实：
@@ -117,57 +139,84 @@ public class UserMemoryAnalyzer {
             输出 JSON 格式：
             {
               "factsToAdd": [
-                {"content": "用户希望项目注释使用中文", "type": "preference", "evidence": "用户要求注释改成中文", "confidence": 0.9}
+                {"content": "用户在上一轮纠正了 LLM 的时区处理错误，正确时区应为 UTC+8", "type": "correction", "evidence": "用户说\\"不对，时区是 UTC+8\\"", "confidence": 0.95}
               ],
               "factsToUpdate": [
-                {"factId": "旧事实 id", "content": "更新后的事实", "type": "preference", "evidence": "新对话证据", "confidence": 0.9}
+                {"factId": "旧事实 id", "content": "更新后的事实", "type": "episode", "evidence": "证据原文", "confidence": 0.9}
               ],
               "factsToDelete": [
-                {"factId": "旧事实 id", "reason": "用户明确否定"}
-              ],
-              "profileSnapshot": "基于旧画像调整后的新版用户画像，最多 %d 字"
+                {"factId": "旧事实 id", "reason": "被新对话覆盖或用户明确否定"}
+              ]
             }
 
-            如果 rememberFacts=false，factsToAdd/factsToUpdate/factsToDelete 必须为空数组。
-            如果 refreshProfile=false，profileSnapshot 必须原样返回旧用户画像；旧画像为空则返回空字符串。
+            注意：
+            - type 必须是 episode / correction / preference / knowledge 之一
+            - content 最多 220 字，evidence 最多 500 字
+            - confidence 范围 0~1
+            - factId 必须来自上面"相近旧事实"列表中的 id
+            - 旧事实列表为空或没有可合并的旧事实时，factsToUpdate 和 factsToDelete 为空数组
             """.formatted(
-            rememberFacts,
-            refreshProfile,
             blankToDefault(oldProfile, "暂无"),
             formatFacts(relatedFacts),
             turn.sessionId(),
             turn.agentId(),
             turn.createdAt(),
-            formatMessages(turn.messages()),
-            Math.max(1, properties.getProfileMaxChars())
+            formatMessages(turn.messages())
         );
     }
 
-    private UserMemoryAnalysisResult parse(String response,
-                                           List<UserMemoryHit> relatedFacts,
-                                           String oldProfile,
-                                           boolean rememberFacts,
-                                           boolean refreshProfile) throws Exception {
+    private String profileSystemPrompt() {
+        return """
+            你是 EchoMind 的用户画像生成器。根据下方的用户长期事实列表，生成一段中文用户画像摘要。
+
+            要求：
+            - 只输出画像文本，不要 JSON、Markdown 或任何格式标记。
+            - 归纳用户身份、角色、技术背景、偏好、常见任务类型、重要经历。
+            - 保留仍然有效的信息；冲突或过时的事实以更新的为准（参考时间戳）。
+            - 输出最多 %d 字。
+            """.formatted(Math.max(1, properties.getProfileMaxChars()));
+    }
+
+    private String profileUserPrompt(String oldProfile, List<UserMemoryHit> facts) {
+        return """
+            旧画像：
+            %s
+
+            当前事实列表：
+            %s
+
+            请基于事实列表生成更新后的用户画像。旧画像中仍然有效的信息应保留。
+            """.formatted(
+            blankToDefault(oldProfile, "暂无"),
+            formatFacts(facts)
+        );
+    }
+
+    private String cleanProfileResponse(String response, String oldProfile) {
+        if (response == null || response.isBlank()) {
+            return oldProfile == null ? "" : oldProfile;
+        }
+        String cleaned = response.trim();
+        if (cleaned.length() > properties.getProfileMaxChars()) {
+            cleaned = cleaned.substring(0, properties.getProfileMaxChars());
+        }
+        return cleaned;
+    }
+
+    private UserMemoryAnalysisResult parseEpisodeResponse(String response,
+                                                           List<UserMemoryHit> relatedFacts) throws Exception {
         String json = extractJsonObject(response);
         if (json == null) {
-            return UserMemoryAnalysisResult.failed(oldProfile);
+            return UserMemoryAnalysisResult.failed();
         }
         JsonNode root = mapper.readTree(json);
         Set<String> knownFactIds = relatedFacts == null
             ? Set.of()
             : relatedFacts.stream().map(UserMemoryHit::entryId).collect(Collectors.toSet());
-        List<UserMemoryAnalysisResult.FactToAdd> adds = rememberFacts ? parseAdds(root.path("factsToAdd")) : List.of();
-        List<UserMemoryAnalysisResult.FactToUpdate> updates = rememberFacts
-            ? parseUpdates(root.path("factsToUpdate"), knownFactIds)
-            : List.of();
-        List<UserMemoryAnalysisResult.FactToDelete> deletes = rememberFacts
-            ? parseDeletes(root.path("factsToDelete"), knownFactIds)
-            : List.of();
-        String profile = refreshProfile ? text(root.path("profileSnapshot")) : oldProfile;
-        if (profile == null || profile.isBlank()) {
-            profile = oldProfile;
-        }
-        return new UserMemoryAnalysisResult(adds, updates, deletes, profile == null ? "" : profile.trim());
+        List<UserMemoryAnalysisResult.FactToAdd> adds = parseAdds(root.path("factsToAdd"));
+        List<UserMemoryAnalysisResult.FactToUpdate> updates = parseUpdates(root.path("factsToUpdate"), knownFactIds);
+        List<UserMemoryAnalysisResult.FactToDelete> deletes = parseDeletes(root.path("factsToDelete"), knownFactIds);
+        return new UserMemoryAnalysisResult(adds, updates, deletes);
     }
 
     private List<UserMemoryAnalysisResult.FactToAdd> parseAdds(JsonNode node) {
@@ -293,14 +342,15 @@ public class UserMemoryAnalyzer {
             return false;
         }
         String lower = value.toLowerCase();
-        return lower.contains("accesskey")
-            || lower.contains("api key")
-            || lower.contains("apikey")
-            || lower.contains("token")
-            || lower.contains("cookie")
-            || lower.contains("password")
-            || lower.contains("secret")
-            || lower.contains("密码");
+        // 检测可能泄密的实际凭证值，避免误杀技术术语。例如 token 出现在
+        // OAuth token 刷新、JWT token 结构等上下文中是正常技术讨论。
+        if (lower.contains("accesskey") || lower.contains("api key") || lower.contains("apikey")
+            || lower.contains("cookie") || lower.contains("password") || lower.contains("secret")
+            || lower.contains("密码")) {
+            return true;
+        }
+        // token 只在明显是值而非术语时过滤：长度 > 32 或无空格上下文
+        return lower.contains("token") && (lower.contains("token=") || lower.contains("token:") || lower.contains("bearer "));
     }
 
     private String text(JsonNode node) {

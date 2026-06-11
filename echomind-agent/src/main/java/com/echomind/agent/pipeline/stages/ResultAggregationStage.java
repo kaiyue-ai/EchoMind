@@ -1,13 +1,14 @@
 package com.echomind.agent.pipeline.stages;
 
+import com.echomind.agent.pipeline.ModelInvocationPreflight;
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
+import com.echomind.common.exception.ModelInvocationRejectedException;
 import com.echomind.agent.pipeline.composing.PromptBudget;
 import com.echomind.agent.pipeline.composing.PromptComposer;
 import com.echomind.agent.pipeline.planning.MemoryDecisionParser;
-import com.echomind.agent.pipeline.planning.ToolExposure;
-import com.echomind.agent.pipeline.planning.ToolExposurePlanner;
 import com.echomind.agent.pipeline.request.ProviderRequestFactory;
+import com.echomind.agent.pipeline.request.ToolFunctionName;
 import com.echomind.agent.tool.core.Tool;
 import com.echomind.agent.tool.router.ToolRouter;
 import com.echomind.common.model.TokenUsage;
@@ -24,6 +25,7 @@ import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 
 import java.util.List;
+import java.util.Locale;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -51,11 +53,13 @@ public class ResultAggregationStage implements PipelineStage {
     /** 记忆决策解析器，用于从模型输出中提取记忆控制指令并移除隐藏标记。 */
     private final MemoryDecisionParser memoryDecisionParser = new MemoryDecisionParser(null);
 
-    /** 工具暴露规划器，负责根据用户消息和上下文智能选择要暴露的工具。 */
-    private final ToolExposurePlanner toolExposurePlanner;
+    /** 统一工具注册表；普通聊天直接暴露当前所有可用工具。 */
+    private final ToolRouter toolRouter;
 
     /** 请求工厂，负责将管线上下文组装成完整的 ProviderRequest。 */
     private final ProviderRequestFactory providerRequestFactory;
+    /** 模型调用前治理检查端口。 */
+    private final ModelInvocationPreflight invocationPreflight;
 
     /**
      * 构造函数。
@@ -66,12 +70,15 @@ public class ResultAggregationStage implements PipelineStage {
      */
     public ResultAggregationStage(ModelProviderRegistry providerRegistry, ToolRouter toolRouter,
                                   PromptBudget promptBudget) {
+        this(providerRegistry, toolRouter, promptBudget, ModelInvocationPreflight.NOOP);
+    }
+
+    public ResultAggregationStage(ModelProviderRegistry providerRegistry, ToolRouter toolRouter,
+                                  PromptBudget promptBudget, ModelInvocationPreflight invocationPreflight) {
         this.providerRegistry = providerRegistry;
-        this.toolExposurePlanner = new ToolExposurePlanner(toolRouter);
-        this.providerRequestFactory = new ProviderRequestFactory(
-            new PromptComposer(promptBudget),
-            toolExposurePlanner
-        );
+        this.toolRouter = toolRouter;
+        this.providerRequestFactory = new ProviderRequestFactory(new PromptComposer(promptBudget));
+        this.invocationPreflight = invocationPreflight == null ? ModelInvocationPreflight.NOOP : invocationPreflight;
     }
 
     /**
@@ -133,6 +140,9 @@ public class ResultAggregationStage implements PipelineStage {
             } finally {
                 span.end();
             }
+        } catch (ModelInvocationRejectedException e) {
+            ctx.markGovernanceRejected(e.errorDetail());
+            throw e;
         } catch (Exception e) {
             log.error("LLM call failed in aggregation stage", e);
             ctx.markFailed("LLM call failed: " + e.getMessage());
@@ -214,7 +224,7 @@ public class ResultAggregationStage implements PipelineStage {
      * <p>执行步骤：
      * 1. 获取解析后的模型规格
      * 2. 根据 providerId 获取对应的 ModelProvider
-     * 3. 使用 ToolExposurePlanner 规划要暴露的工具
+     * 3. 直接读取当前所有可用工具
      * 4. 使用 ProviderRequestFactory 构造完整的请求对象
      *
      * @param ctx 管线上下文
@@ -235,18 +245,112 @@ public class ResultAggregationStage implements PipelineStage {
             return null;
         }
 
-        // 3. 规划要暴露的工具
-        ToolExposure exposure = toolExposurePlanner.plan(ctx);
+        // 3. 普通聊天不做候选筛选；内部控制面调用仍可显式关闭工具暴露。
+        List<Tool> tools = exposedTools(ctx);
+        String systemPrompt = appendToolUsageInstruction(ctx.getSystemPrompt(), tools);
 
         // 4. 构造完整的请求对象
         ProviderRequest request = providerRequestFactory.create(
             ctx,
             model,
-            memoryDecisionParser.appendInstruction(ctx.getSystemPrompt()),  // 添加记忆决策指令
-            exposure
+            memoryDecisionParser.appendInstruction(systemPrompt),
+            tools
         );
+        try {
+            invocationPreflight.beforeInvoke(ctx, request);
+        } catch (ModelInvocationRejectedException e) {
+            ctx.markGovernanceRejected(e.errorDetail());
+            throw e;
+        }
         // 模型 提供商 请求 工具
-        return new Invocation(model, provider, request, exposure.tools());
+        return new Invocation(model, provider, request, tools);
+    }
+
+    private List<Tool> exposedTools(PipelineContext ctx) {
+        if (Boolean.TRUE.equals(ctx.getAttributes().get(PipelineContext.ATTR_TOOL_EXPOSURE_DISABLED))) {
+            log.debug("Tool exposure disabled for internal control-plane invocation");
+            return List.of();
+        }
+        return List.copyOf(toolRouter.listAll());
+    }
+
+    /**
+     * 给模型补充工具使用策略。
+     *
+     * <p>工具选择交给 LLM 后，系统提示需要清楚说明：遇到实时事实、不确定事实和日期计算时，
+     * 应主动使用对应工具，而不是等用户把“搜索/查日期”说得很死。</p>
+     */
+    private String appendToolUsageInstruction(String systemPrompt, List<Tool> tools) {
+        if (tools == null || tools.isEmpty()) {
+            return systemPrompt;
+        }
+
+        boolean hasDateTool = hasFunctionTool(tools, "date_query");
+        String webSearchToolName = webSearchFunctionName(tools);
+        StringBuilder instruction = new StringBuilder();
+        instruction.append("\n\n=== 工具使用规则 ===\n");
+        instruction.append("本轮普通聊天已暴露所有可用工具。你必须根据工具描述和参数 schema 自主判断是否调用工具，不要因为 Agent 未绑定某个 Skill 就放弃可用工具。\n");
+        instruction.append("只能调用本轮函数列表中真实存在的工具名，不要自造、缩写或改写工具名。\n");
+        if (hasDateTool) {
+            instruction.append("遇到当前日期、当前时间、今天、明天、后天、昨天、星期几、时区或相对日期计算，先调用 date_query，避免凭模型记忆猜日期。\n");
+        }
+        if (webSearchToolName != null) {
+            instruction.append("联网搜索用于事实取证：除极少数明显不需要外部信息的请求外，凡是涉及外部事实、知识解释、实体信息、当前或近期状态、公开网页、新闻、价格、版本、政策法规、院校招生、就业、排名、公司、人物、产品、论文、开源库或依赖信息，回答前必须至少调用一次 ")
+                .append(webSearchToolName)
+                .append(" 获取证据。\n");
+            instruction.append("可以不联网的少数情况仅包括：简短寒暄、翻译/润色/总结用户已提供内容、纯格式转换、纯数学推理、纯代码局部解释，或用户明确要求不要联网。\n");
+            instruction.append("没有检索证据或证据不足时，不要给出确定性事实答案；请说明无法确认，并给出可验证的下一步。\n");
+        } else {
+            instruction.append("本轮没有可用的联网搜索工具；涉及外部事实、知识核验或时效信息时，若上下文证据不足，请明确说明无法联网核验，不要给出确定性事实答案。\n");
+        }
+        instruction.append("如果工具结果与你的记忆冲突，以工具结果为准，并在回答中说明依据的时间或来源。\n");
+        return (systemPrompt == null ? "" : systemPrompt) + instruction;
+    }
+
+    private boolean hasFunctionTool(List<Tool> tools, String functionName) {
+        return tools.stream()
+            .anyMatch(tool -> functionName.equals(ToolFunctionName.from(tool)));
+    }
+
+    private String webSearchFunctionName(List<Tool> tools) {
+        for (Tool tool : tools) {
+            if ("open_web_search".equals(ToolFunctionName.from(tool))) {
+                return "open_web_search";
+            }
+        }
+        for (Tool tool : tools) {
+            String functionName = ToolFunctionName.from(tool);
+            if (isWebSearchTool(tool, functionName)) {
+                return functionName;
+            }
+        }
+        return null;
+    }
+
+    private boolean isWebSearchTool(Tool tool, String functionName) {
+        if (tool == null) {
+            return false;
+        }
+        String joined = String.join(" ",
+            safe(functionName),
+            safe(tool.name()),
+            safe(tool.description()),
+            safe(tool.sourceId()),
+            String.join(" ", tool.tags() == null ? List.of() : tool.tags()),
+            String.join(" ", tool.keywords() == null ? List.of() : tool.keywords())
+        ).toLowerCase(Locale.ROOT);
+        return joined.contains("open-websearch")
+            || joined.contains("open_web_search")
+            || joined.contains("web search")
+            || joined.contains("search the web")
+            || joined.contains("search web")
+            || joined.contains("web_search")
+            || joined.contains("search_web")
+            || joined.contains("internet")
+            || joined.contains("联网搜索")
+            || joined.contains("网络搜索")
+            || ((joined.contains("search") || joined.contains("搜索"))
+                && (joined.contains("web") || joined.contains("internet") || joined.contains("联网") || joined.contains("网络")));
     }
 
     /**

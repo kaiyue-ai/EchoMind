@@ -43,6 +43,18 @@ public class TeamRunEntity {
     // 任务等级
     private TeamTaskLevel taskLevel = TeamTaskLevel.COMPLEX;
 
+    @TableField("plan_review_enabled")
+    private boolean planReviewEnabled = true;
+
+    @TableField("sub_review_enabled")
+    private boolean subReviewEnabled = true;
+
+    @TableField("global_review_enabled")
+    private boolean globalReviewEnabled = true;
+
+    @TableField("simple_fast_path_enabled")
+    private boolean simpleFastPathEnabled;
+
     @TableField("clarification_question")
     // 任务澄清问题
     private String clarificationQuestion;

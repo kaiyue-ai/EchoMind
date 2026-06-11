@@ -10,7 +10,6 @@ import com.echomind.agent.team.store.TeamRunEntity;
 import com.echomind.agent.team.store.TeamRunMapper;
 import com.echomind.agent.team.store.TeamStepMapper;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.task.SyncTaskExecutor;
 
 import java.util.List;
 import java.util.Optional;
@@ -91,28 +90,6 @@ class TeamBlackboardServiceDeleteTest {
     }
 
     @Test
-    void deletedRunCannotBeWrittenAfterHardDelete() {
-        TeamEntity team = new TeamEntity();
-        team.setTeamId("team-1");
-        team.setOwnerUserId("user-a");
-        team.setName("测试团队");
-        TeamRunEntity run = new TeamRunEntity();
-        run.setRunId("run-1");
-        run.setTeamId("team-1");
-        when(teamMapper.selectOptionalByTeamIdAndOwnerUserId("team-1", "user-a")).thenReturn(Optional.of(team));
-        when(runMapper.selectByTeamIdOrderByCreatedAtDesc("team-1")).thenReturn(List.of(run));
-        TeamBlackboardService service = service();
-
-        service.deleteTeam("team-1", "user-a");
-
-        service.executeRun("run-1");
-
-        verify(runMapper, never()).upsertById(org.mockito.ArgumentMatchers.any());
-        verify(stepMapper, never()).upsertById(org.mockito.ArgumentMatchers.any());
-        verify(eventMapper, never()).upsertById(org.mockito.ArgumentMatchers.any());
-    }
-
-    @Test
     void deleteTeamRejectsDifferentOwner() {
         when(teamMapper.selectOptionalByTeamIdAndOwnerUserId("team-1", "user-b")).thenReturn(Optional.empty());
 
@@ -132,8 +109,7 @@ class TeamBlackboardServiceDeleteTest {
             stepMapper,
             eventMapper,
             mock(AgentFactory.class),
-            mock(AgentOrchestrator.class),
-            new SyncTaskExecutor()
+            mock(AgentOrchestrator.class)
         );
     }
 }

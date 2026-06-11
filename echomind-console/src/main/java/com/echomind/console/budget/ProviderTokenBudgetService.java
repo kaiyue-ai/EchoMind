@@ -1,14 +1,14 @@
 package com.echomind.console.budget;
 
-import com.echomind.agent.pipeline.PipelineContext;
-import com.echomind.agent.pipeline.budget.ProviderTokenBudgetGuard;
 import com.echomind.console.alerts.AlertService;
 import com.echomind.console.budget.ProviderTokenBudgetDtos.ProviderTokenBudgetListResponse;
 import com.echomind.console.budget.ProviderTokenBudgetDtos.ProviderTokenBudgetView;
 import com.echomind.console.budget.ProviderTokenBudgetDtos.UpdateProviderTokenBudgetsRequest;
+import com.echomind.console.reservation.TokenReservationService;
 import com.echomind.console.usage.AiCallUsageEntity;
 import com.echomind.console.usage.AiCallUsageMapper;
 import com.echomind.llm.router.ModelProviderRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,57 +26,78 @@ import java.util.List;
 import java.util.Set;
 
 @Service
-public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
+public class ProviderTokenBudgetService {
 
     private static final ZoneId BUDGET_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final ProviderTokenBudgetMapper budgetMapper;
     private final AiCallUsageMapper usageMapper;
+    private final ProviderTokenBudgetUsageMapper budgetUsageMapper;
     private final AlertService alertService;
     private final ModelProviderRegistry providerRegistry;
+    private final ObjectProvider<TokenReservationService> reservationService;
     private final Clock clock;
 
     @Autowired
     public ProviderTokenBudgetService(ProviderTokenBudgetMapper budgetMapper,
                                       AiCallUsageMapper usageMapper,
+                                      ProviderTokenBudgetUsageMapper budgetUsageMapper,
                                       AlertService alertService,
-                                      ModelProviderRegistry providerRegistry) {
-        this(budgetMapper, usageMapper, alertService, providerRegistry, Clock.system(BUDGET_ZONE));
+                                      ModelProviderRegistry providerRegistry,
+                                      ObjectProvider<TokenReservationService> reservationService) {
+        this(budgetMapper, usageMapper, budgetUsageMapper, alertService, providerRegistry, reservationService,
+            Clock.system(BUDGET_ZONE));
     }
 
     ProviderTokenBudgetService(ProviderTokenBudgetMapper budgetMapper,
                                AiCallUsageMapper usageMapper,
+                               ProviderTokenBudgetUsageMapper budgetUsageMapper,
                                AlertService alertService,
                                ModelProviderRegistry providerRegistry,
+                               ObjectProvider<TokenReservationService> reservationService,
                                Clock clock) {
         this.budgetMapper = budgetMapper;
         this.usageMapper = usageMapper;
+        this.budgetUsageMapper = budgetUsageMapper;
         this.alertService = alertService;
         this.providerRegistry = providerRegistry;
+        this.reservationService = reservationService;
         this.clock = clock == null ? Clock.system(BUDGET_ZONE) : clock;
     }
 
-    @Override
     @Transactional(readOnly = true)
-    public void assertAllowed(PipelineContext ctx) {
-        String providerId = providerId(ctx);
+    public List<String> reserveProviderBudget(String providerId, String requestId, long estimatedTokens) {
+        return reserveProviderBudget(providerId, requestId, null, null, estimatedTokens);
+    }
+
+    @Transactional(readOnly = true)
+    public List<String> reserveProviderBudget(String providerId, String requestId, String agentId, String sessionId,
+                                              long estimatedTokens) {
         if (providerId == null || providerId.isBlank()) {
-            return;
+            return List.of();
         }
-        budgetMapper.selectOptionalById(providerId)
-            .filter(budget -> budget.getStatus() == ProviderTokenBudgetStatus.ACTIVE)
-            .ifPresent(budget -> assertBudget(providerId, budget, ctx));
+        ProviderTokenBudgetEntity budget = budgetMapper.selectOptionalById(providerId)
+            .filter(entity -> entity.getStatus() == ProviderTokenBudgetStatus.ACTIVE)
+            .filter(this::hasConfiguredLimit)
+            .orElse(null);
+        if (budget == null) {
+            return List.of();
+        }
+        return reserveBudget(providerId, requestId, agentId, sessionId, estimatedTokens);
     }
 
     @Transactional
-    public void recordWarnings(AiCallUsageEntity usage) {
+    public void recordUsageAndWarnings(AiCallUsageEntity usage) {
         String providerId = providerId(usage);
         if (providerId == null || providerId.isBlank()) {
             return;
         }
         budgetMapper.selectOptionalById(providerId)
             .filter(budget -> budget.getStatus() == ProviderTokenBudgetStatus.ACTIVE)
-            .ifPresent(budget -> emitSignals(providerId, budget, usage));
+            .ifPresent(budget -> {
+                settleUsage(providerId, budget, usage == null ? 0 : usage.getTotalTokens());
+                emitSignals(providerId, budget, usage);
+            });
     }
 
     @Transactional(readOnly = true)
@@ -114,16 +135,20 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
         return list();
     }
 
-    private void assertBudget(String providerId, ProviderTokenBudgetEntity budget, PipelineContext ctx) {
-        for (BudgetSignal signal : signals(providerId, budget)) {
-            if (!signal.exceeded()) {
-                continue;
-            }
-            alertService.emitProviderBudgetExceeded(providerId, ctx == null ? null : ctx.getTraceId(),
-                ctx == null ? null : ctx.getAgentId(), ctx == null ? null : ctx.getSessionId(),
-                signal.scope(), signal.usedTokens(), signal.limitTokens());
-            throw new ProviderTokenBudgetExceededException(providerId, signal.scope(),
-                signal.usedTokens(), signal.limitTokens());
+    private List<String> reserveBudget(String providerId, String requestId, String agentId, String sessionId,
+                                        long estimatedTokens) {
+        TokenReservationService service = reservationService == null ? null : reservationService.getIfAvailable();
+        if (service == null) {
+            throw new com.echomind.console.reservation.TokenReservationUnavailableException(
+                "Redis unavailable for provider token budget reservation");
+        }
+        long reserveTokens = estimatedTokens > 0 ? estimatedTokens : service.defaultReserveTokens();
+        try {
+            return service.reserveProvider(providerId, requestId, reserveTokens);
+        } catch (ProviderTokenBudgetExceededException e) {
+            alertService.emitProviderBudgetExceeded(providerId, requestId, agentId, sessionId, e.scope(),
+                e.usedTokens(), e.limitTokens());
+            throw e;
         }
     }
 
@@ -146,9 +171,9 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
         Long monthlyLimit = budget == null ? null : budget.getMonthlyLimitTokens();
         int threshold = budget == null ? 80 : budget.getWarningThresholdPercent();
         ProviderTokenBudgetStatus status = budget == null ? ProviderTokenBudgetStatus.ACTIVE : budget.getStatus();
-        long todayUsed = usageMapper.totalTokensByProviderIdSince(providerId, startOfDay());
-        long weekUsed = usageMapper.totalTokensByProviderIdSince(providerId, startOfWeek());
-        long monthUsed = usageMapper.totalTokensByProviderIdSince(providerId, startOfMonth());
+        long todayUsed = usedTokens(providerId, "daily", todayBucket());
+        long weekUsed = usedTokens(providerId, "weekly", weekBucket());
+        long monthUsed = usedTokens(providerId, "monthly", monthBucket());
         double dailyPercent = percent(todayUsed, dailyLimit);
         double weeklyPercent = percent(weekUsed, weeklyLimit);
         double monthlyPercent = percent(monthUsed, monthlyLimit);
@@ -177,13 +202,35 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
 
     private List<BudgetSignal> signals(String providerId, ProviderTokenBudgetEntity budget) {
         List<BudgetSignal> signals = new ArrayList<>();
-        addSignal(signals, "daily", usageMapper.totalTokensByProviderIdSince(providerId, startOfDay()),
+        addSignal(signals, "daily", usedTokens(providerId, "daily", todayBucket()),
             budget.getDailyLimitTokens(), budget.getWarningThresholdPercent());
-        addSignal(signals, "weekly", usageMapper.totalTokensByProviderIdSince(providerId, startOfWeek()),
+        addSignal(signals, "weekly", usedTokens(providerId, "weekly", weekBucket()),
             budget.getWeeklyLimitTokens(), budget.getWarningThresholdPercent());
-        addSignal(signals, "monthly", usageMapper.totalTokensByProviderIdSince(providerId, startOfMonth()),
+        addSignal(signals, "monthly", usedTokens(providerId, "monthly", monthBucket()),
             budget.getMonthlyLimitTokens(), budget.getWarningThresholdPercent());
         return signals;
+    }
+
+    private void settleUsage(String providerId, ProviderTokenBudgetEntity budget, long totalTokens) {
+        if (totalTokens <= 0) {
+            return;
+        }
+        settleBucket(providerId, "daily", todayBucket(), budget.getDailyLimitTokens(), totalTokens);
+        settleBucket(providerId, "weekly", weekBucket(), budget.getWeeklyLimitTokens(), totalTokens);
+        settleBucket(providerId, "monthly", monthBucket(), budget.getMonthlyLimitTokens(), totalTokens);
+    }
+
+    private void settleBucket(String providerId, String scope, LocalDate bucketStart, Long limit, long totalTokens) {
+        if (limit == null || limit <= 0) {
+            return;
+        }
+        budgetUsageMapper.insertIgnoreBucket(providerId, scope, bucketStart);
+        budgetUsageMapper.incrementUsedTokens(providerId, scope, bucketStart, totalTokens);
+    }
+
+    private long usedTokens(String providerId, String scope, LocalDate bucketStart) {
+        Long used = budgetUsageMapper.selectUsedTokens(providerId, scope, bucketStart);
+        return used == null ? 0 : used;
     }
 
     private void addSignal(List<BudgetSignal> signals, String scope, long used, Long limit, int threshold) {
@@ -195,26 +242,30 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
             warning(usagePercent, threshold), exceeded(used, limit)));
     }
 
-    private Instant startOfDay() {
-        return LocalDate.now(clock).atStartOfDay(BUDGET_ZONE).toInstant();
+    private LocalDate todayBucket() {
+        return Instant.now(clock).atZone(BUDGET_ZONE).toLocalDate();
     }
 
-    private Instant startOfWeek() {
-        return LocalDate.now(clock)
-            .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-            .atStartOfDay(BUDGET_ZONE)
-            .toInstant();
+    private LocalDate weekBucket() {
+        return todayBucket().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
     }
 
-    private Instant startOfMonth() {
-        return LocalDate.now(clock)
-            .withDayOfMonth(1)
-            .atStartOfDay(BUDGET_ZONE)
-            .toInstant();
+    private LocalDate monthBucket() {
+        return todayBucket().withDayOfMonth(1);
     }
 
     private Long normalizeLimit(Long value) {
         return value == null || value <= 0 ? null : value;
+    }
+
+    private boolean hasConfiguredLimit(ProviderTokenBudgetEntity budget) {
+        return budget != null && (positive(budget.getDailyLimitTokens())
+            || positive(budget.getWeeklyLimitTokens())
+            || positive(budget.getMonthlyLimitTokens()));
+    }
+
+    private boolean positive(Long value) {
+        return value != null && value > 0;
     }
 
     private int normalizeThreshold(int value) {
@@ -234,17 +285,6 @@ public class ProviderTokenBudgetService implements ProviderTokenBudgetGuard {
             return 0;
         }
         return Math.min(999, (used * 100.0) / limit);
-    }
-
-    private String providerId(PipelineContext ctx) {
-        if (ctx == null) {
-            return null;
-        }
-        if (ctx.getResolvedModel() != null && ctx.getResolvedModel().providerId() != null
-            && !ctx.getResolvedModel().providerId().isBlank()) {
-            return ctx.getResolvedModel().providerId();
-        }
-        return providerFromModelId(ctx.getModelId());
     }
 
     private String providerId(AiCallUsageEntity usage) {

@@ -2,20 +2,20 @@ package com.echomind.console.sensitive;
 
 import java.time.Instant;
 import java.util.List;
-
+// 敏感数据
 public final class SensitiveDtos {
     private SensitiveDtos() {
     }
 
     public record SensitiveRuleView(
-        String ruleId,
-        String ruleName,
-        String pattern,
-        String replacement,
-        SensitiveAction action,
-        boolean enabled,
-        boolean builtIn,
-        Instant updatedAt
+        String ruleId, // 规则ID
+        String ruleName, // 规则名称
+        String pattern, // 匹配的正则表达式
+        String replacement, // 代替的词语
+        SensitiveAction action, // 阻塞 or 代替
+        boolean enabled, // 是否启用
+        boolean builtIn, // 是否内置规则
+        Instant updatedAt // 更新的时间
     ) {
     }
 

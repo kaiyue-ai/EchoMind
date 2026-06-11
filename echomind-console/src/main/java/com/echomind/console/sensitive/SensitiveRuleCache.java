@@ -36,6 +36,7 @@ public class SensitiveRuleCache {
 
     private static final TypeReference<List<SensitiveRuleEntity>> RULE_LIST_TYPE = new TypeReference<>() {
     };
+    // 分布式锁解决缓存击穿的问题
     private static final DefaultRedisScript<Long> RELEASE_LOCK_SCRIPT = new DefaultRedisScript<>("""
         if redis.call('GET', KEYS[1]) == ARGV[1] then
             return redis.call('DEL', KEYS[1])

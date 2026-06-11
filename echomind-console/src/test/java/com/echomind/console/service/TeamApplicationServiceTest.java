@@ -4,6 +4,7 @@ import com.echomind.agent.team.model.TeamMember;
 import com.echomind.agent.team.runtime.TeamBlackboardService;
 import com.echomind.agent.team.runtime.TeamEventSnapshot;
 import com.echomind.agent.team.runtime.TeamMemberSpec;
+import com.echomind.agent.team.runtime.TeamReviewOptions;
 import com.echomind.agent.team.runtime.TeamRunSnapshot;
 import com.echomind.agent.team.runtime.TeamSnapshot;
 import com.echomind.agent.team.runtime.TeamStepSnapshot;
@@ -60,14 +61,15 @@ class TeamApplicationServiceTest {
         TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
         TeamApplicationService service = new TeamApplicationService(blackboard);
         AuthContext.set(new AuthUser("user-a", "alice", true));
-        when(blackboard.createRun("team-1", "user-a", "策划活动")).thenReturn(runSnapshot(TeamRunStatus.PENDING, null));
+        when(blackboard.createRun("team-1", "user-a", "策划活动", TeamReviewOptions.QUALITY_FIRST))
+            .thenReturn(runSnapshot(TeamRunStatus.PENDING, null));
 
         try {
             TeamRunView run = service.createRun("team-1", new TeamRunCreateRequest("策划活动"));
 
             assertThat(run.teamId()).isEqualTo("team-1");
             assertThat(run.status()).isEqualTo("PENDING");
-            verify(blackboard).createRun("team-1", "user-a", "策划活动");
+            verify(blackboard).createRun("team-1", "user-a", "策划活动", TeamReviewOptions.QUALITY_FIRST);
         } finally {
             AuthContext.clear();
         }
@@ -147,6 +149,7 @@ class TeamApplicationServiceTest {
             "整理需求",
             status,
             "COMPLEX",
+            TeamReviewOptions.QUALITY_FIRST,
             null,
             null,
             null,

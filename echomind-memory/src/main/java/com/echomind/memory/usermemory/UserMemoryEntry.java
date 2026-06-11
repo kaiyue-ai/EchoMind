@@ -2,7 +2,7 @@ package com.echomind.memory.usermemory;
 
 import java.time.Instant;
 
-/** Milvus 中保存的一条用户长期画像。 */
+/** Milvus 中保存的一条会话事件事实。 */
 public record UserMemoryEntry(
     String sessionId,
     String entryId,
@@ -12,8 +12,7 @@ public record UserMemoryEntry(
     double confidence,
     Instant firstObservedAt,
     Instant lastObservedAt,
-    Instant updatedAt,
-    double[] embedding
+    Instant updatedAt
 ) {
     public UserMemoryEntry {
         Instant now = Instant.now();

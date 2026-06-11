@@ -3,7 +3,6 @@ package com.echomind.usermemory.service;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.model.UserMemoryEvent;
-import com.echomind.memory.embedding.EmbeddingClient;
 import com.echomind.memory.usermemory.UserMemoryCategory;
 import com.echomind.memory.usermemory.UserMemoryEntry;
 import com.echomind.memory.usermemory.UserMemoryHit;
@@ -18,7 +17,6 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -30,7 +28,6 @@ public class UserMemoryService {
     private final UserMemoryStore vectorStore;
     private final UserProfileSnapshotStore snapshotStore;
     private final UserMemoryAnalyzer analyzer;
-    private final EmbeddingClient embeddingClient;
     private final UserMemoryProperties properties;
 
     public void process(UserMemoryEvent event) {
@@ -69,41 +66,64 @@ public class UserMemoryService {
             .collect(Collectors.joining("\n"));
         List<UserMemoryHit> relatedFacts = findRelatedFacts(userMemoryKey, batchText);
         String oldProfile = snapshotStore.get(userId).map(UserProfileSnapshot::content).orElse("");
-        UserMemoryAnalysisResult result = analyzer.analyze(
-            userMemoryKey,
-            oldProfile,
-            turn,
-            relatedFacts,
-            decision.rememberFacts(),
-            decision.refreshProfile()
-        );
-        if (!result.analysisSucceeded()) {
-            log.warn("User memory analysis returned no valid JSON userId={}, sessionId={}", userId, turn.sessionId());
-            return;
+
+        // rememberFacts → 提取会话事件 → Milvus
+        int changed = 0;
+        if (decision.rememberFacts()) {
+            UserMemoryAnalysisResult result = analyzer.analyzeEpisodes(
+                userMemoryKey, oldProfile, turn, relatedFacts);
+            if (!result.analysisSucceeded()) {
+                log.warn("User memory episode analysis returned no valid JSON userId={} sessionId={}",
+                    userId, turn.sessionId());
+            } else {
+                changed = applyFactChanges(userMemoryKey, turn.createdAt(), result, relatedFacts);
+            }
         }
-        int changed = decision.rememberFacts()
-            ? applyFactChanges(userMemoryKey, turn.createdAt(), result, relatedFacts)
-            : 0;
+
+        // refreshProfile → 独立从 Milvus 事实生成画像 → Redis
         if (decision.refreshProfile()) {
-            saveProfileSnapshot(userId, result.profileSnapshot(), oldProfile);
+            refreshProfile(userId, userMemoryKey, oldProfile);
         }
+
         log.info("Processed user memory userId={} sessionId={} rememberFacts={} refreshProfile={} factChanges={}",
             userId, turn.sessionId(), decision.rememberFacts(), decision.refreshProfile(), changed);
+    }
+
+    private void refreshProfile(String userId, String userMemoryKey, String oldProfile) {
+        List<UserMemoryHit> facts = listFactsForProfile(userMemoryKey);
+        String newProfile = analyzer.refreshProfile(userId, oldProfile, facts);
+        saveProfileSnapshot(userId, newProfile, oldProfile);
+    }
+
+    private List<UserMemoryHit> listFactsForProfile(String userMemoryKey) {
+        if (vectorStore == null) {
+            return List.of();
+        }
+        try {
+            return vectorStore.search(
+                userMemoryKey,
+                "用户画像 偏好 背景 技术栈 身份 角色",
+                Math.max(10, properties.getRelatedFactTopK()),
+                Math.max(0, properties.getMinConfidence()),
+                clampSimilarity(properties.getMergeMinSimilarity())
+            );
+        } catch (Exception e) {
+            log.warn("Failed to list facts for profile refresh userMemoryKey={}: {}", userMemoryKey, e.getMessage());
+            return List.of();
+        }
     }
 
     private List<UserMemoryHit> findRelatedFacts(String userMemoryKey, String text) {
         if (text == null || text.isBlank()) {
             return List.of();
         }
-        return embeddingClient.embed(text)
-            .map(vector -> vectorStore.search(
-                userMemoryKey,
-                vector,
-                Math.max(1, properties.getRelatedFactTopK()),
-                Math.max(0, properties.getMinConfidence()),
-                clampSimilarity(properties.getMergeMinSimilarity())
-            ))
-            .orElseGet(List::of);
+        return vectorStore.search(
+            userMemoryKey,
+            text,
+            Math.max(1, properties.getRelatedFactTopK()),
+            Math.max(0, properties.getMinConfidence()),
+            clampSimilarity(properties.getMergeMinSimilarity())
+        );
     }
 
     private int applyFactChanges(String userMemoryKey,
@@ -116,10 +136,6 @@ public class UserMemoryService {
             changed++;
         }
         for (UserMemoryAnalysisResult.FactToUpdate item : result.factsToUpdate()) {
-            Optional<double[]> embedding = embeddingClient.embed(item.content());
-            if (embedding.isEmpty()) {
-                continue;
-            }
             UserMemoryHit old = relatedFacts.stream()
                 .filter(hit -> hit.entryId().equals(item.factId()))
                 .findFirst()
@@ -128,22 +144,17 @@ public class UserMemoryService {
             vectorStore.save(new UserMemoryEntry(
                 userMemoryKey,
                 item.factId(),
-                item.category() == null ? (old == null ? UserMemoryCategory.INTEREST : old.category()) : item.category(),
+                item.category() == null ? (old == null ? UserMemoryCategory.EPISODE : old.category()) : item.category(),
                 item.content(),
                 item.evidence(),
                 item.confidence(),
                 old == null || old.firstObservedAt() == null ? observedAt : old.firstObservedAt(),
                 observedAt,
-                Instant.now(),
-                embedding.get()
+                Instant.now()
             ));
             changed++;
         }
         for (UserMemoryAnalysisResult.FactToAdd item : dedupeAdds(result.factsToAdd(), relatedFacts)) {
-            Optional<double[]> embedding = embeddingClient.embed(item.content());
-            if (embedding.isEmpty()) {
-                continue;
-            }
             vectorStore.save(new UserMemoryEntry(
                 userMemoryKey,
                 UUID.randomUUID().toString(),
@@ -153,8 +164,7 @@ public class UserMemoryService {
                 item.confidence(),
                 observedAt,
                 observedAt,
-                Instant.now(),
-                embedding.get()
+                Instant.now()
             ));
             changed++;
         }

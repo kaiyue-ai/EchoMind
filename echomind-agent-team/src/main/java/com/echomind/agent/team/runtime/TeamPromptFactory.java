@@ -87,7 +87,7 @@ final class TeamPromptFactory {
             Do not use ASCII double quotes inside text values; use Chinese corner quotes 「」 instead.
             Respond only with JSON:
             {
-              "action": "CONTINUE | RETRY | ASK_CLARIFICATION",
+              "action": "CONTINUE | RETRY | ASK_CLARIFICATION | FAILED",
               "reason": "why",
               "questions": ["only if clarification is needed"],
               "retryStepIds": [],
@@ -149,16 +149,17 @@ final class TeamPromptFactory {
 
     static String subReviewer(TeamRunEntity run, TeamStepEntity step) {
         return """
-            你是 Agent Team 的 SubReviewer，负责审查单个高风险 Step 的原始输出。
+            你是 Agent Team 的 StepReviewer，负责审查单个 Step 的原始输出。
             请对照原始任务、Step 描述和验收标准，判断该 Step 是否可被下游依赖使用。
-            如果需要重试，必须给出可执行的 Reflexion 修改意见。
+            执行阶段不能向用户澄清；如果信息不足，请要求当前 Step 返工，或带风险放行并写清 assumptions / risks。
+            如果需要返工，必须给出可执行的 Reflexion 修改意见。
             请只返回 JSON：
             {
-              "action": "CONTINUE | RETRY | ASK_CLARIFICATION",
+              "action": "PASS | REWORK | ACCEPT_WITH_RISK | FAILED",
               "reason": "中文审查原因",
-              "questions": ["需要用户补充时填写"],
+              "questions": [],
               "retryStepIds": [],
-              "revisionInstructions": "重试修改意见",
+              "revisionInstructions": "返工修改意见，action=REWORK 时必填",
               "stepReflections": {
                 "%s": {
                   "failedCriteria": ["未满足的验收标准"],
@@ -300,11 +301,17 @@ final class TeamPromptFactory {
     }
 
     static String merger(TeamRunEntity run, List<TeamStepSnapshot> steps, TeamJsonSupport json) {
+        return merger(run, steps, json, "");
+    }
+
+    static String merger(TeamRunEntity run, List<TeamStepSnapshot> steps, TeamJsonSupport json,
+                         String mergeInstructions) {
         return """
             你是 Agent Team 的 MergeAgent，负责把多个 Step 的原始结果聚合成一致、可读、可审查的中文草稿。
             请统一口径、指出冲突或瑕疵，不要隐藏 FLAWED_ACCEPTED 的问题。
             忽略状态为 SUPERSEDED 的旧 Step，它们只作为重规划历史。
             如果存在 Planner 仲裁结果，请按仲裁口径统一数字、日期、地点和执行方案。
+            如果存在 GlobalReviewer 的重新合并意见，请优先按该意见修改最终草稿；不要要求 Step 重跑或重新规划 DAG。
             只输出聚合后的 Markdown 草稿，不要输出 JSON。
 
             原始用户任务：
@@ -321,12 +328,16 @@ final class TeamPromptFactory {
 
             Planner 仲裁结果：
             %s
+
+            GlobalReviewer 重新合并意见：
+            %s
             """.formatted(
             run.getTask(),
             nullToBlank(run.getClarificationAnswer()),
             json.toJson(steps),
             nullToBlank(run.getConflictReportJson()),
-            nullToBlank(run.getArbitrationJson())
+            nullToBlank(run.getArbitrationJson()),
+            nullToBlank(mergeInstructions)
         );
     }
 
@@ -384,37 +395,26 @@ final class TeamPromptFactory {
 
     static String resultReviewer(TeamRunEntity run, List<TeamStepSnapshot> steps, TeamJsonSupport json) {
         return """
-            You are the Reviewer, quality gate, and final report writer for an Agent Team.
-            You are acting as GlobalReviewer. Compare the original user request, MergeAgent draft, and every Executor result.
-            Write reason, questions, revisionInstructions, and finalReport in Simplified Chinese.
-            If the planned Step structure is still correct but some results are insufficient, return RETRY with the exact retryStepIds and revision instructions.
-            If only a local DAG branch needs replanning, return PARTIAL_REPLAN with affectedStepIds and revisionInstructions.
-            If the Step structure itself is wrong or missing required work globally, return REPLAN with revisionInstructions for the Planner.
-            If user input is ambiguous, return ASK_CLARIFICATION with questions.
-            If the result is unrecoverable within the current limits, return FAILED.
-            If acceptable, return CONTINUE and write finalReport as a complete user-facing report.
-            Any RETRY or PARTIAL_REPLAN must include Reflexion in stepReflections for affected Step IDs.
+            You are the GlobalReviewer, the final quality gate for an Agent Team.
+            Review only the final MergeAgent draft against the original user request and accepted Step outputs.
+            Write reason, revisionInstructions, and finalReport in Simplified Chinese.
+            You must not retry Steps, replan the DAG, or ask the user for clarification.
+            If the final draft is deliverable, return SUCCESS and write finalReport as a complete user-facing report.
+            If the draft is close but needs rewriting, return REMERGE and put concrete MergeAgent instructions in revisionInstructions.
+            If the final answer cannot be delivered within the current completed Step outputs and merge attempts, return FAILED.
             Respond as one single-line valid JSON object only.
             Text fields must not contain raw line breaks. Encode line breaks as \\n only when needed.
             Do not use ASCII double quotes inside text values; use Chinese corner quotes 「」 instead.
             Respond only with JSON:
             {
-              "action": "CONTINUE | RETRY | PARTIAL_REPLAN | REPLAN | ASK_CLARIFICATION | FAILED",
+              "action": "SUCCESS | REMERGE | FAILED",
               "reason": "why",
-              "questions": ["only if clarification is needed"],
-              "retryStepIds": ["step-id only when action is RETRY"],
-              "affectedStepIds": ["step-id only when action is PARTIAL_REPLAN"],
-              "revisionInstructions": "instructions for Executor retry or Planner replan",
-              "stepReflections": {
-                "step-id": {
-                  "failedCriteria": ["unmet criteria"],
-                  "reviewReason": "why this step failed",
-                  "revisionInstructions": "how to fix it",
-                  "previousOutputSummary": "summary of bad output",
-                  "avoidRepeating": ["mistakes to avoid"]
-                }
-              },
-              "finalReport": "complete final report when action is CONTINUE"
+              "questions": [],
+              "retryStepIds": [],
+              "affectedStepIds": [],
+              "revisionInstructions": "required when action is REMERGE",
+              "stepReflections": {},
+              "finalReport": "complete final report when action is SUCCESS"
             }
 
             Original task:
@@ -448,6 +448,7 @@ final class TeamPromptFactory {
         return """
             Your previous Reviewer response was rejected because it was not valid JSON.
             Re-evaluate the original Reviewer instruction and return a corrected decision as JSON only.
+            The corrected action must be one of the actions allowed by the original Reviewer instruction.
             Do not copy the invalid response text.
             Return one single-line valid JSON object only.
             Do not add markdown, comments, or prose.
@@ -455,7 +456,7 @@ final class TeamPromptFactory {
             Do not use ASCII double quotes inside text values; use Chinese corner quotes 「」 instead.
             Required schema:
             {
-              "action": "CONTINUE | RETRY | PARTIAL_REPLAN | REPLAN | ASK_CLARIFICATION | FAILED",
+              "action": "allowed action from the original Reviewer instruction",
               "reason": "why",
               "questions": [],
               "retryStepIds": [],

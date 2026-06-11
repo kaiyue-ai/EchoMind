@@ -1,7 +1,7 @@
 import paramiko, sys, os, time, glob as globmod
 
 REMOTE_HOST = "106.55.54.63"
-REMOTE_PORT = 2144
+REMOTE_PORT = 22
 REMOTE_USER = "root"
 REMOTE_PASS = "214424"
 REMOTE_PATH = "/opt/echomind"
@@ -86,13 +86,19 @@ try:
         f"{REMOTE_PATH}/echomind-user-memory/target",
         f"{REMOTE_PATH}/external-mcp",
         f"{REMOTE_PATH}/docker/mysql",
+        f"{REMOTE_PATH}/docker/open-websearch",
         f"{REMOTE_PATH}/docker/otel",
         f"{REMOTE_PATH}/echomind-web/dist",
         f"{REMOTE_PATH}/echomind-web/dist-admin",
+        f"{REMOTE_PATH}/scripts",
     ]
     skill_dirs = ["skill-weather", "skill-calculator", "skill-markdown-code", "skill-date-query", "skill-github-intel", "skill-railway-12306", "skill-travel-planning"]
     for s in skill_dirs:
         dirs.append(f"{REMOTE_PATH}/skills/{s}/target")
+
+    out, err, rc = remote_exec(c, f"rm -rf {REMOTE_PATH}/docker/mysql/migrations {REMOTE_PATH}/docker/open-websearch")
+    if rc != 0:
+        raise RuntimeError(f"Failed to clear remote generated deploy dirs: {err or out}")
 
     mkdir_cmd = "mkdir -p " + " ".join(dirs)
     out, err, rc = remote_exec(c, mkdir_cmd)
@@ -110,7 +116,9 @@ try:
         "Dockerfile.user-memory": f"{REMOTE_PATH}/Dockerfile.user-memory",
         "Dockerfile": f"{REMOTE_PATH}/Dockerfile",
         "docker/mysql/init.sql": f"{REMOTE_PATH}/docker/mysql/init.sql",
+        "docker/open-websearch/Dockerfile": f"{REMOTE_PATH}/docker/open-websearch/Dockerfile",
         "docker/otel/collector-config.yaml": f"{REMOTE_PATH}/docker/otel/collector-config.yaml",
+        "scripts/apply-mysql-migrations.sh": f"{REMOTE_PATH}/scripts/apply-mysql-migrations.sh",
         "echomind-app/target/echomind-app-1.0.0-SNAPSHOT.jar": f"{REMOTE_PATH}/echomind-app/target/echomind-app-1.0.0-SNAPSHOT.jar",
         "echomind-user-memory/target/echomind-user-memory-1.0.0-SNAPSHOT.jar": f"{REMOTE_PATH}/echomind-user-memory/target/echomind-user-memory-1.0.0-SNAPSHOT.jar",
         "external-mcp/nowcoder-java-interview-mcp-server-1.0.0.jar": f"{REMOTE_PATH}/external-mcp/nowcoder-java-interview-mcp-server-1.0.0.jar",
@@ -131,6 +139,9 @@ try:
         for jar in jars:
             remote_jar = f"{REMOTE_PATH}/skills/{s}/target/{os.path.basename(jar)}"
             upload_file(sftp, jar, remote_jar)
+
+    log("Uploading MySQL migrations...")
+    upload_dir(sftp, os.path.join(LOCAL_BASE, "docker", "mysql", "migrations"), f"{REMOTE_PATH}/docker/mysql/migrations")
 
     log("Uploading frontend dist...")
     upload_dir(sftp, os.path.join(LOCAL_BASE, "echomind-web", "dist"), f"{REMOTE_PATH}/echomind-web/dist")
@@ -158,7 +169,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 OPENAI_API_KEY=
 ALIYUN_BAILIAN_API_KEY=
 ALIYUN_BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-ALIYUN_BAILIAN_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com
+ALIYUN_BAILIAN_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode
 ALIBABA_CLOUD_ACCESS_KEY_ID=
 ALIBABA_CLOUD_ACCESS_KEY_SECRET=
 ECHOMIND_STORAGE_MODE=oss
@@ -176,6 +187,14 @@ fi
     log("=" * 60)
     log("Step 6: Docker Build + Start")
     log("=" * 60)
+    log("Applying MySQL migrations...")
+    out, err, rc = remote_exec(c, f"cd {REMOTE_PATH} && chmod +x scripts/apply-mysql-migrations.sh && ./scripts/apply-mysql-migrations.sh --start-database", timeout=300)
+    log(f"Migration output:\n{out}")
+    if err.strip():
+        log(f"Migration stderr:\n{err}")
+    if rc != 0:
+        raise RuntimeError("MySQL migrations failed")
+
     log("Building Docker images (this may take a few minutes)...")
     out, err, rc = remote_exec(c, f"cd {REMOTE_PATH} && docker compose build --no-cache 2>&1 | tail -30", timeout=600)
     log(f"Build output:\n{out}")

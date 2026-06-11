@@ -11,21 +11,23 @@ import org.springframework.stereotype.Component;
 public class TeamRuntimeProperties {
 
     private static final int MAX_RETRY_LIMIT = 3;
-    private static final int MAX_REPLAN_LIMIT = 2;
     private static final int MAX_ARBITRATION_LIMIT = 2;
+    private static final int MAX_MERGE_ATTEMPT_LIMIT = 3;
     private static final int MAX_CONCURRENT_STEP_LIMIT = 8;
     private static final int MAX_STEP_TIMEOUT_SECONDS = 600;
     private static final int MAX_RUN_TIMEOUT_SECONDS = 7200;
 
     private int maxPlanRetries = 2;
-    private int maxResultReplans = 2;
     private int maxStepRetries = 2;
     private int maxReviewerFormatRepairs = 3;
     private int maxArbitrations = 2;
-    private int maxConcurrentSteps = 3;
+    private int maxMergeAttempts = 2;
+    private int maxConcurrentSteps = 7;
     private int stepTimeoutSeconds = 180;
     private int runTimeoutSeconds = 1200;
-    private int stepPollIntervalMs = 2000;
+    private int dagEventShards = 4;
+    private int stepExecuteConsumers = 10;
+    private int maxRetryRequeues = 5;
 
     public int getMaxPlanRetries() {
         return maxPlanRetries;
@@ -33,14 +35,6 @@ public class TeamRuntimeProperties {
 
     public void setMaxPlanRetries(int maxPlanRetries) {
         this.maxPlanRetries = clamp(maxPlanRetries, 0, MAX_RETRY_LIMIT);
-    }
-
-    public int getMaxResultReplans() {
-        return maxResultReplans;
-    }
-
-    public void setMaxResultReplans(int maxResultReplans) {
-        this.maxResultReplans = clamp(maxResultReplans, 0, MAX_REPLAN_LIMIT);
     }
 
     public int getMaxStepRetries() {
@@ -67,6 +61,14 @@ public class TeamRuntimeProperties {
         this.maxArbitrations = clamp(maxArbitrations, 0, MAX_ARBITRATION_LIMIT);
     }
 
+    public int getMaxMergeAttempts() {
+        return maxMergeAttempts;
+    }
+
+    public void setMaxMergeAttempts(int maxMergeAttempts) {
+        this.maxMergeAttempts = clamp(maxMergeAttempts, 0, MAX_MERGE_ATTEMPT_LIMIT);
+    }
+
     public int getMaxConcurrentSteps() {
         return maxConcurrentSteps;
     }
@@ -91,12 +93,28 @@ public class TeamRuntimeProperties {
         this.runTimeoutSeconds = clamp(runTimeoutSeconds, 0, MAX_RUN_TIMEOUT_SECONDS);
     }
 
-    public int getStepPollIntervalMs() {
-        return stepPollIntervalMs;
+    public int getDagEventShards() {
+        return dagEventShards;
     }
 
-    public void setStepPollIntervalMs(int stepPollIntervalMs) {
-        this.stepPollIntervalMs = clamp(stepPollIntervalMs, 100, 30000);
+    public void setDagEventShards(int dagEventShards) {
+        this.dagEventShards = clamp(dagEventShards, 1, 16);
+    }
+
+    public int getStepExecuteConsumers() {
+        return stepExecuteConsumers;
+    }
+
+    public void setStepExecuteConsumers(int stepExecuteConsumers) {
+        this.stepExecuteConsumers = clamp(stepExecuteConsumers, 1, 50);
+    }
+
+    public int getMaxRetryRequeues() {
+        return maxRetryRequeues;
+    }
+
+    public void setMaxRetryRequeues(int maxRetryRequeues) {
+        this.maxRetryRequeues = clamp(maxRetryRequeues, 1, 20);
     }
 
     private static int clamp(int value, int min, int max) {

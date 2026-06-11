@@ -4,7 +4,7 @@ import api from '../api'
 /**
  * Agent状态中心。
  *
- * 页面只关心展示和交互；Agent列表、创建、测试执行等异步状态统一放在这里，
+ * 页面只关心展示和交互；Agent列表、创建、知识库等异步状态统一放在这里，
  * 这样从聊天页、团队页、Agent管理页看到的是同一份运行时Agent视图。
  */
 export const useAgentStore = defineStore('agents', {
@@ -13,7 +13,6 @@ export const useAgentStore = defineStore('agents', {
     knowledgeByAgent: {},
     loading: false,
     saving: false,
-    testing: false,
     knowledgeLoading: false,
     knowledgeUploading: false,
     error: null,
@@ -69,18 +68,6 @@ export const useAgentStore = defineStore('agents', {
         throw error
       } finally {
         this.saving = false
-      }
-    },
-    async executeAgent(agentId, message, sessionId) {
-      this.testing = true
-      this.error = null
-      try {
-        return await api.agents.execute(agentId, message, sessionId)
-      } catch (error) {
-        this.error = api.parseError(error, '执行Agent失败')
-        throw error
-      } finally {
-        this.testing = false
       }
     },
     async loadKnowledge(agentId) {

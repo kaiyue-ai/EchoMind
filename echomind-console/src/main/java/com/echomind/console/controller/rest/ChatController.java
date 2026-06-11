@@ -5,10 +5,10 @@ import com.echomind.common.model.SessionSummary;
 import com.echomind.console.auth.AuthContext;
 import com.echomind.console.dto.ChatMessageRequest;
 import com.echomind.console.dto.ChatSubmitResponse;
-import com.echomind.console.dto.ChatSyncResponse;
 import com.echomind.console.service.ChatApplicationService;
 import com.echomind.console.service.MemoryApplicationService;
 import com.echomind.console.service.SsePushService;
+import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -22,13 +22,8 @@ import lombok.RequiredArgsConstructor;
 /**
  * 聊天控制器，负责把前端/调用方的消息送进 Agent 执行链路。
  *
- * <p>当前支持两种入口：
- * <ol>
- *   <li><b>异步模式（RabbitMQ）</b>：{@code POST /api/chat} 只投递消息并立即返回 requestId，
- *       客户端再通过 {@code GET /api/chat/stream/{requestId}} 等最终结果。</li>
- *   <li><b>同步模式</b>：{@code POST /api/chat/sync} 直接执行 Agent 管线并返回完整回复，
- *       适合调试或不想接消息队列的简单集成。</li>
- * </ol>
+ * <p>聊天只保留异步入口：{@code POST /api/chat} 投递消息并立即返回 requestId，
+ * 客户端再通过 {@code GET /api/chat/stream/{requestId}} 接收 meta、token、tool 和终态事件。
  */
 @RestController
 @RequestMapping("/api/chat")
@@ -44,17 +39,8 @@ public class ChatController {
      * 客户端拿到 requestId 后，再订阅 SSE 等待最终结果。
      */
     @PostMapping
-    public ResponseEntity<ChatSubmitResponse> chat(@RequestBody ChatMessageRequest request) {
+    public ResponseEntity<ChatSubmitResponse> chat(@Valid @RequestBody ChatMessageRequest request) {
         return ResponseEntity.ok(chatService.submitAsync(request));
-    }
-
-    /**
-     * 同步聊天入口：直接执行 Agent 管线并返回完整结果。
-     * 本地调试或 RabbitMQ 不可用时可以走这条链路。
-     */
-    @PostMapping("/sync")
-    public ResponseEntity<ChatSyncResponse> chatSync(@RequestBody ChatMessageRequest request) {
-        return ResponseEntity.ok(chatService.executeSync(request));
     }
 
     /**

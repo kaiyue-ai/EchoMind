@@ -136,6 +136,40 @@ class OpenAICompatibleProviderTest {
     }
 
     @Test
+    void requiredToolNameMapsToOpenAiFunctionToolChoice() {
+        CapturingChatModel chatModel = new CapturingChatModel(prompt -> {
+            OpenAiChatOptions options = (OpenAiChatOptions) prompt.getOptions();
+            assertThat(options.getToolChoice()).isEqualTo(Map.of(
+                "type", "function",
+                "function", Map.of("name", "web_search")
+            ));
+            return response(options.getToolCallbacks().get(0).call("{\"query\":\"EchoMind\"}"), null);
+        });
+        OpenAICompatibleProvider provider = new OpenAICompatibleProvider(
+            "aliyun-bailian", "https://dashscope.aliyuncs.com/compatible-mode/v1", "test-key", chatModel);
+
+        ProviderResponse response = provider.chatWithUsage(new ProviderRequest(
+            new ModelSpec("aliyun-bailian", "qwen3.7-max", Set.of(ModelCapability.TEXT, ModelCapability.FUNCTION), true),
+            "你是助手",
+            "搜索 EchoMind",
+            List.of(),
+            List.of(new LlmTool(
+                "web_search",
+                "Search the web",
+                Map.of(
+                    "type", "object",
+                    "properties", Map.of("query", Map.of("type", "string")),
+                    "required", List.of("query")
+                ),
+                ignored -> "EchoMind result"
+            )),
+            "web_search"
+        ));
+
+        assertThat(response.content()).isEqualTo("EchoMind result");
+    }
+
+    @Test
     void qwenThinkingIsDisabledForToolCallsOnDashScopeCompatibleProvider() {
         CapturingChatModel chatModel = new CapturingChatModel(prompt -> {
             OpenAiChatOptions options = (OpenAiChatOptions) prompt.getOptions();

@@ -6,6 +6,7 @@ import com.echomind.agent.pipeline.ExecutionPipeline;
 import com.echomind.agent.store.AgentPersistenceService;
 import com.echomind.boot.properties.EchoMindProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ResourceLoader;
 
 import java.util.List;
 
@@ -19,11 +20,15 @@ final class AgentRuntimeBootstrapper {
     private final RetiredSkillMigration retiredSkillMigration;
 
     AgentRuntimeBootstrapper(EchoMindProperties props) {
+        this(props, null);
+    }
+
+    AgentRuntimeBootstrapper(EchoMindProperties props, ResourceLoader resourceLoader) {
         EchoMindProperties.Runtime runtime = props == null ? new EchoMindProperties.Runtime() : props.getRuntime();
         if (runtime == null) {
             runtime = new EchoMindProperties.Runtime();
         }
-        this.agentBootstrapPolicy = new AgentBootstrapPolicy(runtime.getAgentBootstrap());
+        this.agentBootstrapPolicy = new AgentBootstrapPolicy(runtime.getAgentBootstrap(), resourceLoader);
         this.retiredSkillMigration = new RetiredSkillMigration(runtime.getRetiredSkills());
     }
 
