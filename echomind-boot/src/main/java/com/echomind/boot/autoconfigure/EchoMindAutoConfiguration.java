@@ -6,6 +6,7 @@ import com.echomind.agent.memory.NoopChatMemoryPersistPublisher;
 import com.echomind.agent.memory.RabbitChatMemoryPersistPublisher;
 import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.pipeline.ExecutionPipeline;
+import com.echomind.agent.pipeline.ModelInvocationPreflight;
 import com.echomind.agent.pipeline.PipelineStage;
 import com.echomind.agent.pipeline.composing.PromptBudget;
 import com.echomind.agent.pipeline.RetrievalQueryRewriter;
@@ -637,10 +638,11 @@ public class EchoMindAutoConfiguration {
                                                  ChatMemoryPersistPublisher chatMemoryPersistPublisher,
                                                 CapabilityRegistry capabilityRegistry,
                                                 DynamicModelRouter router, ModelProviderRegistry providerReg,
-                                                 ObjectStorageService storageService,
+                                                ObjectStorageService storageService,
                                                  PromptBudget promptBudget,
                                                 RetrievalQueryRewriter retrievalQueryRewriter,
-                                                EchoMindProperties props) {
+                                                EchoMindProperties props,
+                                                ObjectProvider<ModelInvocationPreflight> invocationPreflight) {
         List<PipelineStage> stages = List.of(
             new ContextEnrichStage(memory),
             new UserMemoryRetrievalStage(
@@ -657,7 +659,8 @@ public class EchoMindAutoConfiguration {
             new ModelResolutionStage(router),
             new MultimodalGuardStage(providerReg),
             new AttachmentPreparationStage(storageService),
-            new ResultAggregationStage(providerReg, capabilityRegistry, promptBudget),
+            new ResultAggregationStage(providerReg, capabilityRegistry, promptBudget,
+                invocationPreflight.getIfAvailable(() -> ModelInvocationPreflight.NOOP)),
             new MemoryPersistStage(chatMemoryPersistPublisher)
         );
         return new ExecutionPipeline(stages);

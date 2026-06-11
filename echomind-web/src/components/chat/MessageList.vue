@@ -138,16 +138,16 @@ import { ElMessage } from 'element-plus'
 import { Check, CopyDocument } from '@element-plus/icons-vue'
 import { useAuthStore } from '../../stores/auth'
 import { copyText } from '../../utils/clipboard'
+import { normalizeChatMessages } from '../../utils/chatMessages'
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
   loadingHistory: { type: Boolean, default: false }
 })
 
-const DISPLAY_ROLES = new Set(['user', 'assistant', 'system'])
 const containerRef = ref(null)
 const authStore = useAuthStore()
-const displayMessages = computed(() => props.messages.filter(message => DISPLAY_ROLES.has(message?.role)))
+const displayMessages = computed(() => normalizeChatMessages(props.messages))
 const isNearBottom = ref(true)
 const showJumpButton = ref(false)
 const hasNewActivity = ref(false)

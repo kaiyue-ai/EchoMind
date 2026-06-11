@@ -1,6 +1,7 @@
 package com.echomind.agent.pipeline;
 
 import com.echomind.common.model.AgentMessage;
+import com.echomind.common.model.ErrorDetail;
 import com.echomind.common.model.MemoryDecision;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.TokenUsage;
@@ -29,12 +30,20 @@ public class PipelineContext {
     public static final String ATTR_RAW_USER_MESSAGE = "rawUserMessage";
     /** 内部控制面调用禁用工具暴露，避免 Planner/Reviewer 误触业务 Skill。 */
     public static final String ATTR_TOOL_EXPOSURE_DISABLED = "toolExposureDisabled";
+    /** Agent 知识库召回命中列表。 */
+    public static final String ATTR_KNOWLEDGE_HITS = "knowledgeHits";
     /** 本轮没有真实模型 usage，不应写入用量表。 */
     public static final String ATTR_MODEL_USAGE_NOT_APPLICABLE = "modelUsageNotApplicable";
     /** 入队前用户 Token 配额预留 ID 列表。 */
     public static final String ATTR_USER_TOKEN_RESERVATION_IDS = "userTokenReservationIds";
     /** 模型调用前 Provider Token 预算预留 ID 列表。 */
     public static final String ATTR_PROVIDER_TOKEN_RESERVATION_IDS = "providerTokenReservationIds";
+    /** 治理拒绝标记，表示模型调用前已 fail-closed。 */
+    public static final String ATTR_GOVERNANCE_REJECTED = "governanceRejected";
+    /** 治理拒绝错误码。 */
+    public static final String ATTR_ERROR_CODE = "errorCode";
+    /** 结构化治理错误详情。 */
+    public static final String ATTR_ERROR_DETAIL = "errorDetail";
 
     private String sessionId;
     private String userId = "default";
@@ -56,6 +65,7 @@ public class PipelineContext {
     private boolean failed; // 模型调用失败
     private String failureReason; // 模型调用失败的原因
     private TokenUsage tokenUsage; // 模型调用的 token 使用情况
+    private ErrorDetail errorDetail;
     /** 主模型只产出是否需要异步处理用户事实和画像的决策，具体抽取仍由后台 worker 完成。 */
     private MemoryDecision memoryDecision = MemoryDecision.FALLBACK;
     private final Map<String, Object> attributes = new ConcurrentHashMap<>(); // 模型调用过程中产生的临时状态
@@ -76,6 +86,19 @@ public class PipelineContext {
         failed = true;
         failureReason = normalizeFailureReason(reason);
         finalResponse = "[Error] " + failureReason;
+    }
+
+    /** 标记结构化治理拒绝。 */
+    public void markGovernanceRejected(ErrorDetail detail) {
+        errorDetail = detail;
+        getAttributes().put(ATTR_GOVERNANCE_REJECTED, true);
+        if (detail != null) {
+            getAttributes().put(ATTR_ERROR_CODE, detail.code());
+            getAttributes().put(ATTR_ERROR_DETAIL, detail);
+            markFailed(detail.message());
+        } else {
+            markFailed("模型调用被治理策略拒绝");
+        }
     }
 
     /** 兼容旧调用点：文本以 [Error] 开头时也视为失败。 */

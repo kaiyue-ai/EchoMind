@@ -16,6 +16,7 @@ public record ChatResponse(
     List<String> skillResults,
     String status,
     String error,
+    ErrorDetail errorDetail,
     String traceId,
     TokenUsage tokenUsage,
     String traceparent
@@ -35,7 +36,7 @@ public record ChatResponse(
                                         String modelId, String response, List<String> skillResults, String traceId,
                                         TokenUsage tokenUsage, String traceparent) {
         return new ChatResponse(requestId, sessionId, agentId, modelId, response, skillResults, "OK", null,
-            traceId, tokenUsage, traceparent);
+            null, traceId, tokenUsage, traceparent);
     }
 
     public static ChatResponse success(String requestId, String sessionId, String agentId,
@@ -48,7 +49,13 @@ public record ChatResponse(
     }
 
     public static ChatResponse error(String requestId, String error, String traceId, String traceparent) {
-        return new ChatResponse(requestId, null, null, null, null, null, "ERROR", error, traceId, null, traceparent);
+        return error(requestId, error, null, traceId, traceparent);
+    }
+
+    public static ChatResponse error(String requestId, String error, ErrorDetail errorDetail, String traceId,
+                                     String traceparent) {
+        return new ChatResponse(requestId, null, null, null, null, null, "ERROR", error, errorDetail, traceId, null,
+            traceparent);
     }
 
     public static ChatResponse error(String requestId, String error) {

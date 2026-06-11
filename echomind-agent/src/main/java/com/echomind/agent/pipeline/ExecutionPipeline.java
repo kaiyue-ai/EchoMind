@@ -1,5 +1,6 @@
 package com.echomind.agent.pipeline;
 
+import com.echomind.common.exception.ModelInvocationRejectedException;
 import com.echomind.common.observability.EchoMindTrace;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
@@ -54,6 +55,12 @@ public class ExecutionPipeline {
                         current.setTraceId(EchoMindTrace.traceId(span));
                     }
                 }
+            } catch (ModelInvocationRejectedException e) {
+                EchoMindTrace.recordException(span, e);
+                if (e.errorDetail() != null) {
+                    current.markGovernanceRejected(e.errorDetail());
+                }
+                throw e;
             } catch (Exception e) {
                 EchoMindTrace.recordException(span, e);
                 log.error("[Pipeline] Stage {} failed: {}", stage.name(), e.getMessage());

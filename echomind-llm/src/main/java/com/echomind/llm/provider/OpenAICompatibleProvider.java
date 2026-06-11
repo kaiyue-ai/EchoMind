@@ -44,7 +44,19 @@ public class OpenAICompatibleProvider extends SpringAiProviderSupport {
                 builder.extraBody(Map.of("enable_thinking", false));
             }
         }
-        return builder.build();
+        OpenAiChatOptions options = builder.build();
+        if (toolCallbacks != null && !toolCallbacks.isEmpty()
+            && requiredToolName != null && !requiredToolName.isBlank()) {
+            options.setToolChoice(functionToolChoice(requiredToolName));
+        }
+        return options;
+    }
+
+    private Map<String, Object> functionToolChoice(String toolName) {
+        return Map.of(
+            "type", "function",
+            "function", Map.of("name", toolName)
+        );
     }
 
     private boolean requiresNonThinkingToolMode(ModelSpec model) {

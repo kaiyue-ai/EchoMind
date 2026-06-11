@@ -3,6 +3,7 @@ package com.echomind.console.service;
 import com.echomind.common.model.ChatRequest;
 import com.echomind.common.model.ChatResponse;
 import com.echomind.common.model.ChatStreamEvent;
+import com.echomind.common.model.ErrorDetail;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -62,6 +63,30 @@ class ChatRabbitConsumerTest {
         consumer.onChatRequest(request);
 
         verify(ssePushService).pushEvent(anyTerminalEvent(ChatStreamEvent.TYPE_FAILURE));
+    }
+
+    @Test
+    void pushesFailureTerminalEventWithErrorDetail() {
+        ChatApplicationService chatService = mock(ChatApplicationService.class);
+        SsePushService ssePushService = mock(SsePushService.class);
+        ChatRabbitConsumer consumer = new ChatRabbitConsumer(chatService, ssePushService);
+        ChatRequest request = new ChatRequest(
+            "req-3", "user-a", "default", "session-a", "hello", "mock:model",
+            "trace-a", "00-trace-a", List.of()
+        );
+        ErrorDetail detail = new ErrorDetail("USER_TOKEN_QUOTA_EXCEEDED", "Token 配额已超限",
+            "FINAL_PREFLIGHT", "daily", 100L, 100L, null, 1L, 0L, null);
+        when(chatService.executeQueuedStream(eq(request), any()))
+            .thenReturn(ChatResponse.error("req-3", "Token 配额已超限", detail, "trace-a", "00-trace-a"));
+
+        consumer.onChatRequest(request);
+
+        verify(ssePushService).pushEvent(org.mockito.ArgumentMatchers.argThat(event ->
+            event != null
+                && ChatStreamEvent.TYPE_FAILURE.equals(event.type())
+                && detail.equals(event.errorDetail())
+                && "Token 配额已超限".equals(event.error())
+        ));
     }
 
     private ChatStreamEvent anyTerminalEvent(String type) {

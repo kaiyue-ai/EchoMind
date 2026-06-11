@@ -5,7 +5,7 @@ import traceback
 try:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect("106.55.54.63", port=2144, username="root", password="214424", timeout=30)
+    client.connect("106.55.54.63", port=22, username="root", password="214424", timeout=30)
 
     results = []
 

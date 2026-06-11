@@ -1,6 +1,10 @@
 import { defineStore } from 'pinia'
 import api from '../api'
 
+const POLLING_INITIAL_DELAY_MS = 1000
+const POLLING_MAX_DELAY_MS = 3000
+const POLLING_BACKOFF_MS = 500
+
 /**
  * Agent Team状态中心。
  *
@@ -19,7 +23,7 @@ export const useTeamStore = defineStore('team', {
     userRuns: [],
     teamRuns: [],
     pollingTimer: null,
-    pollingDelay: 1000,
+    pollingDelay: POLLING_INITIAL_DELAY_MS,
     lastRunSnapshot: '',
     loading: false,
     loadingRuns: false,
@@ -149,9 +153,9 @@ export const useTeamStore = defineStore('team', {
         if (nextSnapshot !== this.lastRunSnapshot) {
           this.currentRun = nextRun
           this.lastRunSnapshot = nextSnapshot
-          this.pollingDelay = 1000
+          this.pollingDelay = POLLING_INITIAL_DELAY_MS
         } else {
-          this.pollingDelay = Math.min(this.pollingDelay + 500, 3000)
+          this.pollingDelay = Math.min(this.pollingDelay + POLLING_BACKOFF_MS, POLLING_MAX_DELAY_MS)
         }
         if (this.isTerminalRun(nextRun.status)) {
           this.stopPolling()
@@ -168,7 +172,7 @@ export const useTeamStore = defineStore('team', {
     },
     startPolling(runId) {
       this.stopPolling()
-      this.pollingDelay = 1000
+      this.pollingDelay = POLLING_INITIAL_DELAY_MS
       this.lastRunSnapshot = ''
       const tick = () => {
         this.refreshRun(runId)
@@ -185,7 +189,7 @@ export const useTeamStore = defineStore('team', {
         window.clearTimeout(this.pollingTimer)
         this.pollingTimer = null
       }
-      this.pollingDelay = 1000
+      this.pollingDelay = POLLING_INITIAL_DELAY_MS
     },
     isTerminalRun(status) {
       return ['COMPLETED', 'FAILED', 'NEEDS_CLARIFICATION'].includes(status)

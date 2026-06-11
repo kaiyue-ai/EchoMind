@@ -22,7 +22,7 @@
 | Agent 知识库文档 | MySQL 文档表 + 对象存储文件 | Milvus `echomind_agent_knowledge_spring_ai_v1` 保存切片正文、切片元数据和知识库向量索引 |
 | 上传文件 | 阿里云 OSS 或本地对象目录 | 数据库只保存引用信息 |
 | 外部 MCP 运行状态 | 配置文件或后续 MySQL 配置表 | `ExternalMcpRuntimeService` 持有的 Spring AI MCP client 和工具 provider |
-| Team 定义和执行记录 | MySQL `echomind_agent_teams` / `members` / `runs` / `steps` / `events` | `TaskExecutor` 运行中任务 |
+| Team 定义和执行记录 | MySQL `echomind_agent_teams` / `members` / `runs` / `steps` / `events` | `TeamExecutionEngine` 调度的本地 `TaskExecutor` 运行中任务 |
 
 ## 禁止事项
 
@@ -105,13 +105,17 @@ AI 模型调用。`echomind_ai_call_usage.trace_id` 必须能关联到导出到 
 管理端仪表盘的请求量、Token、平均响应、模型分布、趋势和最近调用都只能从该表的真实记录聚合；
 项目没有落库的成本、余额、API 密钥消费等数据不能在管理端展示为真实指标。
 用户日/月 quota 和 Provider 日/周/月 budget 都会在模型调用前用 Redis 原子预留：
-普通聊天在 `ChatApplicationService.submitAsync` 入队前按“输入估算 + 输出上限”同时预留用户 quota
-和 Provider budget；Team 内部 LLM 调用通过 `TeamUsageRecorder` 在每次调用前按本轮 prompt
-显式预留两类额度。RabbitMQ 聊天请求死信重放会在重新入队前重建两类 reservation。
-Pipeline 不再做 Provider budget 兜底预留。
+普通聊天在 `ChatApplicationService.submitAsync` 入队前按“输入估算 + 输出上限”同时做用户 quota
+和 Provider budget initial reservation；Team 内部 LLM 调用通过 `TeamUsageRecorder` 在每次调用前按本轮
+prompt 显式预留两类额度。RabbitMQ 聊天请求死信重放会在重新入队前重建两类 reservation。
+Agent Pipeline 在 `ResultAggregationStage` 生成完整 `ProviderRequest` 后执行 final preflight，按 system
+prompt、当前问题、工具 schema、附件元信息和输出上限重新估算，并只补 initial reservation 不足的 delta。
+Redis 不可用或配额/预算不足时新 LLM 调用失败关闭，拒绝结果必须携带结构化 `ErrorDetail`，不能改写成普通 LLM 失败。
 模型返回真实 provider usage 后，`AiCallUsageService` 先保留 `echomind_ai_call_usage` 审计记录，再用
 `echomind_token_quota_usage` 和 `echomind_provider_token_budget_usage` 在事务内结算真实已用；
 事务提交后才把 Redis reserved 转入 used，事务回滚或模型未返回原生 usage 时释放 reserved。
+同一次调用可能同时携带 initial 和 final delta 多段 reservation，结算必须按
+`ownerType + ownerId + scope + bucketStart` 合并 reserved，只把真实 provider usage 对每个 bucket 累加一次。
 后置结算不拒绝已经完成的模型调用；若本次真实 usage 使 bucket 超过限额，仍保留并结算，
 下一次请求前预留会返回用户配额或 Provider 预算错误。
 项目三 AI Infra 是当前 Agent 项目的管理端，不新增独立网关或应用 API Key；配额仍按客户端用户维度执行。
@@ -149,13 +153,14 @@ Team 协作不能长期只放内存。当前 Team v2 表结构方向：
 
 - `echomind_agent_teams`：团队定义，全局资源。
 - `echomind_agent_team_members`：成员 Agent、角色、能力标签、排序；可配置 `PLANNER`、多个 `EXECUTOR`、必选 `REVIEWER`，可选 `SUB_REVIEWER` / `MERGER`。
-- `echomind_agent_team_runs`：一次任务执行，也是 Team 黑板首页；按 `user_id` 隔离；保存 `task_level`、每次 Run 的 `plan_review_enabled` / `sub_review_enabled` / `global_review_enabled` / `simple_fast_path_enabled` 审查策略、`merge_output`、`global_review_json`、`conflict_report_json`、`arbitration_json`、最终报告、澄清字段、规划重试、局部重规划、整体重规划和仲裁次数。
-- `echomind_agent_team_steps`：Planner 拆出的 DAG 子任务、`client_step_id`、依赖 Step、风险等级、质量状态、分配 Agent、输入、原始输出、SubReviewer 审查、Reflexion 重试上下文。
+- `echomind_agent_team_runs`：一次任务执行，也是 Team 黑板首页；按 `user_id` 隔离；保存 `task_level`、每次 Run 的 `plan_review_enabled` / `sub_review_enabled` / `global_review_enabled` / `simple_fast_path_enabled` 审查策略、`merge_output`、`global_review_json`、`conflict_report_json`、`arbitration_json`、最终报告、计划阶段澄清字段、规划重试、历史重规划计数和仲裁次数。`sub_review_enabled` 字段名保留作兼容，新语义是“每步 Review”。
+- `echomind_agent_team_steps`：Planner 拆出的 DAG 子任务、`client_step_id`、依赖 Step、风险等级、质量状态、分配 Agent、输入、原始输出、StepReviewer 审查、Reflexion 重做上下文。
 - `echomind_agent_team_events`：协作事件流，前端时间线和 Mermaid 从这里恢复。
 
 Team 黑板是角色记忆互通的事实来源。Planner、Executor、Reviewer 不依赖同一个聊天 session 互相“碰上下文”，而是由后端从 Run / Step / Event 组装最小必要上下文。
 Team 内部调用不能落入 `echomind_chat_sessions` / `echomind_chat_messages`；普通会话历史只保存用户在 Chat 页面发起的真实对话。
 删除 Team 是硬删除：必须同时删除 members、runs、steps、events，不保留逻辑删除标记。
+当前 GlobalReviewer 不再修改 DAG：它只允许通过、要求 MergeAgent 重新合并或失败。旧的局部/整体重规划计数字段保留用于历史 Run 展示，新流程不再把终审作为重规划入口。
 
 Team v2 迁移 `20260521_team_v2_dag_reflexion.sql` 会清空旧 Team 数据，避免旧消息总线/旧 Step 格式混入新 DAG 状态机。后续数据迁移如果要保留历史，需要先写显式升级脚本，不要让运行时代码兼容过多旧结构。
 

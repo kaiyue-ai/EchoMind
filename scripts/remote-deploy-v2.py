@@ -1,7 +1,7 @@
 import paramiko, sys, os, time, glob as globmod
 
 REMOTE_HOST = "106.55.54.63"
-REMOTE_PORT = 2144
+REMOTE_PORT = 22
 REMOTE_USER = "root"
 REMOTE_PASS = "214424"
 REMOTE_PATH = "/opt/echomind"

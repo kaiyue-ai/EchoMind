@@ -1,8 +1,11 @@
 package com.echomind.console.controller;
 
 import com.echomind.common.exception.EchoMindException;
+import com.echomind.common.exception.ModelInvocationRejectedException;
+import com.echomind.common.model.ErrorDetail;
 import com.echomind.console.budget.ProviderTokenBudgetExceededException;
 import com.echomind.console.quota.TokenQuotaExceededException;
+import com.echomind.console.reservation.TokenReservationUnavailableException;
 import com.echomind.console.sensitive.SensitiveDataBlockedException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -51,9 +54,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(TokenQuotaExceededException.class)
     public ResponseEntity<Map<String, Object>> handleQuotaExceeded(TokenQuotaExceededException e) {
+        ErrorDetail detail = userQuotaDetail(e, "INITIAL_RESERVATION");
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
             .body(Map.of(
                 "error", "Token 配额已超限",
+                "errorDetail", detail,
                 "userId", e.userId(),
                 "scope", e.scope(),
                 "usedTokens", e.usedTokens(),
@@ -63,14 +68,43 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ProviderTokenBudgetExceededException.class)
     public ResponseEntity<Map<String, Object>> handleProviderBudgetExceeded(ProviderTokenBudgetExceededException e) {
+        ErrorDetail detail = providerBudgetDetail("INITIAL_RESERVATION");
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
             .body(Map.of(
-                "error", "Provider Token 预算已超限",
-                "providerId", e.providerId(),
-                "scope", e.scope(),
-                "usedTokens", e.usedTokens(),
-                "limitTokens", e.limitTokens()
+                "error", detail.message(),
+                "errorDetail", detail
             ));
+    }
+
+    @ExceptionHandler(TokenReservationUnavailableException.class)
+    public ResponseEntity<Map<String, Object>> handleReservationUnavailable(TokenReservationUnavailableException e) {
+        ErrorDetail detail = new ErrorDetail(
+            "TOKEN_RESERVATION_UNAVAILABLE",
+            "Token 预算预留暂不可用，请稍后重试",
+            "INITIAL_RESERVATION",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+            .body(Map.of("error", detail.message(), "errorDetail", detail));
+    }
+
+    @ExceptionHandler(ModelInvocationRejectedException.class)
+    public ResponseEntity<Map<String, Object>> handleModelInvocationRejected(ModelInvocationRejectedException e) {
+        ErrorDetail detail = e.errorDetail();
+        if (detail == null) {
+            detail = new ErrorDetail(null, e.getMessage(), null, null, null, null, null, null, null, null);
+        }
+        HttpStatus status = "TOKEN_RESERVATION_UNAVAILABLE".equals(detail.code())
+            ? HttpStatus.SERVICE_UNAVAILABLE
+            : HttpStatus.TOO_MANY_REQUESTS;
+        return ResponseEntity.status(status)
+            .body(Map.of("error", detail.message(), "errorDetail", detail));
     }
 
     @ExceptionHandler(SensitiveDataBlockedException.class)
@@ -101,5 +135,35 @@ public class GlobalExceptionHandler {
         log.error("Unhandled exception", e);
         return ResponseEntity.internalServerError()
             .body(Map.of("error", "Internal server error"));
+    }
+
+    private ErrorDetail userQuotaDetail(TokenQuotaExceededException e, String phase) {
+        return new ErrorDetail(
+            "USER_TOKEN_QUOTA_EXCEEDED",
+            "Token 配额已超限",
+            phase,
+            e.scope(),
+            e.limitTokens(),
+            e.usedTokens(),
+            null,
+            null,
+            Math.max(0, e.limitTokens() - e.usedTokens()),
+            null
+        );
+    }
+
+    private ErrorDetail providerBudgetDetail(String phase) {
+        return new ErrorDetail(
+            "PROVIDER_TOKEN_BUDGET_EXCEEDED",
+            "模型服务预算不足，请稍后重试或切换模型",
+            phase,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
     }
 }

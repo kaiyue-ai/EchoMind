@@ -99,7 +99,7 @@
                 <el-segmented v-model="reviewPreset" :options="reviewPresetOptions" @change="applyReviewPreset" />
                 <div class="review-toggle-grid">
                   <el-checkbox v-model="reviewOptions.planReviewEnabled">PlanReview</el-checkbox>
-                  <el-checkbox v-model="reviewOptions.subReviewEnabled">SubReview</el-checkbox>
+                  <el-checkbox v-model="reviewOptions.subReviewEnabled">每步 Review</el-checkbox>
                   <el-checkbox v-model="reviewOptions.globalReviewEnabled">GlobalReview</el-checkbox>
                   <el-checkbox v-model="reviewOptions.simpleFastPathEnabled">SIMPLE 直返</el-checkbox>
                 </div>
@@ -152,8 +152,8 @@
               <span>任务等级: {{ taskLevelLabel(currentRun.taskLevel) }}</span>
               <span>审查策略: {{ reviewOptionsLabel(currentRun.reviewOptions) }}</span>
               <span>当前状态: {{ runStatusLabel(currentRun.status) }}</span>
-              <span>整体重规划: {{ currentRun.fullReplanCount || 0 }} 次</span>
-              <span>局部重规划: {{ currentRun.partialReplanCount || 0 }} 次</span>
+              <span>历史整体重规划: {{ currentRun.fullReplanCount || 0 }} 次</span>
+              <span>历史局部重规划: {{ currentRun.partialReplanCount || 0 }} 次</span>
             </div>
             <template #footer>
               <el-button v-if="currentRun.finalOutput" size="small" @click="scrollToFinalReport">
@@ -166,7 +166,7 @@
             v-if="currentRun.status === 'NEEDS_CLARIFICATION'"
             type="warning"
             show-icon
-            :title="stepClarificationSteps.length ? 'SubReviewer 需要用户补充 Step 信息' : (currentRun.clarificationQuestion || 'Reviewer 需要用户补充信息')"
+            :title="stepClarificationSteps.length ? '历史 Step Review 需要补充信息' : (currentRun.clarificationQuestion || 'Reviewer 需要用户补充信息')"
           >
             <div v-if="stepClarificationSteps.length" class="clarify-box step-clarify-box">
               <div v-for="step in stepClarificationSteps" :key="step.stepId" class="step-clarify-item">
@@ -200,50 +200,6 @@
               </el-button>
             </div>
           </el-alert>
-
-          <ResourceCard title="管控中心" class="run-control-card">
-            <div class="control-center-grid">
-              <div class="control-block">
-                <strong>调度与拦截</strong>
-                <span>线程池异步执行，前端每 0.25 秒轮询黑板。</span>
-                <span>{{ stepRetryText }} · 整体重规划: {{ currentRun.fullReplanCount || 0 }} 次 · 局部重规划: {{ currentRun.partialReplanCount || 0 }} 次</span>
-                <span>Planner 仲裁: {{ currentRun.arbitrationCount || 0 }} 次</span>
-              </div>
-              <div class="control-block">
-                <strong>AgentSelector</strong>
-                <template v-if="selectorEvents.length">
-                  <span v-for="event in selectorEvents" :key="event.id">
-                    {{ selectionSourceLabel(eventPayload(event)?.decisionSource) }}
-                    {{ selectionName(eventPayload(event), event.actorAgentId) }}：
-                    {{ eventPayload(event)?.reason || event.message }}
-                  </span>
-                </template>
-                <span v-else>等待 Step 分配后展示模型选择理由。</span>
-              </div>
-              <div class="control-block">
-                <strong>RiskPolicy</strong>
-                <template v-if="riskEvents.length">
-                  <span v-for="event in riskEvents" :key="event.id">
-                    {{ event.message }}
-                  </span>
-                </template>
-                <span v-else>等待 Planner 生成 Step 后展示风险裁决。</span>
-              </div>
-              <div class="control-block">
-                <strong>冲突检测</strong>
-                <span v-if="conflictReport">
-                  {{ conflictReport.hasConflict ? '发现冲突' : '未发现冲突' }}：{{ conflictReport.reason || '暂无说明' }}
-                </span>
-                <span v-if="conflictReport?.normalizationAdvice">统一建议：{{ conflictReport.normalizationAdvice }}</span>
-                <span v-else-if="!conflictReport">等待 MergeAgent 聚合后检测。</span>
-              </div>
-              <div class="control-block">
-                <strong>Planner 仲裁</strong>
-                <span v-if="arbitrationText">{{ arbitrationText }}</span>
-                <span v-else>仅在 ConflictDetector 发现冲突时触发。</span>
-              </div>
-            </div>
-          </ResourceCard>
 
           <ResourceCard v-if="currentRun.finalOutput" ref="finalReportRef" :class="currentRun.status === 'FAILED' ? 'failed-panel' : 'final-panel'">
             <template #title>{{ currentRun.status === 'FAILED' ? 'Reviewer 拦截原因' : '最终报告' }}</template>
@@ -292,10 +248,10 @@
                 <p>{{ planReview.reason }}</p>
                 <el-tag size="small">{{ actionLabel(planReview.action) }}</el-tag>
               </div>
-              <div v-if="resultReview" class="review-block">
+              <div v-if="visibleResultReview" class="review-block">
                 <strong>全局终审</strong>
-                <p>{{ resultReview.reason }}</p>
-                <el-tag size="small">{{ actionLabel(resultReview.action) }}</el-tag>
+                <p>{{ visibleResultReview.reason }}</p>
+                <el-tag size="small">{{ actionLabel(visibleResultReview.action) }}</el-tag>
               </div>
               <div v-if="hasReflections" class="review-block">
                 <strong>Reflexion 重试上下文</strong>
@@ -304,7 +260,7 @@
                   <small>{{ parseJson(step.reflectionJson)?.reviewReason || step.lastReviewReason || step.revisionInstructions }}</small>
                 </div>
               </div>
-              <div v-if="!planReview && !resultReview" class="empty-note">等待 Reviewer 审查</div>
+              <div v-if="!planReview && !visibleResultReview" class="empty-note">等待 Reviewer 审查</div>
             </ResourceCard>
           </div>
 
@@ -322,8 +278,8 @@
                   class="timeline-event"
                   :timestamp="formatTime(event.createdAt)"
                 >
-                  <div class="event-title">{{ eventTypeLabel(event.type) }}</div>
-                  <div class="event-msg">{{ event.message }}</div>
+                  <div class="event-title">{{ eventDisplayLabel(event) }}</div>
+                  <div class="event-msg">{{ eventDisplayMessage(event) }}</div>
                 </el-timeline-item>
               </el-timeline>
             </ResourceCard>
@@ -349,7 +305,7 @@
               <el-option label="Planner 规划器" value="PLANNER" />
               <el-option label="Executor 执行者" value="EXECUTOR" />
               <el-option label="Reviewer 全局审查" value="REVIEWER" />
-              <el-option label="SubReviewer 子评审" value="SUB_REVIEWER" />
+              <el-option label="StepReviewer 每步审查" value="SUB_REVIEWER" />
               <el-option label="MergeAgent 聚合" value="MERGER" />
             </el-select>
             <el-select v-model="member.agentId" placeholder="Agent" filterable>
@@ -424,7 +380,9 @@ const agentList = computed(() => availableAgents.value || [])
 const selectedMembers = computed(() => selectedTeam.value?.members || [])
 const planReview = computed(() => parseJson(currentRun.value?.planReviewJson))
 const resultReview = computed(() => parseJson(currentRun.value?.resultReviewJson))
-const selectorEvents = computed(() => latestEvents('AGENT_SELECTED', 4))
+const visibleResultReview = computed(() => {
+  return normalizeReviewOptions(currentRun.value?.reviewOptions).globalReviewEnabled ? resultReview.value : null
+})
 const selectionByStepId = computed(() => {
   const map = {}
   for (const event of currentRun.value?.events || []) {
@@ -433,17 +391,6 @@ const selectionByStepId = computed(() => {
     }
   }
   return map
-})
-const riskEvents = computed(() => latestEvents('RISK_DECIDED', 6))
-const conflictReport = computed(() => parseJson(currentRun.value?.conflictReportJson))
-const arbitrationInfo = computed(() => parseJson(currentRun.value?.arbitrationJson))
-const arbitrationText = computed(() => {
-  const value = arbitrationInfo.value?.arbitration
-  return typeof value === 'string' ? value : ''
-})
-const stepRetryText = computed(() => {
-  const retries = (currentRun.value?.steps || []).map(step => step.retryCount || 0)
-  return retries.length ? `最高已重试 ${Math.max(...retries)} 次` : '尚未发生 Step 重试'
 })
 const reflectedSteps = computed(() => (currentRun.value?.steps || []).filter(step => step.reflectionJson || step.lastReviewReason))
 const hasReflections = computed(() => reflectedSteps.value.length > 0)
@@ -697,7 +644,7 @@ function roleLabel(role) {
     PLANNER: 'Planner 规划器',
     EXECUTOR: 'Executor 执行者',
     REVIEWER: 'Reviewer 全局审查',
-    SUB_REVIEWER: 'SubReviewer 子评审',
+    SUB_REVIEWER: 'StepReviewer 每步审查',
     MERGER: 'MergeAgent 聚合'
   }[role] || role
 }
@@ -750,7 +697,8 @@ function qualityLabel(status) {
     PASSED: '已通过',
     RETRY_REQUESTED: '要求重试',
     REVIEW_SKIPPED: '已跳过审查',
-    FLAWED_ACCEPTED: '瑕疵放行'
+    FLAWED_ACCEPTED: '瑕疵放行',
+    FAILED: '审查失败'
   }[status] || status || '待校验'
 }
 
@@ -776,7 +724,7 @@ function reviewOptionsLabel(options) {
   }
   const enabled = []
   if (normalized.planReviewEnabled) enabled.push('PlanReview')
-  if (normalized.subReviewEnabled) enabled.push('SubReview')
+  if (normalized.subReviewEnabled) enabled.push('每步 Review')
   if (normalized.globalReviewEnabled) enabled.push('GlobalReview')
   if (normalized.simpleFastPathEnabled) enabled.push('SIMPLE 直返')
   return enabled.length ? enabled.join(' / ') : '自定义'
@@ -785,9 +733,14 @@ function reviewOptionsLabel(options) {
 function actionLabel(action) {
   return {
     CONTINUE: '通过',
+    SUCCESS: '终审通过',
     RETRY: '重试执行',
-    PARTIAL_REPLAN: '局部重规划',
-    REPLAN: '整体重规划',
+    PASS: 'Step 通过',
+    REWORK: '重做当前 Step',
+    ACCEPT_WITH_RISK: '带风险接受',
+    REMERGE: '要求重新合并',
+    PARTIAL_REPLAN: '历史局部重规划',
+    REPLAN: '历史整体重规划',
     ASK_CLARIFICATION: '请求澄清',
     FAILED: '判定失败'
   }[action] || action
@@ -814,7 +767,7 @@ function eventTypeLabel(type) {
     PLAN_CREATED: '计划已生成',
     PLAN_REVIEW_STARTED: '开始规划审查',
     PLAN_REVIEWED: '规划审查完成',
-    TEAM_CONTROL_STARTED: '管控中心启动',
+    TEAM_CONTROL_STARTED: 'DAG 调度启动',
     AGENT_SELECTED: 'Agent 已选择',
     RISK_DECIDED: '风险裁决完成',
     STEP_BLOCKED: 'Step 等待依赖',
@@ -825,8 +778,8 @@ function eventTypeLabel(type) {
     STEP_FAILED: 'Step 执行失败',
     STEP_RETRY_STARTED: 'Step 开始重试',
     STEP_RETRY_COMPLETED: 'Step 重试完成',
-    STEP_SUB_REVIEW_STARTED: '子评审开始',
-    STEP_SUB_REVIEWED: '子评审完成',
+    STEP_SUB_REVIEW_STARTED: '每步 Review 开始',
+    STEP_SUB_REVIEWED: '每步 Review 完成',
     STEP_REFLECTION_RECORDED: '写入 Reflexion',
     MERGE_STARTED: '开始聚合',
     MERGE_COMPLETED: '聚合完成',
@@ -845,11 +798,23 @@ function eventTypeLabel(type) {
   }[type] || type
 }
 
-function latestEvents(type, limit = 5) {
-  return (currentRun.value?.events || [])
-    .filter(event => event.type === type)
-    .slice(-limit)
-    .reverse()
+function eventDisplayLabel(event) {
+  if (isSkippedGlobalReviewEvent(event)) {
+    return '已跳过 GlobalReview'
+  }
+  return eventTypeLabel(event?.type)
+}
+
+function eventDisplayMessage(event) {
+  if (isSkippedGlobalReviewEvent(event)) {
+    return event?.message || '用户跳过 GlobalReview，直接使用 MergeAgent 输出完成'
+  }
+  return event?.message || ''
+}
+
+function isSkippedGlobalReviewEvent(event) {
+  return event?.type === 'GLOBAL_REVIEWED'
+    && !normalizeReviewOptions(currentRun.value?.reviewOptions).globalReviewEnabled
 }
 
 function eventPayload(event) {

@@ -56,7 +56,10 @@ class TeamBlackboardServiceReplanTest {
                     {"action":"CONTINUE","reason":"简易任务可直接执行","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":""}
                     """),
                 context("""
-                    {"action":"CONTINUE","reason":"简易终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"简易最终报告"}
+                    {"action":"PASS","reason":"Step 输出可用","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":""}
+                    """),
+                context("""
+                    {"action":"SUCCESS","reason":"简易终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"简易最终报告"}
                     """)
             );
         when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
@@ -105,6 +108,7 @@ class TeamBlackboardServiceReplanTest {
         RuntimeHarness harness = new RuntimeHarness();
         TeamRunEntity run = harness.run();
         run.setPlanReviewEnabled(false);
+        run.setSubReviewEnabled(false);
         harness.wire(run);
 
         when(harness.orchestrator.executeInternal(eq("planner"), eq("team-run-run-1-planner"), anyString(), eq(false)))
@@ -113,9 +117,9 @@ class TeamBlackboardServiceReplanTest {
                 """));
         when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
             .thenReturn(context("执行输出"));
-        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), contains("acting as GlobalReviewer"), eq(false)))
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), contains("You are the GlobalReviewer"), eq(false)))
             .thenReturn(context("""
-                {"action":"CONTINUE","reason":"终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
+                {"action":"SUCCESS","reason":"终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
                 """));
 
         harness.service.executeRun("run-1");
@@ -131,6 +135,7 @@ class TeamBlackboardServiceReplanTest {
         RuntimeHarness harness = new RuntimeHarness();
         TeamRunEntity run = harness.run();
         run.setGlobalReviewEnabled(false);
+        run.setSubReviewEnabled(false);
         harness.wire(run);
 
         when(harness.orchestrator.executeInternal(eq("planner"), eq("team-run-run-1-planner"), anyString(), eq(false)))
@@ -154,11 +159,11 @@ class TeamBlackboardServiceReplanTest {
         assertThat(run.getGlobalReviewJson()).contains("用户跳过 GlobalReview");
         assertThat(run.getFinalOutput()).contains("执行输出");
         verify(harness.orchestrator, never()).executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
-            contains("acting as GlobalReviewer"), eq(false));
+            contains("You are the GlobalReviewer"), eq(false));
     }
 
     @Test
-    void disabledSubReviewMarksHighRiskStepAsReviewSkipped() {
+    void disabledStepReviewMarksHighRiskStepAsReviewSkipped() {
         RuntimeHarness harness = new RuntimeHarness();
         TeamRunEntity run = harness.run();
         run.setSubReviewEnabled(false);
@@ -174,9 +179,9 @@ class TeamBlackboardServiceReplanTest {
                 """));
         when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
             .thenReturn(context("高风险输出"));
-        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), contains("acting as GlobalReviewer"), eq(false)))
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), contains("You are the GlobalReviewer"), eq(false)))
             .thenReturn(context("""
-                {"action":"CONTINUE","reason":"终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
+                {"action":"SUCCESS","reason":"终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
                 """));
 
         harness.service.executeRun("run-1");
@@ -186,79 +191,99 @@ class TeamBlackboardServiceReplanTest {
             .singleElement()
             .satisfies(step -> {
                 assertThat(step.getQualityStatus()).isEqualTo(TeamStepQualityStatus.REVIEW_SKIPPED);
-                assertThat(step.getSubReviewJson()).contains("用户跳过 SubReview");
+                assertThat(step.getSubReviewJson()).contains("用户跳过每步 Review");
             });
         verify(harness.orchestrator, never()).executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
-            contains("SubReviewer"), eq(false));
+            contains("StepReviewer"), eq(false));
     }
 
     @Test
-    void resultReplanPreservesOldStepsAndCompletesRun() {
+    void globalReviewRemergeRerunsOnlyMergeAgent() {
         RuntimeHarness harness = new RuntimeHarness();
         TeamRunEntity run = harness.run();
-        harness.persistedSteps.add(harness.step("step-old", 1, "旧天气查询", TeamStepStatus.COMPLETED, "只有天气，没有预算"));
         harness.wire(run);
 
-        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), anyString(), eq(false)))
-            .thenReturn(
-                context("""
-                    {"action":"REPLAN","reason":"缺少预算任务","questions":[],"retryStepIds":[],"revisionInstructions":"重新规划预算和人员协调 Step","finalReport":""}
-                    """),
-                context("""
-                    {"action":"CONTINUE","reason":"新计划覆盖需求","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":""}
-                    """),
-                context("""
-                    {"action":"CONTINUE","reason":"结果合格","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
-                    """)
-            );
         when(harness.orchestrator.executeInternal(eq("planner"), eq("team-run-run-1-planner"), anyString(), eq(false)))
             .thenReturn(context("""
-                {"steps":[{"title":"预算规划","description":"规划预算和人员协调","requiredCapabilities":["general"],"acceptanceCriteria":"给出预算表和协调方案"}]}
+                {"taskLevel":"COMPLEX","steps":[{"clientStepId":"draft","title":"资料整理","description":"整理用户给出的材料","requiredCapabilities":["general"],"acceptanceCriteria":"输出清晰初稿"}]}
+                """));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
+            contains("Review whether the Planner"), eq(false)))
+            .thenReturn(context("""
+                {"action":"CONTINUE","reason":"计划通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":""}
                 """));
         when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
-            .thenReturn(context("预算和人员协调输出"));
+            .thenReturn(context("执行输出"));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
+            contains("StepReviewer"), eq(false)))
+            .thenReturn(context("""
+                {"action":"PASS","reason":"Step 输出可用","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":""}
+                """));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), startsWith("team-run-run-1-merger-"),
+            anyString(), eq(false)))
+            .thenReturn(context("初版聚合稿"), context("按终审意见重合并后的稿件"));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), contains("conflict-detector"), anyString(), eq(false)))
+            .thenReturn(context("""
+                {"hasConflict":false,"conflictFields":[],"affectedStepIds":[],"reason":"无冲突","normalizationAdvice":""}
+                """));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
+            contains("You are the GlobalReviewer"), eq(false)))
+            .thenReturn(
+                context("""
+                    {"action":"REMERGE","reason":"最终稿结构不清晰","questions":[],"retryStepIds":[],"affectedStepIds":[],"revisionInstructions":"按用户目标重新组织章节","finalReport":""}
+                    """),
+                context("""
+                    {"action":"SUCCESS","reason":"终审通过","questions":[],"retryStepIds":[],"affectedStepIds":[],"revisionInstructions":"","finalReport":"最终报告"}
+                    """)
+            );
 
         harness.service.executeRun("run-1");
 
         assertThat(run.getStatus()).isEqualTo(TeamRunStatus.COMPLETED);
-        assertThat(run.getResultReplanCount()).isEqualTo(1);
+        assertThat(run.getResultReplanCount()).isZero();
         assertThat(run.getFinalOutput()).isEqualTo("最终报告");
+        assertThat(run.getMergeOutput()).isEqualTo("按终审意见重合并后的稿件");
         assertThat(harness.persistedSteps)
-            .hasSize(2);
-        assertThat(harness.persistedSteps)
-            .filteredOn(step -> step.getStepId().equals("step-old"))
-            .first()
-            .satisfies(step -> assertThat(step.getStatus()).isEqualTo(TeamStepStatus.SUPERSEDED));
-        assertThat(harness.persistedSteps)
-            .filteredOn(step -> step.getTitle().equals("预算规划"))
-            .first()
-            .satisfies(step -> {
-                assertThat(step.getTitle()).isEqualTo("预算规划");
-                assertThat(step.getStatus()).isEqualTo(TeamStepStatus.COMPLETED);
-                assertThat(step.getRawOutput()).isEqualTo("预算和人员协调输出");
-            });
+            .singleElement()
+            .satisfies(step -> assertThat(step.getStatus()).isEqualTo(TeamStepStatus.COMPLETED));
         assertThat(harness.events)
             .extracting(TeamEventEntity::getType)
-            .contains(TeamEventType.REPLAN_REQUESTED, TeamEventType.RUN_COMPLETED);
+            .contains(TeamEventType.RUN_COMPLETED)
+            .doesNotContain(TeamEventType.REPLAN_REQUESTED);
     }
 
     @Test
-    void resultReplanLimitFailsRun() {
+    void globalReviewRejectsReplanActionWithoutChangingDag() {
         RuntimeHarness harness = new RuntimeHarness();
         TeamRunEntity run = harness.run();
-        run.setResultReplanCount(2);
         harness.persistedSteps.add(harness.step("step-old", 1, "旧天气查询", TeamStepStatus.COMPLETED, "只有天气"));
         harness.wire(run);
 
-        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"), anyString(), eq(false)))
+        when(harness.orchestrator.executeInternal(eq("reviewer"), startsWith("team-run-run-1-merger-"),
+            anyString(), eq(false)))
+            .thenReturn(context("已有 Step 的聚合稿"));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), contains("conflict-detector"), anyString(), eq(false)))
+            .thenReturn(context("""
+                {"hasConflict":false,"conflictFields":[],"affectedStepIds":[],"reason":"无冲突","normalizationAdvice":""}
+                """));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), eq("team-run-run-1-reviewer"),
+            contains("You are the GlobalReviewer"), eq(false)))
             .thenReturn(context("""
                 {"action":"REPLAN","reason":"仍然缺少预算任务","questions":[],"retryStepIds":[],"revisionInstructions":"重新规划预算","finalReport":""}
+                """));
+        when(harness.orchestrator.executeInternal(eq("reviewer"), startsWith("team-run-run-1-reviewer-repair-"),
+            anyString(), eq(false)))
+            .thenReturn(context("""
+                {"action":"FAILED","reason":"GlobalReviewer 不允许重规划 DAG","questions":[],"retryStepIds":[],"affectedStepIds":[],"revisionInstructions":"","finalReport":""}
                 """));
 
         harness.service.executeRun("run-1");
 
         assertThat(run.getStatus()).isEqualTo(TeamRunStatus.FAILED);
-        assertThat(run.getFinalOutput()).contains("result replan limit reached");
+        assertThat(run.getFinalOutput()).contains("GlobalReviewer 不允许重规划 DAG");
+        assertThat(harness.persistedSteps)
+            .singleElement()
+            .satisfies(step -> assertThat(step.getStatus()).isEqualTo(TeamStepStatus.COMPLETED));
         verify(harness.orchestrator, never()).executeInternal(eq("planner"), anyString(), contains("Previous executor results"), eq(false));
     }
 
@@ -278,7 +303,7 @@ class TeamBlackboardServiceReplanTest {
                     {"action":"CONTINUE","reason":"简易任务可直接执行","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":""}
                     """),
                 context("""
-                    {"action":"CONTINUE","reason":"简易终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"简易最终报告"}
+                    {"action":"SUCCESS","reason":"简易终审通过","questions":[],"retryStepIds":[],"revisionInstructions":"","finalReport":"简易最终报告"}
                     """)
             );
         when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
@@ -300,6 +325,84 @@ class TeamBlackboardServiceReplanTest {
             });
         verify(harness.orchestrator).executeInternal(eq("executor"),
             startsWith("team-run-run-1-step-"), contains("本轮禁止再调用任何工具"), eq(false));
+    }
+
+    @Test
+    void lateExecutorCompletionDoesNotOverwriteTimedOutStep() {
+        RuntimeHarness harness = new RuntimeHarness();
+        TeamRunEntity run = harness.run();
+        run.setSubReviewEnabled(false);
+        run.setGlobalReviewEnabled(false);
+        TeamStepEntity step = harness.step("step-1", 1, "慢步骤", TeamStepStatus.READY, null);
+        harness.persistedSteps.add(step);
+        harness.wire(run);
+
+        when(harness.orchestrator.executeInternal(eq("executor"), startsWith("team-run-run-1-step-"), anyString()))
+            .thenAnswer(invocation -> {
+                harness.service.markStepTimedOut("run-1", "step-1");
+                return context("迟到输出");
+            });
+
+        harness.service.executeRun("run-1");
+
+        assertThat(run.getStatus()).isEqualTo(TeamRunStatus.FAILED);
+        assertThat(harness.persistedSteps)
+            .singleElement()
+            .satisfies(persisted -> {
+                assertThat(persisted.getStatus()).isEqualTo(TeamStepStatus.FAILED);
+                assertThat(persisted.getRawOutput()).contains("Step execution timed out");
+                assertThat(persisted.getRawOutput()).doesNotContain("迟到输出");
+            });
+        assertThat(harness.events)
+            .extracting(TeamEventEntity::getType)
+            .contains(TeamEventType.STEP_TIMEOUT, TeamEventType.RUN_FAILED)
+            .doesNotContain(TeamEventType.STEP_COMPLETED, TeamEventType.RUN_COMPLETED);
+    }
+
+    @Test
+    void lateStepFailureDoesNotOverwriteCompletedStep() {
+        RuntimeHarness harness = new RuntimeHarness();
+        TeamRunEntity run = harness.run();
+        TeamStepEntity step = harness.step("step-1", 1, "已完成步骤", TeamStepStatus.COMPLETED, "完成输出");
+        step.setQualityStatus(TeamStepQualityStatus.PASSED);
+        harness.persistedSteps.add(step);
+        harness.wire(run);
+
+        harness.service.markStepFailed("run-1", "step-1", "迟到失败");
+
+        assertThat(harness.persistedSteps)
+            .singleElement()
+            .satisfies(persisted -> {
+                assertThat(persisted.getStatus()).isEqualTo(TeamStepStatus.COMPLETED);
+                assertThat(persisted.getRawOutput()).isEqualTo("完成输出");
+                assertThat(persisted.getQualityStatus()).isEqualTo(TeamStepQualityStatus.PASSED);
+            });
+        assertThat(harness.events)
+            .extracting(TeamEventEntity::getType)
+            .doesNotContain(TeamEventType.STEP_FAILED);
+    }
+
+    @Test
+    void lateStepTimeoutDoesNotOverwriteCompletedStep() {
+        RuntimeHarness harness = new RuntimeHarness();
+        TeamRunEntity run = harness.run();
+        TeamStepEntity step = harness.step("step-1", 1, "已完成步骤", TeamStepStatus.COMPLETED, "完成输出");
+        step.setQualityStatus(TeamStepQualityStatus.PASSED);
+        harness.persistedSteps.add(step);
+        harness.wire(run);
+
+        harness.service.markStepTimedOut("run-1", "step-1");
+
+        assertThat(harness.persistedSteps)
+            .singleElement()
+            .satisfies(persisted -> {
+                assertThat(persisted.getStatus()).isEqualTo(TeamStepStatus.COMPLETED);
+                assertThat(persisted.getRawOutput()).isEqualTo("完成输出");
+                assertThat(persisted.getQualityStatus()).isEqualTo(TeamStepQualityStatus.PASSED);
+            });
+        assertThat(harness.events)
+            .extracting(TeamEventEntity::getType)
+            .doesNotContain(TeamEventType.STEP_TIMEOUT, TeamEventType.STEP_FAILED);
     }
 
     private static PipelineContext context(String finalResponse) {

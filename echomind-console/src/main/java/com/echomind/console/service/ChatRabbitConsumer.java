@@ -26,7 +26,8 @@ public class ChatRabbitConsumer {
         ChatResponse response = chatService.executeQueuedStream(request, ssePushService::pushEvent);
         ChatStreamEvent terminal = "OK".equals(response.status())
             ? ChatStreamEvent.result(response)
-            : ChatStreamEvent.failure(response.requestId(), response.error(), response.traceId());
+            : ChatStreamEvent.failure(response.requestId(), response.error(), response.errorDetail(),
+                response.traceId());
         terminal = terminal.withTrace(response.traceId(), firstNonBlank(response.traceparent(), request.traceparent()));
         ssePushService.pushEvent(terminal);
         log.info("Published response for request {}", request.requestId());

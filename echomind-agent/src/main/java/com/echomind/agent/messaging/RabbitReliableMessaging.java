@@ -19,6 +19,7 @@ public final class RabbitReliableMessaging {
     public static final String CHAT_REQUESTS_DLQ = RabbitQueueNames.CHAT_REQUESTS_DLQ;
     public static final String CHAT_MEMORY_PERSIST_DLQ = RabbitQueueNames.CHAT_MEMORY_PERSIST_DLQ;
     public static final String USER_MEMORY_DLQ = RabbitQueueNames.USER_MEMORY_DLQ;
+    public static final String TEAM_COMMANDS_DLQ = RabbitQueueNames.TEAM_COMMANDS_DLQ;
 
     private static final MessagePostProcessor PERSISTENT_MESSAGE = message -> {
         message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);

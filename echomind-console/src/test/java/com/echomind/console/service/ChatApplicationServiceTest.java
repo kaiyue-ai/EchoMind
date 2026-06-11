@@ -3,9 +3,11 @@ package com.echomind.console.service;
 import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.orchestration.AgentOrchestrator.StreamExecution;
 import com.echomind.agent.pipeline.PipelineContext;
+import com.echomind.common.exception.ModelInvocationRejectedException;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.ChatRequest;
 import com.echomind.common.model.ChatStreamEvent;
+import com.echomind.common.model.ErrorDetail;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.TokenUsage;
 import com.echomind.common.observability.EchoMindTrace;
@@ -336,6 +338,48 @@ class ChatApplicationServiceTest {
         verify(governanceService, never()).recordStreamUsage(any(), anyString(), any(), any(), anyLong(), anyBoolean(),
             anyString());
         verify(governanceService, never()).emitCallError(any(), any(), anyString());
+    }
+
+    @Test
+    void executeQueuedStreamReturnsStructuredFailureForFinalPreflightBlock() {
+        AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
+        ChatGovernanceService governanceService = passthroughGovernanceService();
+        ErrorDetail detail = new ErrorDetail(
+            "PROVIDER_TOKEN_BUDGET_EXCEEDED",
+            "模型服务预算不足，请稍后重试或切换模型",
+            "FINAL_PREFLIGHT",
+            "daily",
+            null,
+            null,
+            null,
+            320L,
+            null,
+            null
+        );
+        when(orchestrator.executeStreamContext(eq("user-a"), eq("default"), eq("session-budget"),
+            eq("hello"), eq("deepseek:model"), eq(List.of()), eq("hello"),
+            argThat((Map<String, Object> attributes) -> attributes.size() == 2
+                && attributes.get(PipelineContext.ATTR_USER_TOKEN_RESERVATION_IDS)
+                    .equals(List.of("user-reservation"))
+                && attributes.get(PipelineContext.ATTR_PROVIDER_TOKEN_RESERVATION_IDS)
+                    .equals(List.of("provider-reservation")))))
+            .thenReturn(Mono.error(new ModelInvocationRejectedException(detail)));
+        ChatApplicationService service = service(orchestrator, mock(ChatRabbitProducer.class), mock(MemoryManager.class),
+            mock(ObjectStorageService.class), mock(SsePushService.class), governanceService);
+
+        var response = service.executeQueuedStream(
+            new ChatRequest("req-budget", "user-a", "default", "session-budget", "hello", "deepseek:model",
+                "trace-budget", "00-trace-parent", List.of(), List.of("user-reservation"),
+                List.of("provider-reservation")),
+            event -> {}
+        );
+
+        assertThat(response.status()).isEqualTo("ERROR");
+        assertThat(response.error()).isEqualTo("模型服务预算不足，请稍后重试或切换模型");
+        assertThat(response.errorDetail()).isEqualTo(detail);
+        verify(governanceService).releaseReservations(List.of("user-reservation", "provider-reservation"));
+        verify(governanceService, never()).recordStreamUsage(any(), anyString(), any(), any(), anyLong(), anyBoolean(),
+            anyString());
     }
 
     @Test

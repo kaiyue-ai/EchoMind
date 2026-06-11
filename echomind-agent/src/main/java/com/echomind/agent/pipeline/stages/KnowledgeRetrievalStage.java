@@ -52,7 +52,7 @@ public class KnowledgeRetrievalStage implements PipelineStage {
 
     private PipelineContext injectHits(PipelineContext ctx, List<AgentKnowledgeHit> hits) {
         if (!hits.isEmpty()) {
-            ctx.getAttributes().put("knowledgeHits", hits);
+            ctx.getAttributes().put(PipelineContext.ATTR_KNOWLEDGE_HITS, hits);
             ctx.getMessages().add(0, AgentMessage.system(buildKnowledgePrompt(hits)));
         }
         return ctx;

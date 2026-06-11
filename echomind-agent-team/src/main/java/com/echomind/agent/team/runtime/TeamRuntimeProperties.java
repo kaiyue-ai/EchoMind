@@ -11,17 +11,17 @@ import org.springframework.stereotype.Component;
 public class TeamRuntimeProperties {
 
     private static final int MAX_RETRY_LIMIT = 3;
-    private static final int MAX_REPLAN_LIMIT = 2;
     private static final int MAX_ARBITRATION_LIMIT = 2;
+    private static final int MAX_MERGE_ATTEMPT_LIMIT = 3;
     private static final int MAX_CONCURRENT_STEP_LIMIT = 8;
     private static final int MAX_STEP_TIMEOUT_SECONDS = 600;
     private static final int MAX_RUN_TIMEOUT_SECONDS = 7200;
 
     private int maxPlanRetries = 2;
-    private int maxResultReplans = 2;
     private int maxStepRetries = 2;
     private int maxReviewerFormatRepairs = 3;
     private int maxArbitrations = 2;
+    private int maxMergeAttempts = 2;
     private int maxConcurrentSteps = 7;
     private int stepTimeoutSeconds = 180;
     private int runTimeoutSeconds = 1200;
@@ -33,14 +33,6 @@ public class TeamRuntimeProperties {
 
     public void setMaxPlanRetries(int maxPlanRetries) {
         this.maxPlanRetries = clamp(maxPlanRetries, 0, MAX_RETRY_LIMIT);
-    }
-
-    public int getMaxResultReplans() {
-        return maxResultReplans;
-    }
-
-    public void setMaxResultReplans(int maxResultReplans) {
-        this.maxResultReplans = clamp(maxResultReplans, 0, MAX_REPLAN_LIMIT);
     }
 
     public int getMaxStepRetries() {
@@ -65,6 +57,14 @@ public class TeamRuntimeProperties {
 
     public void setMaxArbitrations(int maxArbitrations) {
         this.maxArbitrations = clamp(maxArbitrations, 0, MAX_ARBITRATION_LIMIT);
+    }
+
+    public int getMaxMergeAttempts() {
+        return maxMergeAttempts;
+    }
+
+    public void setMaxMergeAttempts(int maxMergeAttempts) {
+        this.maxMergeAttempts = clamp(maxMergeAttempts, 0, MAX_MERGE_ATTEMPT_LIMIT);
     }
 
     public int getMaxConcurrentSteps() {

@@ -29,6 +29,9 @@ import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -165,10 +168,10 @@ public class TokenReservationService {
         if (reservationIds == null || reservationIds.isEmpty()) {
             return;
         }
-        for (String reservationId : reservationIds) {
-            TokenReservation reservation = TokenReservation.parse(reservationId);
-            settle(reservation, Math.max(actualTokens, 0));
-        }
+        Map<ReservationBucket, Long> reservedByBucket = reservationIds.stream()
+            .map(TokenReservation::parse)
+            .collect(Collectors.groupingBy(ReservationBucket::from, Collectors.summingLong(TokenReservation::reservedTokens)));
+        reservedByBucket.forEach((bucket, reservedTokens) -> settle(bucket, reservedTokens, Math.max(actualTokens, 0)));
     }
 
     public void release(List<String> reservationIds) {
@@ -205,6 +208,22 @@ public class TokenReservationService {
         }
     }
 
+    public long reservedTokens(List<String> reservationIds, OwnerType ownerType) {
+        if (reservationIds == null || reservationIds.isEmpty()) {
+            return 0;
+        }
+        return reservationIds.stream()
+            .map(TokenReservation::parse)
+            .filter(reservation -> reservation.ownerType() == ownerType)
+            .collect(Collectors.groupingBy(ReservationBucket::from, Collectors.summingLong(TokenReservation::reservedTokens)))
+            .values()
+            .stream()
+            .filter(Objects::nonNull)
+            .mapToLong(Long::longValue)
+            .max()
+            .orElse(0);
+    }
+
     private List<String> reserveBuckets(List<Bucket> buckets, long requestedReserveTokens) {
         if (buckets.isEmpty()) {
             return List.of();
@@ -237,14 +256,15 @@ public class TokenReservationService {
         }
     }
 
-    private void settle(TokenReservation reservation, long actualTokens) {
+    private void settle(ReservationBucket bucket, long reservedTokens, long actualTokens) {
         try {
-            String key = bucketKey(reservation);
+            String key = bucketKey(bucket.ownerType(), bucket.ownerId(), bucket.scope(), bucket.bucketStart());
             redis.execute(SETTLE_SCRIPT, Collections.singletonList(key),
-                String.valueOf(reservation.reservedTokens()), String.valueOf(actualTokens),
-                String.valueOf(ttlSeconds(reservation.scope(), reservation.bucketStart())));
+                String.valueOf(reservedTokens), String.valueOf(actualTokens),
+                String.valueOf(ttlSeconds(bucket.scope(), bucket.bucketStart())));
         } catch (RuntimeException e) {
-            log.warn("Failed to settle Redis token reservation {}: {}", reservation.id(), e.getMessage());
+            log.warn("Failed to settle Redis token reservations owner={} id={} scope={} bucket={}: {}",
+                bucket.ownerType(), bucket.ownerId(), bucket.scope(), bucket.bucketStart(), e.getMessage());
         }
     }
 
@@ -360,5 +380,17 @@ public class TokenReservationService {
         long limit,
         String key
     ) {
+    }
+
+    private record ReservationBucket(
+        OwnerType ownerType,
+        String ownerId,
+        String scope,
+        LocalDate bucketStart
+    ) {
+        private static ReservationBucket from(TokenReservation reservation) {
+            return new ReservationBucket(reservation.ownerType(), reservation.ownerId(), reservation.scope(),
+                reservation.bucketStart());
+        }
     }
 }

@@ -115,6 +115,8 @@ let historySerial = 0
 let messageClientSerial = 0
 let streamTokenBuffer = ''
 let streamTokenTimer = 0
+let toolStatusClearTimer = 0
+let toolStatusStartedAt = 0
 let cancelMetadataLoad = null
 
 const {
@@ -136,6 +138,7 @@ const { inspectorOpen } = storeToRefs(uiStore)
 const AGENT_DEFAULT_MODEL = '__agent_default__'
 const fallbackModelId = 'deepseek:deepseek-v4-flash'
 const CHAT_MESSAGE_MAX_CHARS = 20_000
+const TOOL_STATUS_MIN_VISIBLE_MS = 900
 
 const currentAgent = computed(() => {
   return agents.value.find(agent => agent.agentId === selectedAgent.value)
@@ -242,6 +245,7 @@ function sendMessage() {
   let pendingLeadingToken = ''
   let activeToolName = ''
   cancelTokenFlush()
+  cancelToolStatusClear()
   try {
     activeStream.value = api.chat.stream(
       selectedAgent.value,
@@ -279,10 +283,11 @@ function sendMessage() {
         if (!isActiveStream(streamId)) return
         if (toolEvent.type === 'start') {
           activeToolName = toolEvent.toolName || '工具'
+          showToolStatus(activeToolName)
         } else if (toolEvent.type === 'end' && (!toolEvent.toolName || toolEvent.toolName === activeToolName)) {
           activeToolName = ''
+          scheduleToolStatusClear(streamId)
         }
-        updateToolStatus(activeToolName)
       }
     )
   } catch (error) {
@@ -299,6 +304,30 @@ function updateToolStatus(toolName) {
     toolStatus: status
   }
   nextTick(() => messageListRef.value?.followIfNearBottom('auto'))
+}
+
+function showToolStatus(toolName) {
+  cancelToolStatusClear()
+  toolStatusStartedAt = Date.now()
+  updateToolStatus(toolName)
+}
+
+function scheduleToolStatusClear(streamId) {
+  cancelToolStatusClear()
+  const elapsed = Date.now() - toolStatusStartedAt
+  const delay = Math.max(TOOL_STATUS_MIN_VISIBLE_MS - elapsed, 0)
+  toolStatusClearTimer = window.setTimeout(() => {
+    toolStatusClearTimer = 0
+    if (!isActiveStream(streamId)) return
+    updateToolStatus('')
+  }, delay)
+}
+
+function cancelToolStatusClear() {
+  if (toolStatusClearTimer) {
+    window.clearTimeout(toolStatusClearTimer)
+    toolStatusClearTimer = 0
+  }
 }
 
 function queueStreamToken(token) {
@@ -349,6 +378,7 @@ function cancelTokenFlush() {
 
 function finishStream(result, streamId = streamSerial) {
   if (!isActiveStream(streamId)) return
+  cancelToolStatusClear()
   flushStreamToken()
   const idx = thinkingMsgIndex.value
   const finalResponse = result?.response
@@ -403,6 +433,7 @@ function handleStreamError(error, streamId = streamSerial) {
 function cancelActiveStream() {
   streamSerial += 1
   cancelTokenFlush()
+  cancelToolStatusClear()
   if (activeStream.value?.cancel) {
     activeStream.value.cancel()
   }

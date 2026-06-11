@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia'
-
-const DISPLAY_ROLES = new Set(['user', 'assistant', 'system'])
+import { normalizeChatMessages } from '../utils/chatMessages'
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
@@ -17,9 +16,7 @@ export const useChatStore = defineStore('chat', {
   actions: {
     setHistory(sessionId, messages) {
       this.sessionId = sessionId
-      this.messages = Array.isArray(messages)
-        ? messages.filter(message => DISPLAY_ROLES.has(message?.role))
-        : []
+      this.messages = normalizeChatMessages(messages)
       this.attachments = []
       this.input = ''
       this.loading = false

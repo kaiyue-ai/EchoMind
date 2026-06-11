@@ -139,11 +139,14 @@ DELETE /api/admin/client-users/{userId}
 接口响应再生成展示 URL。
 
 项目三 AI Infra 只作为现有 Agent 项目的管理端，不新增独立网关、不新增 OpenAI `/v1` 兼容入口、
-不引入应用 API Key。治理能力挂在现有 `/api/chat/*` 链路：调用前先快速检查并预留用户级 Token 配额，
-再对请求做脱敏或 `BLOCK` 短路；请求侧 `BLOCK` 不进入 Agent/RabbitMQ 管线，直接把命中规则
-replacement 按原文位置拼接后返回给用户。模型解析出 Provider 后会预留 Provider 日/周/月预算。
-模型响应后再做响应脱敏/阻断、用量落库、用户 quota 和 Provider budget
-真实 usage 结算以及告警触发；响应侧 `BLOCK` 仍走阻断异常。敏感数据事件只保存脱敏后的样本或替代词结果，不落原始命中文本。
+不引入应用 API Key。治理能力挂在现有 `/api/chat/*` 链路：入队前先做用户级 Token 配额快速检查、
+请求脱敏或 `BLOCK` 短路，并按初始 prompt 估算对用户 quota 和 Provider budget 做 initial Redis 预留；
+请求侧 `BLOCK` 不进入 Agent/RabbitMQ 管线，直接把命中规则 replacement 按原文位置拼接后返回给用户。
+消费端在 `ResultAggregationStage` 生成完整 `ProviderRequest` 后执行 final preflight，按 system prompt、
+当前问题、工具 schema、附件元信息和输出上限重估，只补 initial reservation 不足的 delta。final preflight
+拒绝不会调用模型，并通过 `ErrorDetail` 透传给 SSE failure 或 HTTP 错误。模型响应后再做响应脱敏/阻断、
+用量落库、用户 quota 和 Provider budget 真实 usage 结算以及告警触发；响应侧 `BLOCK` 仍走阻断异常。
+敏感数据事件只保存脱敏后的样本或替代词结果，不落原始命中文本。
 这些治理流程集中在 `ChatGovernanceService`。`ChatApplicationService` 只负责用例入口和调用顺序；
 `ChatRequestNormalizer` 负责 REST 请求归一化，`AgentChatExecutor` 负责调用 `AgentOrchestrator`
 并保留原始用户消息，`QueuedChatStreamExecutor` 负责执行队列里的流式聊天并产出 SSE token 事件，
@@ -269,16 +272,20 @@ DLQ。主后端低并发监听 `echomind.chat.requests.dlq`、
 在线 SSE token/result 体验不进入 RabbitMQ 强可靠队列；断线恢复仍依赖 `SsePushService`
 的短期内存 buffer 和终态事件。
 
-Agent Team 当前不使用 RabbitMQ；Team Run 由 `TaskExecutor` 在单体进程内异步推进 MySQL 黑板状态。
+Agent Team 当前不使用 RabbitMQ；Team Run 由 `TeamExecutionEngine` 做事务提交后的 Run 级调度，
+当前底层仍使用 `TaskExecutor` 在单体进程内异步推进 MySQL 黑板状态。
 
 旧同步聊天入口和旧直连流式入口已删除。前端若需要流式体验，必须先 `POST /api/chat`
 入队，再订阅 `GET /api/chat/stream/{requestId}`；SSE 层只转发事件，不承担模型执行。
-异步聊天的 Token 配额快速检查、Redis 原子预留和请求脱敏只在 `ChatApplicationService.submitAsync` 入队前执行；
+异步聊天的 Token 配额快速检查、initial Redis 原子预留和请求脱敏只在 `ChatApplicationService.submitAsync` 入队前执行；
 请求侧 `BLOCK` 时只注册 SSE owner 并直接缓存/推送成功 `result` 事件，不发布 RabbitMQ。
 `QueuedChatStreamExecutor` 消费队列消息时不再重复请求前配额检查，只负责流式执行、响应治理、用量落库、
 真实 usage 后置结算、reservation 释放/结算和事件推送。公开聊天入口会在入队前尽量按请求模型或
-Agent 默认模型解析 Provider，并完成 Provider budget Redis 原子预留。Pipeline 不再做 Provider
-budget 兜底预留；RabbitMQ 聊天请求死信重放会在重新入队前重建用户 quota 和 Provider budget reservation。
+Agent 默认模型解析 Provider，并完成 Provider budget initial Redis 原子预留。Pipeline 会在完整
+`ProviderRequest` 生成后执行 final preflight，重估 system prompt、当前问题、工具 schema、附件元信息和
+输出上限，只为用户 quota 和 Provider budget 补不足的 delta；命中配额或预算拒绝时不调用 Provider，
+并通过结构化 `ErrorDetail` 返回。RabbitMQ 聊天请求死信重放会在重新入队前重建用户 quota 和
+Provider budget reservation。
 
 Provider 层通过 Spring AI ChatModel adapter 使用厂商真流式能力。OpenAI 兼容协议（包括阿里云百炼/Qwen）
 和 DeepSeek 都走 Chat Completions；Provider 只负责在 Spring AI response 与 EchoMind 的
@@ -286,7 +293,10 @@ Provider 层通过 Spring AI ChatModel adapter 使用厂商真流式能力。Ope
 
 Agent 聚合阶段不再重复解析模型：`ModelResolutionStage` 负责写入 `modelId` 和 typed
 `PipelineContext.resolvedModel`；`ResultAggregationStage` 只复用该模型，直接读取 `ToolRouter`
-中的全部可用工具，委托 `PromptComposer` 和 `ProviderRequestFactory` 构造模型输入后调用 Provider。
+中的全部可用工具，追加统一工具使用提示，再委托 `PromptComposer` 和 `ProviderRequestFactory`
+构造模型输入后调用 Provider。联网搜索只通过提示词增强取证要求：存在 `open_web_search` 或等价工具时，
+除极少数明显不需要外部信息的请求外，事实、知识和时效类问题回答前必须至少调用一次搜索工具取证；普通聊天不再用独立
+`GroundingPolicy` 或 `ProviderRequest.requiredToolName` 强制 tool choice。
 
 删除单条会话：
 
@@ -349,6 +359,11 @@ Skill JAR
 - `ToolRouter` 只是工具注册表；普通聊天不再按 Agent skillIds、关键词、URL/domain 或站点名称预筛选工具。
 - `ResultAggregationStage` 每轮把全部已启用 Skill 和已挂载外部 MCP 工具交给模型；内部 Planner/Reviewer
   等控制面调用可通过 `toolExposureDisabled` 显式关闭工具暴露。
+- 普通聊天的联网搜索覆盖由统一工具提示增强处理：存在 `open_web_search` 或等价联网搜索工具时，除
+  简短寒暄、翻译/润色/总结用户已给内容、纯格式转换、纯数学推理、纯代码局部解释或用户明确不要联网外，
+  外部事实、知识解释、实体信息、当前/近期状态、公开网页、新闻、价格、版本、政策法规、院校招生、就业、
+  排名、公司、人物、产品、论文、开源库或依赖信息在回答前必须至少调用一次搜索工具取证；没有搜索工具时
+  只追加证据不足不得确定性回答的安全提示。
 - 专站能力应通过工具 `description` 和 `parameterSchema` 描述清楚，由模型 tool calling
   与参数校验控制是否执行。
 - 外部 MCP 协议本身不一定提供 EchoMind 需要的展示 metadata；主项目可在
@@ -366,25 +381,26 @@ Team 已演进为 MySQL 黑板驱动的异步协作：
 - `GET /api/teams`：只列出当前用户拥有的 Team。
 - `POST /api/teams`：为当前用户创建 Team，Reviewer 必填；成员包含角色、Agent 和能力标签。
 - `DELETE /api/teams/{teamId}`：只允许当前用户硬删除自己拥有的 Team、Member、Run、Step、Event 黑板记录。
-- `POST /api/teams/{teamId}/runs`：只允许在当前用户拥有的 Team 上创建异步 Run，写 MySQL 后由 `TaskExecutor` 后台执行。
+- `POST /api/teams/{teamId}/runs`：只允许在当前用户拥有的 Team 上创建异步 Run，写 MySQL 后由 `TeamExecutionEngine` 后台调度执行。
 - `GET /api/teams/{teamId}/runs`：查询当前用户在自己 Team 下的 Run。
 - `GET /api/teams/{teamId}/runs/{runId}`：轮询 Run、Step、Event、Reviewer 决策、Mermaid 和最终报告。
 - `POST /api/teams/{teamId}/runs/{runId}/resume`：Reviewer 要求澄清后提交用户补充信息并继续 Run。
 - `GET /api/team-runs`：查询当前用户所有 Team Run 历史，与普通聊天会话历史分离。
 
-Team v2 的默认执行链路是 `Planner -> Reviewer 规划审查 -> TeamControlCenter DAG 调度 -> AgentSelector -> Executor -> SubReviewer(高风险) -> MergeAgent -> ConflictDetector -> PlannerArbitration(必要时) -> GlobalReviewer`。
-Planner 只输出 `taskLevel`、`requiredCapabilities`、`dependsOn`、`riskLevel` 等结构化约束，不在计划里硬指定 Agent；执行前 `AgentSelector` 会把候选 Executor、能力标签和能力匹配分交给模型自主选择，模型选择失败或返回无效候选时才按能力匹配分与 `sortOrder` 稳定兜底。`RiskPolicy` 统一裁决是否进入 SubReviewer，避免按任务名、Skill 名或 Agent 名硬编码。
-每次 Run 可携带 `reviewOptions` 选择是否启用 PlanReview、SubReview、GlobalReview 和 SIMPLE 直返；默认保持质量优先，全审查开启且 SIMPLE 不直返。开启 SIMPLE 直返后，`taskLevel=SIMPLE` 且只有一个可执行 Step 时使用规则能力匹配选择单 Executor，执行后直接写最终结果；其他任务继续进入 DAG 并发调度。
+Team v2 的默认执行链路是 `Planner -> Reviewer 规划审查 -> TeamControlCenter DAG 调度 -> AgentSelector -> Executor -> StepReviewer(每步审查) -> MergeAgent -> ConflictDetector -> PlannerArbitration(必要时) -> GlobalReviewer`。
+Planner 只输出 `taskLevel`、`requiredCapabilities`、`dependsOn`、`riskLevel` 等结构化约束，不在计划里硬指定 Agent；执行前 `AgentSelector` 会把候选 Executor、能力标签和能力匹配分交给模型自主选择，模型选择失败或返回无效候选时才按能力匹配分与 `sortOrder` 稳定兜底。`RiskPolicy` 只给 StepReviewer 提供重点校验提示，不再决定是否进入审查。
+每次 Run 可携带 `reviewOptions` 选择是否启用 PlanReview、每步 Review、GlobalReview 和 SIMPLE 直返；字段名仍为 `subReviewEnabled` 以兼容前端和历史数据。默认保持质量优先，全审查开启且 SIMPLE 不直返。开启 SIMPLE 直返后，`taskLevel=SIMPLE` 且只有一个可执行 Step 时使用规则能力匹配选择单 Executor，执行后直接写最终结果；其他任务继续进入 DAG 并发调度。
 
-Reviewer 是状态机质量闸门：规划后审查 Planner 的 Step，执行后对照初始需求审查 Executor 原始结果。
-Reviewer 可返回 `CONTINUE`、`RETRY`、`PARTIAL_REPLAN`、`REPLAN`、`ASK_CLARIFICATION` 或 `FAILED`；
-`RETRY` 只重跑指定 Step，`PARTIAL_REPLAN` 会把局部 DAG 分支及其下游标记为 `SUPERSEDED` 并重规划替代子图，`REPLAN` 用于结果阶段发现 Step 结构缺失或拆解方向错误时重新规划，默认最多 2 次。
-每次重试必须把错误原因、修改意见和上一轮输出摘要写入 Step 的 `reflectionJson`，再放进下一轮 Executor prompt。
-MergeAgent 输出后先走 ConflictDetector；如 `conflictReportJson.hasConflict=true`，Planner 产出 `arbitrationJson`，MergeAgent 带仲裁结果二次聚合。仲裁仍无法消除冲突时交给 GlobalReviewer 判定重试、局部重规划、整体重规划或失败；如果该 Run 关闭 GlobalReview，则直接使用 MergeAgent 输出完成。
-Team 运行保护由 `echomind.team.runtime` 配置：默认 Planner 复审重试 2 次、结果重规划 2 次、Step 重试 2 次、Reviewer JSON 修复 3 次、仲裁 2 次、并发 Step 7 个、单 Step 180 秒、单 Run 1200 秒；属性类会对外部配置做上限钳制，避免误配成无限或过高重试。
+Reviewer 分成三段质量闸门：PlanReview 只审 Planner 计划，允许 `CONTINUE`、`RETRY`、`ASK_CLARIFICATION`、`FAILED`；StepReviewer 只审当前 Step 输出，允许 `PASS`、`REWORK`、`ACCEPT_WITH_RISK`、`FAILED`；GlobalReviewer 只审最终 MergeAgent 草稿，允许 `SUCCESS`、`REMERGE`、`FAILED`。
+`REWORK` 只重跑当前 Step，并把错误原因、修改意见和上一轮输出摘要写入该 Step 的 `reflectionJson` 后带回 Executor prompt。
+`REMERGE` 只带终审意见重新调用 MergeAgent，不重试 Step、不重规划 DAG、不向用户澄清；超过 `max-merge-attempts` 后 Run 失败。
+MergeAgent 输出后仍先走 ConflictDetector；如 `conflictReportJson.hasConflict=true`，Planner 产出 `arbitrationJson`，MergeAgent 带仲裁结果二次聚合。如果该 Run 关闭 GlobalReview，则直接使用 MergeAgent 输出完成。
+Team 运行保护由 `echomind.team.runtime` 配置：默认 Planner 复审重试 2 次、Step 重做 2 次、Reviewer JSON 修复 3 次、仲裁 2 次、终审重新合并 2 次、并发 Step 7 个、单 Step 180 秒、单 Run 1200 秒；属性类会对外部配置做上限钳制，避免误配成无限或过高重试。
+
+Team 后续 RabbitMQ / Redis 演进目标是：MySQL 继续保存 Run / Step / Event / Edge / Outbox 事实；Redis 保存可重建 DAG 热投影，包括 remaining dependency counter、downstream set、ready queue、running lease 和并发计数；RabbitMQ 只做可靠 Team command 队列，传递 `PLAN_RUN`、`DISPATCH_READY`、`EXECUTE_STEP`、`REVIEW_STEP`、`STEP_COMPLETED`、`STEP_FAILED`、`MERGE_RESULTS`、`GLOBAL_REVIEW`。任何“状态变更后必须发命令”的动作必须先在同一 MySQL 事务写 Outbox，再由 publisher 投递 RabbitMQ；消费者必须用 `controlEpoch`、`planIteration`、`attemptId` 和 MySQL CAS 做幂等，Redis 丢失时由 Reconciler 从 MySQL 重建投影。当前 `TeamExecutionEngine` 是这条路线上先抽出的 Run 级派发边界，后续可把本地 `TaskExecutor` 适配替换为 Team command publisher。
 
 不要让 Agent 之间直接互调。Team 协作上下文通过 Run / Step / Event 黑板传递，统一由 Team 运行时服务编排。
-Team 内部的 Planner / Executor / Reviewer / MergeAgent / ConflictDetector LLM 调用走 `AgentOrchestrator.executeInternal`，不读取或写入普通聊天会话历史；前端只通过 Team Run 看板展示黑板数据、管控中心事件和最终报告，轮询间隔为 0.25 秒，用户可下载最终 Markdown。Team 内部 LLM 用量通过 `TeamUsageRecorder` 端口由 console 层写入 `echomind_ai_call_usage`，归属 Team Run 创建者，并复用用户日/月 Token 配额；固定 operation 为 `echomind.team.planner/reviewer/executor/sub_reviewer/merge/conflict_detector/arbitration/repair`。Team 内部调用会在每次内部模型请求前按本轮 prompt 显式预留用户 quota 和 Provider budget，真实 provider usage 返回后再结算 `echomind_token_quota_usage` 与 `echomind_provider_token_budget_usage` 账本。
+Team 内部的 Planner / Executor / Reviewer / MergeAgent / ConflictDetector LLM 调用走 `AgentOrchestrator.executeInternal`，不读取或写入普通聊天会话历史；前端只通过 Team Run 看板展示黑板数据、DAG 事件和最终报告。看板进入 Run 后立即刷新一次，随后 1 秒轮询；数据未变化时按 0.5 秒退避，最多 3 秒。Team 内部 LLM 用量通过 `TeamUsageRecorder` 端口由 console 层写入 `echomind_ai_call_usage`，归属 Team Run 创建者，并复用用户日/月 Token 配额；固定 operation 为 `echomind.team.planner/reviewer/executor/sub_reviewer/merge/conflict_detector/arbitration/repair`。Team 内部调用会在每次内部模型请求前按本轮 prompt 显式预留用户 quota 和 Provider budget，并复用 Agent Pipeline 的 final `ProviderRequest` preflight 补足工具 schema、附件元信息和输出上限带来的 delta；治理拒绝直接让 Team Run 进入配额或预算失败，不进入修复重试分支。真实 provider usage 返回后再结算 `echomind_token_quota_usage` 与 `echomind_provider_token_budget_usage` 账本。
 Executor 正常执行时暴露 Agent 工具；如果单次模型请求触发工具调用上限，Team 运行时会用同一个 Executor 立刻发起一轮禁用工具的降级总结，Step 以 `FLAWED_ACCEPTED` 继续进入 Merge / Reviewer，而不是直接让整个 DAG 失败。
 
 ## 新增 API 检查表

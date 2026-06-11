@@ -33,13 +33,18 @@ public class ProviderRequestFactory {
      * @return Provider 层可直接执行的请求
      */
     public ProviderRequest create(PipelineContext ctx, ModelSpec model, String systemPrompt, List<Tool> tools) {
+        return create(ctx, model, systemPrompt, tools, null);
+    }
+
+    public ProviderRequest create(PipelineContext ctx, ModelSpec model, String systemPrompt, List<Tool> tools,
+                                  String requiredToolName) {
         return new ProviderRequest(
             model,
             systemPrompt,
             promptComposer.compose(ctx),
             ctx.attachmentsForModel(),
             llmTools(tools, ctx),
-            null,
+            requiredToolName,
             toolInputMessage(ctx)
         );
     }

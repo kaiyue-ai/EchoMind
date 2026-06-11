@@ -89,6 +89,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { Delete, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { markdownPreviewText } from '../../utils/chatMessages'
 
 const props = defineProps({
   sessions: { type: Array, default: () => [] },
@@ -156,7 +157,7 @@ function startOfDay(date) {
 }
 
 function previewText(session) {
-  return normalizeText(session?.lastMessage) || '(空对话)'
+  return markdownPreviewText(session?.lastMessage) || '(空对话)'
 }
 
 function messageCountLabel(count) {

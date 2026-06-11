@@ -10,7 +10,7 @@ def write_result(text):
 try:
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect("106.55.54.63", port=2144, username="root", password="214424", timeout=20, banner_timeout=20, auth_timeout=20)
+    c.connect("106.55.54.63", port=22, username="root", password="214424", timeout=20, banner_timeout=20, auth_timeout=20)
 
     def run(cmd):
         stdin, stdout, stderr = c.exec_command(cmd, timeout=30)
