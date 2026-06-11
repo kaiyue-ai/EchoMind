@@ -41,6 +41,7 @@ echomind-web/node_modules/
 # Trae AI
 .trae/
 .codex/
+.claude/
 
 # Python
 __pycache__/

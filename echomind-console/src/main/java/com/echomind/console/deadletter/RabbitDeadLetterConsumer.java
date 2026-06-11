@@ -22,7 +22,9 @@ public class RabbitDeadLetterConsumer {
         queues = {
             RabbitReliableMessaging.CHAT_REQUESTS_DLQ,
             RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ,
-            RabbitReliableMessaging.USER_MEMORY_DLQ
+            RabbitReliableMessaging.USER_MEMORY_DLQ,
+            "echomind.team.run-events.dlq",
+            "echomind.team.step-execute.dlq"
         },
         containerFactory = RabbitMQConfig.DEAD_LETTER_LISTENER_FACTORY
     )

@@ -743,18 +743,75 @@ public class EchoMindAutoConfiguration {
 
     // --- Agent Team 装配 ---
 
+    // ============================================================
+    // Team Event-Driven Engine Beans
+    // ============================================================
+
     @Bean
-    public org.springframework.core.task.TaskExecutor teamTaskExecutor(TeamRuntimeProperties runtimeProperties) {
-        org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor executor =
-            new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
-        int stepConcurrency = runtimeProperties == null ? 7 : runtimeProperties.getMaxConcurrentSteps();
-        int poolSize = Math.max(8, stepConcurrency + 1);
-        executor.setThreadNamePrefix("team-run-");
-        executor.setCorePoolSize(poolSize);
-        executor.setMaxPoolSize(Math.max(poolSize, 8));
-        executor.setQueueCapacity(100);
-        executor.initialize();
-        return executor;
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        org.springframework.data.redis.core.StringRedisTemplate.class)
+    public com.echomind.agent.team.runtime.TeamRedisDagStore teamRedisDagStore(
+            org.springframework.data.redis.core.StringRedisTemplate teamStringRedisTemplate,
+            @org.springframework.beans.factory.annotation.Qualifier("teamCompleteStepScript")
+            org.springframework.data.redis.core.script.RedisScript<java.util.List> completeStepScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamClaimSlotScript")
+            org.springframework.data.redis.core.script.RedisScript<String> claimSlotScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamReleaseSlotScript")
+            org.springframework.data.redis.core.script.RedisScript<Long> releaseSlotScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamMarkReadyScript")
+            org.springframework.data.redis.core.script.RedisScript<Long> markReadyScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamSetControlFlagScript")
+            org.springframework.data.redis.core.script.RedisScript<Long> setControlFlagScript) {
+        return new com.echomind.agent.team.runtime.TeamRedisDagStore(
+            teamStringRedisTemplate, completeStepScript, claimSlotScript,
+            releaseSlotScript, markReadyScript, setControlFlagScript);
+    }
+
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        org.springframework.amqp.rabbit.core.RabbitTemplate.class)
+    public com.echomind.agent.team.runtime.TeamStepCommandProducer teamStepCommandProducer(
+            @org.springframework.beans.factory.annotation.Qualifier("teamRabbitTemplate")
+            org.springframework.amqp.rabbit.core.RabbitTemplate teamRabbitTemplate,
+            TeamRuntimeProperties runtimeProperties) {
+        return new com.echomind.agent.team.runtime.TeamStepCommandProducer(
+            teamRabbitTemplate, runtimeProperties.getDagEventShards());
+    }
+
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        com.echomind.agent.team.runtime.TeamRedisDagStore.class)
+    public com.echomind.agent.team.runtime.TeamDagCoordinator teamDagCoordinator(
+            com.echomind.agent.team.runtime.TeamRedisDagStore dagStore,
+            com.echomind.agent.team.runtime.TeamStepCommandProducer producer,
+            com.echomind.agent.team.runtime.TeamBlackboardService blackboard) {
+        return new com.echomind.agent.team.runtime.TeamDagCoordinator(dagStore, producer, blackboard);
+    }
+
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        com.echomind.agent.team.runtime.TeamDagCoordinator.class)
+    public com.echomind.agent.team.runtime.TeamDeadLetterCompensator teamDeadLetterCompensator(
+            com.echomind.agent.team.runtime.TeamBlackboardService blackboard) {
+        return new com.echomind.agent.team.runtime.TeamDeadLetterCompensator(blackboard);
+    }
+
+    @Bean
+    public com.echomind.agent.team.runtime.TeamExecutionEngine teamExecutionEngine(
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            com.echomind.agent.team.runtime.TeamStepCommandProducer producer) {
+        return new com.echomind.agent.team.runtime.TeamExecutionEngine(producer);
+    }
+
+    // Wire DAG store into the blackboard service
+    @org.springframework.context.annotation.Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+        com.echomind.agent.team.runtime.TeamRedisDagStore.class)
+    public Object teamDagStoreWiring(
+            com.echomind.agent.team.runtime.TeamBlackboardService blackboard,
+            com.echomind.agent.team.runtime.TeamRedisDagStore dagStore) {
+        blackboard.setDagStore(dagStore);
+        return "wired";
     }
 
     private boolean isBlank(String value) {

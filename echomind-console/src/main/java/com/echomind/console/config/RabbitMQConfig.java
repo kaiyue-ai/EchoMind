@@ -1,6 +1,7 @@
 package com.echomind.console.config;
 
 import com.echomind.common.messaging.ChatMemoryShardSupport;
+import com.echomind.common.messaging.RabbitQueueNames;
 import com.echomind.agent.messaging.RabbitReliableMessaging;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.aopalliance.aop.Advice;
@@ -127,6 +128,9 @@ public class RabbitMQConfig {
         addDeadLetterQueue(declarables, deadLetterExchange, RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ);
         // 添加用户记忆死信队列
         addDeadLetterQueue(declarables, deadLetterExchange, RabbitReliableMessaging.USER_MEMORY_DLQ);
+        // 添加 Team 死信队列
+        addDeadLetterQueue(declarables, deadLetterExchange, RabbitQueueNames.TEAM_RUN_EVENTS_DLQ);
+        addDeadLetterQueue(declarables, deadLetterExchange, RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ);
         return new Declarables(declarables);
     }
 
@@ -285,6 +289,7 @@ public class RabbitMQConfig {
      * @return 配置好的 RabbitMQ 模板
      */
     @Bean
+    @org.springframework.context.annotation.Primary
     public RabbitTemplate rabbitTemplate(
             ConnectionFactory connectionFactory,
             Jackson2JsonMessageConverter converter) {

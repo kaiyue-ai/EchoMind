@@ -35,8 +35,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.task.TaskExecutor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,11 +48,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Agent Team 的 MySQL 黑板和异步状态机服务。
@@ -96,8 +91,6 @@ public class TeamBlackboardService {
     // agent 编排器
     private final AgentOrchestrator orchestrator;
     // 任务执行器
-    private final TaskExecutor taskExecutor;
-    // Run 级执行入口，当前适配 TaskExecutor，后续可替换为 RabbitMQ command bus。
     private final TeamExecutionEngine executionEngine;
     // 运行时属性
     private final TeamRuntimeProperties runtimeProperties;
@@ -113,7 +106,6 @@ public class TeamBlackboardService {
 
     // 删除 Team/Run 后，后台异步任务可能仍在收尾；用它阻止继续写事件。
     private final Set<String> deletedRunIds = ConcurrentHashMap.newKeySet();
-    private final Set<String> stoppingRunIds = ConcurrentHashMap.newKeySet();
 
     public TeamBlackboardService(TeamMapper teamMapper,
                                  TeamMemberMapper memberMapper,
@@ -121,10 +113,9 @@ public class TeamBlackboardService {
                                  TeamStepMapper stepMapper,
                                  TeamEventMapper eventMapper,
                                  AgentFactory agentFactory,
-                                 AgentOrchestrator orchestrator,
-                                 @Qualifier("teamTaskExecutor") TaskExecutor taskExecutor) {
+                                 AgentOrchestrator orchestrator) {
         this(teamMapper, memberMapper, runMapper, stepMapper, eventMapper,
-            agentFactory, orchestrator, taskExecutor, new TeamExecutionEngine(taskExecutor), new TeamRuntimeProperties());
+            agentFactory, orchestrator, null, new TeamRuntimeProperties());
     }
 
     @Autowired
@@ -135,7 +126,6 @@ public class TeamBlackboardService {
                                  TeamEventMapper eventMapper,
                                  AgentFactory agentFactory,
                                  AgentOrchestrator orchestrator,
-                                 @Qualifier("teamTaskExecutor") TaskExecutor taskExecutor,
                                  TeamExecutionEngine executionEngine,
                                  TeamRuntimeProperties runtimeProperties) {
         this.teamMapper = teamMapper;
@@ -145,8 +135,7 @@ public class TeamBlackboardService {
         this.eventMapper = eventMapper;
         this.agentFactory = agentFactory;
         this.orchestrator = orchestrator;
-        this.taskExecutor = taskExecutor;
-        this.executionEngine = executionEngine == null ? new TeamExecutionEngine(taskExecutor) : executionEngine;
+        this.executionEngine = executionEngine;
         this.runtimeProperties = runtimeProperties == null ? new TeamRuntimeProperties() : runtimeProperties;
     }
 
@@ -350,9 +339,15 @@ public class TeamBlackboardService {
                 run.setClarificationAnswer(null);
                 clearResultArtifacts(run);
                 boolean hasActiveSibling = false;
+                TeamRedisDagStore dagStore = getDagStore();
                 for (TeamStepEntity step : steps) {
                     if (isWaitingForStepClarification(step)) {
                         applyStepClarificationAnswer(run, step, stepClarificationAnswers);
+                        // Sync to Redis so coordinator can re-dispatch
+                        if (dagStore != null) {
+                            dagStore.setStepRetrying(runId, step.getStepId(), step.getRetryCount());
+                            dagStore.markStepReady(runId, step.getStepId());
+                        }
                     } else if (step.getStatus() == TeamStepStatus.RUNNING
                         || step.getStatus() == TeamStepStatus.ASSIGNED) {
                         hasActiveSibling = true;
@@ -370,6 +365,12 @@ public class TeamBlackboardService {
         run.setClarificationQuestion(null);
         run.setClarificationStage(null);
         runMapper.upsertById(run);
+
+        TeamRedisDagStore store = getDagStore();
+        if (store != null) {
+            store.clearControlFlag(runId, "stopping");
+        }
+
         recordEvent(runId, null, TeamEventType.RUN_RESUMED, null, null, "User clarification received", null);
         if (run.getStatus() == TeamRunStatus.PENDING) {
             scheduleRun(runId);
@@ -425,89 +426,6 @@ public class TeamBlackboardService {
         run.setArbitrationJson(null);
         run.setFinalOutput(null);
         run.setMermaidDiagram(null);
-    }
-
-    /**
-     * Team Run 的主执行入口
-     *
-     * 执行流程：
-     * 1. 尝试原子性获取执行锁（防止并发重复执行）
-     * 2. 检查是否超时
-     * 3. 如果没有步骤，先规划
-     * 4. 执行 DAG 步骤（SIMPLE/COMPLEX 统一走 DAG）
-     * 5. 合并结果并终审
-     *
-     * @param runId 任务ID
-     */
-    @Transactional
-    protected void executeRun(String runId) {
-        // ============================================
-        // 阶段1：尝试获取执行锁（原子性状态转换防止重复执行）
-        // ============================================
-        // 原子性地将状态从 PENDING -> EXECUTING
-        // 如果失败，说明任务已被其他线程获取，跳过执行
-        if (!runMapper.tryAcquireExecuteLock(runId)) {
-            TeamRunEntity existingRun = runMapper.selectOptionalById(runId).orElse(null);
-            if (existingRun == null) {
-                log.warn("Run {} not found, skipping execution", runId);
-                return;
-            }
-            
-            // 根据当前状态判断是否需要跳过
-            switch (existingRun.getStatus()) {
-                case EXECUTING:
-                    log.info("Run {} is already executing, skipping", runId);
-                    break;
-                case COMPLETED:
-                    log.info("Run {} is already completed, skipping", runId);
-                    break;
-                case FAILED:
-                    log.info("Run {} is already failed, skipping", runId);
-                    break;
-                case NEEDS_CLARIFICATION:
-                    log.info("Run {} needs clarification, skipping", runId);
-                    break;
-                default:
-                    log.warn("Run {} is in unexpected status: {}, skipping", runId, existingRun.getStatus());
-            }
-            return;
-        }
-        
-        // 重新加载任务（因为 tryAcquireExecuteLock 已经更新了状态）
-        TeamRunEntity run = runMapper.selectOptionalById(runId)
-            .orElseThrow(() -> new IllegalArgumentException("Run not found: " + runId));
-        
-        // 加载团队快照
-        TeamSnapshot team = getTeam(run.getTeamId());
-
-        // Run 主入口：没有 Step 先规划；然后执行 DAG 步骤并合并终审。
-        
-        // 3. 检查是否超时
-        if (failIfRunTimedOut(run)) {
-            return;
-        }
-        
-        // 4. 获取现有步骤
-        List<TeamStepEntity> existingSteps = stepMapper.selectByRunIdOrderByStepIndexAsc(runId);
-        if (existingSteps.isEmpty()) {
-            // 没有步骤，需要先规划
-            planAndReview(run, team);
-            // 规划后检查状态：可能需要澄清或失败
-            if (isTerminal(run.getStatus())) {
-                return;
-            }
-        }
-
-        // 5. 执行 DAG 步骤
-        executeDagSteps(run, team);
-        run = runMapper.selectOptionalById(runId).orElse(run);
-        if (run.getStatus() == TeamRunStatus.FAILED || run.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION
-            || isRunDeleted(runId)) {
-            return;
-        }
-
-        // 6. 合并结果并终审
-        mergeAndReviewResults(run, team);
     }
 
     private void planAndReview(TeamRunEntity run, TeamSnapshot team) {
@@ -724,233 +642,6 @@ public class TeamBlackboardService {
         }
         completeRunWithFinalOutput(run, team, nullToBlank(output), TeamRole.EXECUTOR, executor.agentId(),
             "SIMPLE 快路径完成，直接返回 Executor 输出");
-    }
-
-    /**
-     * DAG 步骤执行循环
-     * 
-     * DAG 调度核心逻辑：
-     * - 只认 Step 状态和 dependsOnStepIds
-     * - READY 才执行
-     * - BLOCKED 等依赖完成后放行
-     * 
-     * 执行流程：
-     * 1. 设置状态为 EXECUTING
-     * 2. 循环执行直到所有步骤完成或出现异常
-     * 3. 每次循环：标记就绪步骤 → 并发执行 → 等待完成
-     * 4. 支持超时检测、并发限制、失败检测
-     * 
-     * @param run 任务实体
-     * @param team 团队快照
-     */
-    private void executeDagSteps(TeamRunEntity run, TeamSnapshot team) {
-        // DAG 调度只认 Step 状态和 dependsOnStepIds：READY 才执行，BLOCKED 等依赖完成后放行。
-        
-        // 1. 设置任务状态为执行中
-        run.setStatus(TeamRunStatus.EXECUTING);
-        runMapper.upsertById(run);
-        
-        // 2. 记录 DAG 调度开始事件
-        recordEvent(run.getRunId(), null, TeamEventType.TEAM_CONTROL_STARTED, null, null,
-            "TeamControlCenter 启动 DAG 调度、并发限制、超时熔断和迭代拦截", Map.of(
-                "maxConcurrentSteps", runtimeProperties.getMaxConcurrentSteps(),
-                "maxStepRetries", runtimeProperties.getMaxStepRetries(),
-                "stepTimeoutSeconds", runtimeProperties.getStepTimeoutSeconds(),
-                "runTimeoutSeconds", runtimeProperties.getRunTimeoutSeconds()
-            ));
-
-        // 3. DAG 执行主循环
-        while (true) {
-            // 要检查删除没有删除,以防止用户删除team之后,却还是在DAG循环当中
-            if (isRunDeleted(run.getRunId())) {
-                return;
-            }
-
-            // 3.1 检查任务是否超时
-            if (failIfRunTimedOut(run)) {
-                return;
-            }
-            
-            // 3.2 标记可以执行的步骤（READY 状态且依赖已满足）
-            markReadySteps(run); 
-            
-            // 3.3 查询就绪的步骤（最多并发执行的数量）
-            List<TeamStepEntity> readySteps = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
-                .filter(step -> step.getStatus() == TeamStepStatus.READY)
-                .limit(runtimeProperties.getMaxConcurrentSteps())
-                .toList();
-
-            // 3.4 存在失败步骤时立即终止，避免无谓执行
-            if (stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
-                .anyMatch(step -> step.getStatus() == TeamStepStatus.FAILED)) {
-                failRun(run.getRunId(), "存在失败 Step，DAG 停止执行");
-                return;
-            }
-
-            // 3.5 没有可执行的步骤 -> 判断原因
-            if (readySteps.isEmpty()) {
-                List<TeamStepEntity> all = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId());
-
-                // 情况1：有步骤正在执行，等待后重试
-                if (all.stream().anyMatch(step -> step.getStatus() == TeamStepStatus.RUNNING)) {
-                    log.debug("[DAG] Steps still executing for run {}, waiting {}ms", run.getRunId(),
-                        runtimeProperties.getStepPollIntervalMs());
-                    try {
-                        Thread.sleep(runtimeProperties.getStepPollIntervalMs());
-                    } catch (InterruptedException ignored) {
-                        Thread.currentThread().interrupt();
-                    }
-                    continue;
-                }
-                
-                // 情况3：所有步骤都完成，正常退出
-                boolean allDone = all.stream().allMatch(step ->
-                    step.getStatus() == TeamStepStatus.COMPLETED || step.getStatus() == TeamStepStatus.SUPERSEDED);
-                if (allDone) {
-                    return;
-                }
-                
-                // 情况4：依赖无法继续，标记失败
-                failRun(run.getRunId(), "DAG 依赖无法继续推进，请检查 Planner 输出的 dependsOn");
-                return;
-            }
-
-            // 3.6 并发执行就绪的步骤
-            List<CompletableFuture<Void>> futures = new ArrayList<>();
-            for (TeamStepEntity step : readySteps) {
-                // 使用线程池异步执行步骤
-                CompletableFuture<Void> future = CompletableFuture
-                    .runAsync(() -> executeStepSafely(run.getRunId(), step.getStepId()), taskExecutor);
-                
-                // 设置步骤超时
-                if (runtimeProperties.getStepTimeoutSeconds() > 0) {
-                    future = future.orTimeout(runtimeProperties.getStepTimeoutSeconds(), TimeUnit.SECONDS);
-                }
-                
-                // 添加异常处理
-                futures.add(future.exceptionally(error -> {
-                    handleStepFutureFailure(run.getRunId(), step.getStepId(), error);
-                    return null;
-                }));
-            }
-            
-            // 3.7 等待所有步骤完成
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-            
-            // 3.8 检查是否应该停止（pauseForClarification / failRun 设置的内存标记，
-            //     防止用户在原线程退出前 resumeRun 导致两个线程同时执行）
-            if (stoppingRunIds.remove(run.getRunId())) {
-                return;
-            }
-
-            // 3.9 子线程可能标记了 Step FAILED，优先于澄清处理
-            if (stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId()).stream()
-                .anyMatch(step -> step.getStatus() == TeamStepStatus.FAILED)) {
-                failRun(run.getRunId(), "存在失败 Step，DAG 停止执行");
-                return;
-            }
-
-            // 3.11 检查最新状态
-            TeamRunEntity latest = runMapper.selectOptionalById(run.getRunId()).orElse(run);
-            run.setStatus(latest.getStatus());
-            
-            // 3.10 检查是否需要暂停或失败
-            if (latest.getStatus() == TeamRunStatus.NEEDS_CLARIFICATION || latest.getStatus() == TeamRunStatus.FAILED) {
-                return;
-            }
-        }
-    }
-
-    /**
-     * 标记可执行的步骤（DAG 依赖解析）
-     * 
-     * 核心逻辑：
-     * 1. 收集所有已完成的步骤 ID
-     * 2. 遍历所有步骤，检查依赖是否满足
-     * 3. 依赖满足的步骤标记为 READY
-     * 4. 依赖未满足的 PENDING 步骤标记为 BLOCKED
-     * 
-     * 状态转换规则：
-     * - PENDING → READY（依赖满足）
-     * - PENDING → BLOCKED（依赖未满足）
-     * - BLOCKED → READY（依赖满足）
-     * - RETRYING → READY（依赖满足）
-     * 
-     * @param run 任务实体
-     */
-    private void markReadySteps(TeamRunEntity run) {
-        // 1. 获取所有步骤
-        List<TeamStepEntity> all = stepMapper.selectByRunIdOrderByStepIndexAsc(run.getRunId());
-        
-        // 2. 收集已完成的步骤 ID（COMPLETED 或 SUPERSEDED 都视为完成）
-        Set<String> completed = new HashSet<>();
-        for (TeamStepEntity step : all) {
-            if (step.getStatus() == TeamStepStatus.COMPLETED || step.getStatus() == TeamStepStatus.SUPERSEDED) {
-                completed.add(step.getStepId());
-            }
-        }
-        
-        // 3. 遍历步骤，检查依赖是否满足
-        for (TeamStepEntity step : all) {
-            // PENDING 首次发现依赖未完成会标记 BLOCKED；依赖满足后统一转 READY。
-            // 只处理需要检查依赖的步骤
-            if (step.getStatus() != TeamStepStatus.PENDING
-                && step.getStatus() != TeamStepStatus.BLOCKED
-                && step.getStatus() != TeamStepStatus.RETRYING) {
-                continue;
-            }
-            
-            // 获取当前步骤的依赖列表
-            List<String> dependencies = json.stringList(step.getDependsOnStepIdsJson());
-            
-            // 4. 检查依赖是否都已完成
-            if (completed.containsAll(dependencies)) {
-                // 依赖满足，标记为 READY
-                step.setStatus(TeamStepStatus.READY);
-                stepMapper.upsertById(step);
-                recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_READY, null, null,
-                    "Step 依赖已完成，进入可执行队列", Map.of("dependsOnStepIds", dependencies));
-            } else if (step.getStatus() == TeamStepStatus.PENDING) {
-                // 依赖未满足，标记为 BLOCKED（仅 PENDING 状态需要标记，BLOCKED 保持不变）
-                step.setStatus(TeamStepStatus.BLOCKED);
-                stepMapper.upsertById(step);
-                recordEvent(run.getRunId(), step.getStepId(), TeamEventType.STEP_BLOCKED, null, null,
-                    "Step 等待前置依赖完成", Map.of("dependsOnStepIds", dependencies));
-            }
-        }
-    }
-
-    private void executeStepSafely(String runId, String stepId) {
-        try {
-            executeStep(runId, stepId);
-        } catch (Exception e) {
-            if (isRunDeleted(runId)) {
-                return;
-            }
-            log.error("Team step failed: {}", stepId, e);
-            markStepFailed(runId, stepId, e.getMessage());
-        }
-    }
-
-    private void handleStepFutureFailure(String runId, String stepId, Throwable error) {
-        if (isRunDeleted(runId)) {
-            return;
-        }
-        Throwable root = unwrapCompletion(error);
-        if (root instanceof TimeoutException) {
-            markStepTimedOut(runId, stepId);
-            return;
-        }
-        markStepFailed(runId, stepId, root.getMessage());
-    }
-
-    private Throwable unwrapCompletion(Throwable error) {
-        Throwable current = error;
-        while ((current instanceof CompletionException || current instanceof java.util.concurrent.ExecutionException)
-            && current.getCause() != null) {
-            current = current.getCause();
-        }
-        return current == null ? new IllegalStateException("unknown async failure") : current;
     }
 
     /**
@@ -1719,7 +1410,10 @@ public class TeamBlackboardService {
      * @param stage 澄清阶段（计划审核/结果审核）
      */
     private void pauseForClarification(TeamRunEntity run, ReviewerDecision decision, TeamClarificationStage stage) {
-        stoppingRunIds.add(run.getRunId());
+        TeamRedisDagStore store = getDagStore();
+        if (store != null) {
+            store.setControlFlag(run.getRunId(), "stopping", stage.name());
+        }
 
         String question = decision.questions().isEmpty() ? decision.reason() : String.join("\n", decision.questions());
         run.setClarificationQuestion(question);
@@ -1832,24 +1526,8 @@ public class TeamBlackboardService {
             "Step 超时熔断: " + message, Map.of("stepTimeoutSeconds", runtimeProperties.getStepTimeoutSeconds()));
     }
 
-    // 检查一下是否超时
-    private boolean failIfRunTimedOut(TeamRunEntity run) {
-        if (runtimeProperties.getRunTimeoutSeconds() <= 0 || run.getCreatedAt() == null) {
-            return false;
-        }
-        Instant deadline = run.getCreatedAt().plusSeconds(runtimeProperties.getRunTimeoutSeconds());
-        if (Instant.now().isBefore(deadline)) {
-            return false;
-        }
-        recordEvent(run.getRunId(), null, TeamEventType.RUN_TIMEOUT, null, null,
-            "Run 超时熔断", Map.of("runTimeoutSeconds", runtimeProperties.getRunTimeoutSeconds()));
-        failRun(run.getRunId(), "Run execution timed out after " + runtimeProperties.getRunTimeoutSeconds() + " seconds");
-        return true;
-    }
-
     @Transactional
     protected void failRun(String runId, String message) {
-        stoppingRunIds.add(runId);
         TeamRunEntity run = runMapper.selectOptionalById(runId).orElse(null);
         if (run != null) {
             run.setStatus(TeamRunStatus.FAILED);
@@ -2362,8 +2040,20 @@ public class TeamBlackboardService {
     }
 
     private void scheduleRun(String runId) {
-        executionEngine.scheduleRun(runId, this::executeRun,
-            (failedRunId, error) -> failRun(failedRunId, error.getMessage()));
+        if (executionEngine == null) {
+            return;
+        }
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        executionEngine.scheduleRun(runId, id -> {}, (id, error) -> failRun(id, error.getMessage()));
+                    }
+                });
+        } else {
+            executionEngine.scheduleRun(runId, id -> {}, (id, error) -> failRun(id, error.getMessage()));
+        }
     }
 
     private String plannerSession(TeamRunEntity run) {
@@ -2393,4 +2083,119 @@ public class TeamBlackboardService {
     private String normalizeUserId(String userId) {
         return userId == null || userId.isBlank() ? "default" : userId;
     }
+
+    // ============================================================
+    // Event-Driven Engine Integration Methods
+    // ============================================================
+
+    /**
+     * Entry point for the DAG coordinator: plan, review, and initialize Redis DAG.
+     * Called by {@link TeamDagCoordinator#onRunStarted}.
+     */
+    @Transactional
+    public void planAndReviewForCoordinator(String runId) {
+        TeamRunEntity run = runMapper.selectOptionalById(runId)
+            .orElseThrow(() -> new IllegalArgumentException("Run not found: " + runId));
+        if (run.getStatus() == TeamRunStatus.COMPLETED || run.getStatus() == TeamRunStatus.FAILED) {
+            log.info("Run {} already terminal, skip planAndReviewForCoordinator", runId);
+            return;
+        }
+
+        // Try to acquire execute lock (handles both new PENDING and resumed PENDING)
+        boolean acquired = runMapper.tryAcquireExecuteLock(runId);
+        if (!acquired && run.getStatus() == TeamRunStatus.EXECUTING) {
+            log.info("Run {} already executing by another thread, skip", runId);
+            return;
+        }
+
+        TeamSnapshot team = getTeam(run.getTeamId());
+
+        // If no steps exist, do plan + review; otherwise skip to dispatch (resume case)
+        List<TeamStepEntity> steps = stepMapper.selectByRunIdOrderByStepIndexAsc(runId);
+        if (steps.isEmpty()) {
+            planAndReview(run, team);
+            steps = stepMapper.selectByRunIdOrderByStepIndexAsc(runId);
+        }
+
+        var dagStore = getDagStore();
+        if (dagStore != null && !steps.isEmpty()) {
+            dagStore.initializeDag(runId, steps, runtimeProperties.getMaxConcurrentSteps());
+            // Also persist DAG status in Redis
+            dagStore.setDagStatus(runId, "EXECUTING");
+        }
+    }
+
+    /**
+     * Called by the DAG coordinator when all steps are complete and running count is zero.
+     */
+    @Transactional
+    public void onDagCompleteInCoordinator(String runId) {
+        TeamRunEntity run = runMapper.selectOptionalById(runId)
+            .orElse(null);
+        if (run == null || run.getStatus() == TeamRunStatus.COMPLETED
+            || run.getStatus() == TeamRunStatus.FAILED) {
+            return;
+        }
+        TeamSnapshot team = getTeam(run.getTeamId());
+        mergeAndReviewResults(run, team);
+
+        // Cleanup Redis DAG
+        var dagStore = getDagStore();
+        if (dagStore != null) {
+            dagStore.destroyDag(runId);
+        }
+    }
+
+    /**
+     * Fail a run from the coordinator thread.
+     */
+    @Transactional
+    public void failRunFromCoordinator(String runId, String message) {
+        failRun(runId, message);
+        var dagStore = getDagStore();
+        if (dagStore != null) {
+            dagStore.destroyDag(runId);
+        }
+    }
+
+    /**
+     * Mark a step as FAILED (used by DLQ compensator).
+     */
+    @Transactional
+    public void markStepFailedFromCompensator(String runId, String stepId, String message) {
+        if (isRunDeleted(runId)) return;
+        TeamStepEntity step = stepMapper.selectById(stepId);
+        if (step == null) return;
+        step.setStatus(TeamStepStatus.FAILED);
+        step.setRawOutput("[Error] " + message);
+        step.setCompletedAt(Instant.now());
+        stepMapper.upsertById(step);
+        recordEvent(runId, stepId, TeamEventType.STEP_FAILED, null, null, message, null);
+    }
+
+    /**
+     * Public entry point for step execution (called by {@link TeamStepExecutionConsumer}).
+     */
+    @Transactional
+    public void executeStepPublic(String runId, String stepId) {
+        executeStep(runId, stepId);
+    }
+
+    /**
+     * Expose max step retries for the coordinator.
+     */
+    public int getMaxStepRetries() {
+        return runtimeProperties.getMaxStepRetries();
+    }
+
+    private TeamRedisDagStore dagStoreInstance;
+
+    public void setDagStore(TeamRedisDagStore dagStore) {
+        this.dagStoreInstance = dagStore;
+    }
+
+    private TeamRedisDagStore getDagStore() {
+        return dagStoreInstance;
+    }
+
 }

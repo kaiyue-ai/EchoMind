@@ -25,7 +25,9 @@ public class TeamRuntimeProperties {
     private int maxConcurrentSteps = 7;
     private int stepTimeoutSeconds = 180;
     private int runTimeoutSeconds = 1200;
-    private int stepPollIntervalMs = 2000;
+    private int dagEventShards = 4;
+    private int stepExecuteConsumers = 10;
+    private int maxRetryRequeues = 5;
 
     public int getMaxPlanRetries() {
         return maxPlanRetries;
@@ -91,12 +93,28 @@ public class TeamRuntimeProperties {
         this.runTimeoutSeconds = clamp(runTimeoutSeconds, 0, MAX_RUN_TIMEOUT_SECONDS);
     }
 
-    public int getStepPollIntervalMs() {
-        return stepPollIntervalMs;
+    public int getDagEventShards() {
+        return dagEventShards;
     }
 
-    public void setStepPollIntervalMs(int stepPollIntervalMs) {
-        this.stepPollIntervalMs = clamp(stepPollIntervalMs, 100, 30000);
+    public void setDagEventShards(int dagEventShards) {
+        this.dagEventShards = clamp(dagEventShards, 1, 16);
+    }
+
+    public int getStepExecuteConsumers() {
+        return stepExecuteConsumers;
+    }
+
+    public void setStepExecuteConsumers(int stepExecuteConsumers) {
+        this.stepExecuteConsumers = clamp(stepExecuteConsumers, 1, 50);
+    }
+
+    public int getMaxRetryRequeues() {
+        return maxRetryRequeues;
+    }
+
+    public void setMaxRetryRequeues(int maxRetryRequeues) {
+        this.maxRetryRequeues = clamp(maxRetryRequeues, 1, 20);
     }
 
     private static int clamp(int value, int min, int max) {

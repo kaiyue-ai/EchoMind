@@ -121,7 +121,6 @@ echomind:
       max-concurrent-steps: ${ECHOMIND_TEAM_MAX_CONCURRENT_STEPS:7}
       step-timeout-seconds: ${ECHOMIND_TEAM_STEP_TIMEOUT_SECONDS:300}
       run-timeout-seconds: ${ECHOMIND_TEAM_RUN_TIMEOUT_SECONDS:1800}
-      step-poll-interval-ms: ${ECHOMIND_TEAM_STEP_POLL_INTERVAL_MS:2000}
   models:
     default-provider: aliyun-bailian
     providers:
@@ -196,7 +195,7 @@ echomind:
     knowledge-top-k: ${ECHOMIND_MEMORY_KNOWLEDGE_TOP_K:4}
     knowledge-chunk-size: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_SIZE:500}
     knowledge-chunk-overlap-ratio: ${ECHOMIND_MEMORY_KNOWLEDGE_CHUNK_OVERLAP_RATIO:0.15}
-    knowledge-min-vector-similarity: ${ECHOMIND_MEMORY_KNOWLEDGE_MIN_VECTOR_SIMILARITY:0.25}
+    knowledge-min-vector-similarity: ${ECHOMIND_MEMORY_KNOWLEDGE_MIN_VECTOR_SIMILARITY:0.40}
     knowledge-ocr-enabled: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_ENABLED:true}
     knowledge-ocr-language: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_LANGUAGE:chi_sim+eng}
     knowledge-ocr-dpi: ${ECHOMIND_MEMORY_KNOWLEDGE_OCR_DPI:200}

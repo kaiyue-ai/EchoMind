@@ -61,7 +61,7 @@ class UserMemoryRetrievalStageTest {
 
         assertThat(ctx.getMessages()).hasSize(1);
         assertThat(ctx.getMessages().get(0).role()).isEqualTo("system");
-        assertThat(ctx.getMessages().get(0).content()).contains("用户相关长期事实", "用户喜欢简洁代码");
+        assertThat(ctx.getMessages().get(0).content()).contains("历史会话事实", "用户喜欢简洁代码");
         assertThat(ctx.getAttributes()).containsKey("userMemoryHits");
     }
 
@@ -83,7 +83,7 @@ class UserMemoryRetrievalStageTest {
 
         assertThat(ctx.getMessages()).hasSize(2);
         assertThat(ctx.getMessages().get(0).content()).contains("用户画像快照", "Windows");
-        assertThat(ctx.getMessages().get(1).content()).contains("用户相关长期事实", "简洁代码");
+        assertThat(ctx.getMessages().get(1).content()).contains("历史会话事实", "简洁代码");
     }
 
     @Test

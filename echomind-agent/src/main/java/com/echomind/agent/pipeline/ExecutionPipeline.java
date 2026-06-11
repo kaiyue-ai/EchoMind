@@ -39,7 +39,7 @@ public class ExecutionPipeline {
         for (PipelineStage stage : stages) { // 遍历每个阶段
             if (stage.order() > maxOrderInclusive) break;
             // 进行自定义埋点
-            Span span = EchoMindTrace.startSpan("echomind.pipeline.stage");
+            Span span = EchoMindTrace.startSpan("echomind.pipeline.stage." + stage.name());
             span.setAttribute("echomind.pipeline.stage", stage.name());
             span.setAttribute("echomind.pipeline.order", stage.order());
             span.setAttribute("echomind.user_id", safe(current.getUserId()));

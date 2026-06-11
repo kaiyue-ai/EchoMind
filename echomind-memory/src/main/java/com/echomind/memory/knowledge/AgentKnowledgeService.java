@@ -29,6 +29,7 @@ import java.util.UUID;
 public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
 
     static final int WINDOW_RADIUS = 5;
+    static final int EMBEDDING_BATCH_SIZE = 10;
     static final String META_AGENT_ID = "agentId";
     static final String META_DOCUMENT_ID = "documentId";
     static final String META_CHUNK_ID = "chunkId";
@@ -154,7 +155,10 @@ public class AgentKnowledgeService implements AgentKnowledgeManagementPort {
             vectorDocuments.add(toVectorDocument(agentId, document.getId(), document.getFileName(), i, chunks.get(i)));
         }
         try {
-            vectorStore.add(vectorDocuments);
+            for (int i = 0; i < vectorDocuments.size(); i += EMBEDDING_BATCH_SIZE) {
+                int end = Math.min(i + EMBEDDING_BATCH_SIZE, vectorDocuments.size());
+                vectorStore.add(vectorDocuments.subList(i, end));
+            }
         } catch (Exception e) {
             documentMapper.deleteEntity(document);
             throw new IllegalStateException("文件切片写入 Spring AI Milvus 向量索引失败，请检查 Milvus 和向量模型配置", e);

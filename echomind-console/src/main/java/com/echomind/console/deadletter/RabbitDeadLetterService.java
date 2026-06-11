@@ -64,6 +64,12 @@ public class RabbitDeadLetterService {
     /** 用户记忆类型死信 */
     static final String TYPE_USER_MEMORY = "USER_MEMORY";
 
+    /** Team Run Event 类型死信 */
+    static final String TYPE_TEAM_RUN_EVENT = "TEAM_RUN_EVENT";
+
+    /** Team Step Execute 类型死信 */
+    static final String TYPE_TEAM_STEP_EXECUTE = "TEAM_STEP_EXECUTE";
+
     /** 未知类型死信 */
     static final String TYPE_UNKNOWN = "UNKNOWN";
 
@@ -275,8 +281,30 @@ public class RabbitDeadLetterService {
             case TYPE_CHAT_REQUEST -> replayChatRequest(entity);
             case TYPE_CHAT_MEMORY -> replayChatMemory(entity);
             case TYPE_USER_MEMORY -> replayUserMemory(entity);
+            case TYPE_TEAM_RUN_EVENT, TYPE_TEAM_STEP_EXECUTE -> replayTeamCommand(entity);
             default -> throw new IllegalArgumentException("unsupported dead letter type: " + entity.getMessageType());
         }
+    }
+
+    private void replayTeamCommand(RabbitDeadLetterEntity entity) {
+        // Team commands are replayed via the team-specific queues.
+        // Determine the target exchange and routing key based on the DLQ.
+        String dlqName = entity.getDlqName();
+        String routingKey;
+        if ("echomind.team.step-execute.dlq".equals(dlqName)) {
+            routingKey = "step.execute";
+        } else {
+            // Run events need to go back to their shard — but we don't have the runId
+            // from the archived payload. Log and reject.
+            throw new IllegalArgumentException(
+                "Team run event replay requires runId for shard routing. Use manual re-publish.");
+        }
+        rabbitTemplate.convertAndSend("echomind.team.exchange", routingKey,
+            entity.getPayloadJson(),
+            RabbitReliableMessaging.persistentMessage(),
+            RabbitReliableMessaging.correlation("team-replay", String.valueOf(entity.getId())));
+        log.info("Replayed team dead letter id={} to exchange=echomind.team.exchange routingKey={}",
+            entity.getId(), routingKey);
     }
 
     /**
@@ -435,6 +463,12 @@ public class RabbitDeadLetterService {
         }
         if (RabbitReliableMessaging.USER_MEMORY_DLQ.equals(dlqName)) {
             return TYPE_USER_MEMORY;
+        }
+        if ("echomind.team.run-events.dlq".equals(dlqName)) {
+            return TYPE_TEAM_RUN_EVENT;
+        }
+        if ("echomind.team.step-execute.dlq".equals(dlqName)) {
+            return TYPE_TEAM_STEP_EXECUTE;
         }
         return TYPE_UNKNOWN;
     }

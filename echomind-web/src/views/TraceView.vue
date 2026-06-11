@@ -217,6 +217,8 @@ const error = ref('')
 const loadingConfig = ref(false)
 const loadingRecent = ref(false)
 const loadingDetail = ref(false)
+let latestRequestedTraceId = null
+let suppressRouteWatch = false
 
 const backendEnabled = computed(() => Boolean(config.value?.backend?.enabled))
 const exporterLabel = computed(() => {
@@ -250,11 +252,15 @@ onMounted(async () => {
   }
 })
 
-watch(() => route.query.traceId, async (traceId) => {
+watch(() => route.query.traceId, (traceId) => {
+  if (suppressRouteWatch) {
+    suppressRouteWatch = false
+    return
+  }
   const nextTraceId = String(traceId || '')
   if (!nextTraceId || nextTraceId === selectedTrace.value?.traceId) return
   traceIdInput.value = nextTraceId
-  await loadTrace(nextTraceId)
+  loadTrace(nextTraceId)
 })
 
 async function refreshAll() {
@@ -288,7 +294,7 @@ async function loadRecent() {
       userId: userIdFilter.value.trim() || undefined
     })
     recentTraces.value = res.traces || []
-    if (!selectedTrace.value && recentTraces.value.length) {
+    if (!selectedTrace.value && recentTraces.value.length && !route.query.traceId) {
       await selectRecent(recentTraces.value[0])
     }
   } catch (e) {
@@ -301,11 +307,15 @@ async function loadRecent() {
 async function searchTrace() {
   const traceId = traceIdInput.value.trim()
   if (!traceId) return
+  suppressRouteWatch = true
+  router.replace({ query: { ...route.query, traceId } })
   await loadTrace(traceId)
 }
 
 async function selectRecent(trace) {
   traceIdInput.value = trace.traceId
+  suppressRouteWatch = true
+  router.replace({ query: { ...route.query, traceId: trace.traceId } })
   await loadTrace(trace.traceId)
 }
 
@@ -314,18 +324,20 @@ async function loadTrace(traceId) {
     ElMessage.warning('查询后端未接入，暂时不能查询 Trace')
     return
   }
+  latestRequestedTraceId = traceId
   loadingDetail.value = true
   error.value = ''
   try {
     const res = await api.observability.trace(traceId)
+    if (latestRequestedTraceId !== traceId) return
     selectedTrace.value = res.trace
-    if (route.query.traceId !== traceId) {
-      router.replace({ path: '/traces', query: { traceId } })
-    }
   } catch (e) {
+    if (latestRequestedTraceId !== traceId) return
     error.value = api.parseError(e, '查询 Trace 失败')
   } finally {
-    loadingDetail.value = false
+    if (latestRequestedTraceId === traceId) {
+      loadingDetail.value = false
+    }
   }
 }
 

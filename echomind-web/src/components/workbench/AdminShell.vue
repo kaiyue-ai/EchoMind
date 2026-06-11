@@ -106,7 +106,7 @@
       <main class="admin-content">
         <router-view v-slot="{ Component, route: viewRoute }">
           <transition name="admin-route" mode="out-in">
-            <component :is="Component" :key="viewRoute.fullPath" class="admin-route-view" />
+            <component :is="Component" :key="viewRoute.path" class="admin-route-view" />
           </transition>
         </router-view>
       </main>

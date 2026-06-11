@@ -165,7 +165,7 @@ class TeamBlackboardServicePromptTest {
     void reviewerDecisionRepairsInvalidJsonOnce() {
         AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
         TeamBlackboardService service = new TeamBlackboardService(
-            null, null, null, null, null, null, orchestrator, null
+            null, null, null, null, null, null, orchestrator
         );
         TeamRunEntity run = new TeamRunEntity();
         run.setRunId("run-1");
@@ -192,7 +192,7 @@ class TeamBlackboardServicePromptTest {
     void teamCallPassesUsageReservationsIntoInternalPipelineContext() {
         AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
         TeamBlackboardService service = new TeamBlackboardService(
-            null, null, null, null, null, null, orchestrator, null
+            null, null, null, null, null, null, orchestrator
         );
         TeamUsageRecorder recorder = mock(TeamUsageRecorder.class);
         TeamUsageReservation reservation = new TeamUsageReservation(

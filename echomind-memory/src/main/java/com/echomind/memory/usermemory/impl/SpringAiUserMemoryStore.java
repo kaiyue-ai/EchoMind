@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** 用户长期事实的 Spring AI VectorStore 实现。 */
+/** 会话事件事实的 Spring AI VectorStore 实现。 */
 @Slf4j
 public class SpringAiUserMemoryStore implements UserMemoryStore {
 
@@ -115,7 +115,7 @@ public class SpringAiUserMemoryStore implements UserMemoryStore {
     }
 
     private Document toDocument(UserMemoryEntry entry) {
-        UserMemoryCategory category = entry.category() == null ? UserMemoryCategory.INTEREST : entry.category();
+        UserMemoryCategory category = entry.category() == null ? UserMemoryCategory.EPISODE : entry.category();
         return Document.builder()
             .id(documentId(entry.sessionId(), entry.entryId()))
             .text(entry.content())

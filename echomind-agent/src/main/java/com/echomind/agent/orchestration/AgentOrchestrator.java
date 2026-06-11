@@ -303,8 +303,8 @@ public class AgentOrchestrator {
                     // 流结束时结束追踪Span
                     .doFinally(signalType -> span.end());
                 
-                // 6. 返回 StreamExecution（包含上下文和token流）
-                return Mono.just(new StreamExecution(ctx, tokens));
+                // 6. 返回 StreamExecution（包含上下文和token流） 使用Mono来包装流的上下文
+                return Mono.just(new StreamExecution(ctx, tokens)); // 返回一个Mono
             } catch (RuntimeException e) {
                 // 同步异常处理：记录到追踪并重新抛出
                 EchoMindTrace.recordException(span, e);

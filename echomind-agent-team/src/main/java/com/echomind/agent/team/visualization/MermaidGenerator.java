@@ -27,6 +27,7 @@ public class MermaidGenerator {
         List<TeamEventSnapshot> safeEvents = events == null ? List.of() : events;
 
         Set<TeamEventType> occurred = occurredEvents(safeEvents);
+        int planRetryCount = countPlanRetries(safeEvents);
         boolean hasPlanReview = occurred.contains(TeamEventType.PLAN_REVIEW_STARTED);
         boolean hasMerge = occurred.contains(TeamEventType.MERGE_STARTED);
         boolean hasConflict = occurred.contains(TeamEventType.CONFLICT_DETECTED);
@@ -38,7 +39,7 @@ public class MermaidGenerator {
         sb.append("flowchart TD\n");
         appendClasses(sb);
 
-        sb.append("    START[\"").append(escapeLabel(header(teamName, status, taskLevel))).append("\"]\n");
+        sb.append("    START[\"").append(escapeLabel(header(teamName, status, taskLevel, planRetryCount))).append("\"]\n");
 
         if (safeSteps.isEmpty()) {
             sb.append("    EMPTY[\"暂无 Step<br/>等待 Planner 生成本次 DAG\"]\n");
@@ -57,6 +58,9 @@ public class MermaidGenerator {
             sb.append("    ").append(nodeId).append("[\"").append(escapeLabel(stepLabel(step))).append("\"]\n");
         }
 
+        if (planRetryCount > 0) {
+            sb.append("    PLAN_RETRY{{\"").append(escapeLabel("规划重试<br/>次数：" + planRetryCount)).append("\"}}\n");
+        }
         if (hasPlanReview) {
             sb.append("    PLAN_REVIEW{{\"").append(escapeLabel(phaseLabel("规划审查", occurred, TeamEventType.PLAN_REVIEW_STARTED, TeamEventType.PLAN_REVIEWED))).append("\"}}\n");
         }
@@ -80,7 +84,14 @@ public class MermaidGenerator {
         boolean[] hasOutgoing = new boolean[safeSteps.size()];
         List<String> edges = new ArrayList<>();
 
-        String stepSource = hasPlanReview ? "PLAN_REVIEW" : "START";
+        String stepSource;
+        if (hasPlanReview) {
+            stepSource = "PLAN_REVIEW";
+        } else if (planRetryCount > 0) {
+            stepSource = "PLAN_RETRY";
+        } else {
+            stepSource = "START";
+        }
         for (int i = 0; i < safeSteps.size(); i++) {
             TeamStepSnapshot step = safeSteps.get(i);
             String nodeId = "S" + (i + 1);
@@ -103,7 +114,13 @@ public class MermaidGenerator {
             }
         }
 
-        if (hasPlanReview) {
+        if (planRetryCount > 0) {
+            edges.add("    START --> PLAN_RETRY");
+            if (hasPlanReview) {
+                edges.add("    PLAN_RETRY --> PLAN_REVIEW");
+            }
+        }
+        if (hasPlanReview && planRetryCount == 0) {
             edges.add("    START --> PLAN_REVIEW");
         }
 
@@ -156,6 +173,7 @@ public class MermaidGenerator {
         }
 
         appendStepClasses(sb, safeSteps);
+        if (planRetryCount > 0) sb.append("    class PLAN_RETRY phase_plan_retry;\n");
         if (hasPlanReview) sb.append("    class PLAN_REVIEW phase_review;\n");
         if (hasMerge) sb.append("    class MERGE phase_merge;\n");
         if (hasConflict) sb.append("    class CONFLICT phase_conflict;\n");
@@ -174,6 +192,12 @@ public class MermaidGenerator {
             }
         }
         return set;
+    }
+
+    private static int countPlanRetries(List<TeamEventSnapshot> events) {
+        return (int) events.stream()
+            .filter(e -> e.type() == TeamEventType.RETRY_REQUESTED && e.stepId() == null)
+            .count();
     }
 
     private static String phaseLabel(String phaseName, Set<TeamEventType> occurred,
@@ -234,6 +258,7 @@ public class MermaidGenerator {
         sb.append("    classDef phase_conflict fill:#4a3000,stroke:#fbbf24,color:#fef3c7,stroke-width:2px;\n");
         sb.append("    classDef phase_arbitration fill:#4a1d1d,stroke:#f87171,color:#fee2e2,stroke-width:2px;\n");
         sb.append("    classDef phase_clarification fill:#3b2a57,stroke:#c4b5fd,color:#f5f3ff,stroke-width:2px;\n");
+        sb.append("    classDef phase_plan_retry fill:#4a2500,stroke:#fb923c,color:#fed7aa,stroke-width:2px;\n");
     }
 
     private static String appendTerminal(StringBuilder sb, TeamRunStatus status, List<TeamStepSnapshot> steps,
@@ -279,10 +304,14 @@ public class MermaidGenerator {
         };
     }
 
-    private static String header(String teamName, TeamRunStatus status, String taskLevel) {
-        return "本次协作流程<br/>团队：" + blankToDefault(teamName, "-")
+    private static String header(String teamName, TeamRunStatus status, String taskLevel, int planRetryCount) {
+        String base = "本次协作流程<br/>团队：" + blankToDefault(teamName, "-")
             + "<br/>状态：" + runStatus(status)
             + "<br/>任务等级：" + blankToDefault(taskLevel, "-");
+        if (planRetryCount > 0) {
+            base += "<br/>规划重试：" + planRetryCount;
+        }
+        return base;
     }
 
     private static String stepLabel(TeamStepSnapshot step) {

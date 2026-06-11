@@ -13,7 +13,7 @@ import com.echomind.agent.team.store.TeamRunEntity;
 import com.echomind.agent.team.store.TeamRunMapper;
 import com.echomind.agent.team.store.TeamStepMapper;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.task.SyncTaskExecutor;
+
 
 import java.util.List;
 import java.util.Optional;
@@ -92,8 +92,7 @@ class TeamBlackboardServiceOwnershipTest {
             stepMapper,
             eventMapper,
             agentFactory,
-            mock(AgentOrchestrator.class),
-            new SyncTaskExecutor()
+            mock(AgentOrchestrator.class)
         );
     }
 

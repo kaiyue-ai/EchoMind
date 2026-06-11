@@ -4,19 +4,17 @@ import com.echomind.memory.usermemory.UserMemoryCategory;
 
 import java.util.List;
 
-/** 轻量模型针对单轮对话产出的用户记忆变更。 */
+/** 轻量模型针对单轮对话产出的会话事件变更。 */
 public record UserMemoryAnalysisResult(
     List<FactToAdd> factsToAdd,
     List<FactToUpdate> factsToUpdate,
     List<FactToDelete> factsToDelete,
-    String profileSnapshot,
     boolean analysisSucceeded
 ) {
     public UserMemoryAnalysisResult(List<FactToAdd> factsToAdd,
                                     List<FactToUpdate> factsToUpdate,
-                                    List<FactToDelete> factsToDelete,
-                                    String profileSnapshot) {
-        this(factsToAdd, factsToUpdate, factsToDelete, profileSnapshot, true);
+                                    List<FactToDelete> factsToDelete) {
+        this(factsToAdd, factsToUpdate, factsToDelete, true);
     }
 
     public UserMemoryAnalysisResult {
@@ -25,8 +23,8 @@ public record UserMemoryAnalysisResult(
         factsToDelete = factsToDelete == null ? List.of() : List.copyOf(factsToDelete);
     }
 
-    public static UserMemoryAnalysisResult failed(String oldProfile) {
-        return new UserMemoryAnalysisResult(List.of(), List.of(), List.of(), oldProfile == null ? "" : oldProfile, false);
+    public static UserMemoryAnalysisResult failed() {
+        return new UserMemoryAnalysisResult(List.of(), List.of(), List.of(), false);
     }
 
     public record FactToAdd(String content, UserMemoryCategory category, String evidence, double confidence) {
