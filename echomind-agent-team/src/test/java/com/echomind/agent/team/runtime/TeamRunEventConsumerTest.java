@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.echomind.agent.team.messaging.StepCompleted;
+import com.echomind.common.exception.ModelInvocationRejectedException;
 import com.rabbitmq.client.Channel;
 import java.time.Instant;
 import java.util.List;
@@ -43,6 +44,34 @@ class TeamRunEventConsumerTest {
         consumer.onRunEvent(event, channel, 42L, List.of());
 
         verify(channel).basicNack(42L, false, false);
+        verify(coordinator).failRun("run-1", "Run event retry exhausted: boom");
         verify(dagStore, never()).markMessageProcessed("msg-1");
+    }
+
+    @Test
+    void deterministicGovernanceFailureMarksRunFailedWithoutHotRequeueing() throws Exception {
+        org.mockito.Mockito.doThrow(new TeamUsageQuotaExceededException("quota exceeded", null))
+            .when(coordinator)
+            .handle("run-1", event);
+
+        consumer.onRunEvent(event, channel, 42L, List.of());
+
+        verify(channel).basicAck(42L, false);
+        verify(coordinator).failRun("run-1", "Run event failed: quota exceeded");
+        verify(dagStore, never()).incrementMessageRetry("msg-1");
+        verify(dagStore, never()).markMessageProcessed("msg-1");
+    }
+
+    @Test
+    void modelPreflightRejectionMarksRunFailedWithoutHotRequeueing() throws Exception {
+        org.mockito.Mockito.doThrow(new ModelInvocationRejectedException("provider budget exceeded"))
+            .when(coordinator)
+            .handle("run-1", event);
+
+        consumer.onRunEvent(event, channel, 42L, List.of());
+
+        verify(channel).basicAck(42L, false);
+        verify(coordinator).failRun("run-1", "Run event failed: provider budget exceeded");
+        verify(dagStore, never()).incrementMessageRetry("msg-1");
     }
 }

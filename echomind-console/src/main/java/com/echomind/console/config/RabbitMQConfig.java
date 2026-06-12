@@ -130,6 +130,7 @@ public class RabbitMQConfig {
         addDeadLetterQueue(declarables, deadLetterExchange, RabbitReliableMessaging.USER_MEMORY_DLQ);
         // 添加 Team 死信队列
         addDeadLetterQueue(declarables, deadLetterExchange, RabbitQueueNames.TEAM_RUN_EVENTS_DLQ);
+        addDeadLetterQueue(declarables, deadLetterExchange, RabbitQueueNames.TEAM_CONTROL_DLQ);
         addDeadLetterQueue(declarables, deadLetterExchange, RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ);
         return new Declarables(declarables);
     }

@@ -67,6 +67,9 @@ public class RabbitDeadLetterService {
     /** Team Run Event 类型死信 */
     static final String TYPE_TEAM_RUN_EVENT = "TEAM_RUN_EVENT";
 
+    /** Team Control 类型死信 */
+    static final String TYPE_TEAM_CONTROL = "TEAM_CONTROL";
+
     /** Team Step Execute 类型死信 */
     static final String TYPE_TEAM_STEP_EXECUTE = "TEAM_STEP_EXECUTE";
 
@@ -281,7 +284,7 @@ public class RabbitDeadLetterService {
             case TYPE_CHAT_REQUEST -> replayChatRequest(entity);
             case TYPE_CHAT_MEMORY -> replayChatMemory(entity);
             case TYPE_USER_MEMORY -> replayUserMemory(entity);
-            case TYPE_TEAM_RUN_EVENT, TYPE_TEAM_STEP_EXECUTE -> replayTeamCommand(entity);
+            case TYPE_TEAM_RUN_EVENT, TYPE_TEAM_CONTROL, TYPE_TEAM_STEP_EXECUTE -> replayTeamCommand(entity);
             default -> throw new IllegalArgumentException("unsupported dead letter type: " + entity.getMessageType());
         }
     }
@@ -293,6 +296,8 @@ public class RabbitDeadLetterService {
         String routingKey;
         if ("echomind.team.step-execute.dlq".equals(dlqName)) {
             routingKey = "step.execute";
+        } else if ("echomind.team-control.dlq".equals(dlqName)) {
+            routingKey = "team.control";
         } else {
             // Run events need to go back to their shard — but we don't have the runId
             // from the archived payload. Log and reject.
@@ -466,6 +471,9 @@ public class RabbitDeadLetterService {
         }
         if ("echomind.team.run-events.dlq".equals(dlqName)) {
             return TYPE_TEAM_RUN_EVENT;
+        }
+        if ("echomind.team-control.dlq".equals(dlqName)) {
+            return TYPE_TEAM_CONTROL;
         }
         if ("echomind.team.step-execute.dlq".equals(dlqName)) {
             return TYPE_TEAM_STEP_EXECUTE;

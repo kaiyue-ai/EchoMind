@@ -71,6 +71,7 @@ class RabbitMQConfigTest {
                 RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ,
                 RabbitReliableMessaging.USER_MEMORY_DLQ,
                 RabbitQueueNames.TEAM_RUN_EVENTS_DLQ,
+                RabbitQueueNames.TEAM_CONTROL_DLQ,
                 RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ
             );
         assertThat(bindings).extracting(Binding::getDestination)
@@ -79,6 +80,7 @@ class RabbitMQConfigTest {
                 RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ,
                 RabbitReliableMessaging.USER_MEMORY_DLQ,
                 RabbitQueueNames.TEAM_RUN_EVENTS_DLQ,
+                RabbitQueueNames.TEAM_CONTROL_DLQ,
                 RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ
             );
         assertThat(bindings).extracting(Binding::getExchange)
@@ -113,6 +115,7 @@ class RabbitMQConfigTest {
                 RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ,
                 RabbitReliableMessaging.USER_MEMORY_DLQ,
                 RabbitQueueNames.TEAM_RUN_EVENTS_DLQ,
+                RabbitQueueNames.TEAM_CONTROL_DLQ,
                 RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ
             );
     }
