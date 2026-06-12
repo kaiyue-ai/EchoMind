@@ -676,7 +676,6 @@ public class TeamBlackboardService {
    * @param runId 任务运行 ID
    * @param stepId 步骤 ID
    */
-  @Transactional
   protected void executeStep(String runId, String stepId) {
     // ============================================
     // 阶段1：加载实体
@@ -2443,7 +2442,6 @@ public class TeamBlackboardService {
     return userId == null || userId.isBlank() ? "default" : userId;
   }
 
-  @Transactional
   public void planAndReviewForCoordinator(String runId) {
     TeamRunEntity run =
         runMapper
@@ -2608,7 +2606,6 @@ public class TeamBlackboardService {
         Map.of("retryCount", step.getRetryCount()));
   }
 
-  @Transactional
   public void onDagCompleteInCoordinator(String runId) {
     TeamRunEntity run = runMapper.selectOptionalById(runId).orElse(null);
     if (run == null || isTerminal(run.getStatus())) {
@@ -2675,7 +2672,6 @@ public class TeamBlackboardService {
     dispatchReadyStepsFromBlackboard(runId);
   }
 
-  @Transactional
   public void executeStepPublic(String runId, String stepId) {
     executeStep(runId, stepId);
   }

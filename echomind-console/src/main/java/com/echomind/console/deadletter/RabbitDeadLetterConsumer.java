@@ -1,6 +1,7 @@
 package com.echomind.console.deadletter;
 
 import com.echomind.agent.messaging.RabbitReliableMessaging;
+import com.echomind.common.messaging.RabbitQueueNames;
 import com.echomind.console.config.RabbitMQConfig;
 import com.rabbitmq.client.Channel;
 import lombok.RequiredArgsConstructor;
@@ -23,8 +24,9 @@ public class RabbitDeadLetterConsumer {
             RabbitReliableMessaging.CHAT_REQUESTS_DLQ,
             RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ,
             RabbitReliableMessaging.USER_MEMORY_DLQ,
-            "echomind.team.run-events.dlq",
-            "echomind.team.step-execute.dlq"
+            RabbitQueueNames.TEAM_RUN_EVENTS_DLQ,
+            RabbitQueueNames.TEAM_CONTROL_DLQ,
+            RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ
         },
         containerFactory = RabbitMQConfig.DEAD_LETTER_LISTENER_FACTORY
     )

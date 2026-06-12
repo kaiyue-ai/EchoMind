@@ -2,6 +2,7 @@ package com.echomind.agent.team.runtime;
 
 import com.echomind.agent.team.config.TeamRabbitMQConfig;
 import com.echomind.agent.team.messaging.TeamRunEvent;
+import com.echomind.common.exception.ModelInvocationRejectedException;
 import com.rabbitmq.client.Channel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -75,6 +76,22 @@ public class TeamRunEventConsumer {
             }
 
         } catch (Exception e) {
+            if (isDeterministicRunFailure(e)) {
+                log.error(
+                    "Run 事件发生确定性业务失败，直接标记 Run 失败: type={} runId={} stepId={} messageId={} error={}",
+                    event.getClass().getSimpleName(),
+                    runId,
+                    event.stepId(),
+                    event.messageId(),
+                    e.getMessage(),
+                    e);
+                coordinator.failRun(runId, "Run event failed: " + e.getMessage());
+                try {
+                    channel.basicAck(deliveryTag, false);
+                } catch (Exception ignored) {
+                }
+                return;
+            }
             int nextRetries = Math.max(
                 dagStore.incrementMessageRetry(event.messageId()),
                 Math.max(event.retryCount(), countPriorRetries(xDeathHeader)) + 1);
@@ -88,6 +105,7 @@ public class TeamRunEventConsumer {
                     nextRetries - 1,
                     e.getMessage(),
                     e);
+                coordinator.failRun(runId, "Run event retry exhausted: " + e.getMessage());
                 try {
                     channel.basicNack(deliveryTag, false, false);
                 } catch (Exception ignored) {
@@ -109,6 +127,11 @@ public class TeamRunEventConsumer {
             } catch (Exception ignored) {
             }
         }
+    }
+
+    private boolean isDeterministicRunFailure(Exception e) {
+        return e instanceof TeamUsageQuotaExceededException
+            || e instanceof ModelInvocationRejectedException;
     }
 
     private int countPriorRetries(List<Map<String, Object>> xDeathHeader) {

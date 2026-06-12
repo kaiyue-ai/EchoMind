@@ -3,6 +3,8 @@ package com.echomind.agent.team.runtime;
 import com.echomind.agent.messaging.RabbitReliableMessaging;
 import com.echomind.agent.team.config.TeamRabbitMQConfig;
 import com.echomind.agent.team.messaging.ExecuteStepCommand;
+import com.echomind.agent.team.messaging.TeamControlAction;
+import com.echomind.agent.team.messaging.TeamControlCommand;
 import com.echomind.agent.team.messaging.TeamMessage;
 import com.echomind.agent.team.messaging.TeamRunEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +35,13 @@ public class TeamStepCommandProducer {
     public void publishRunEvent(String runId, TeamRunEvent event) {
         String routingKey = TeamRabbitMQConfig.routingKeyForRun(runId, shardCount);
         doPublish(routingKey, event, "team-event", runId);
+    }
+
+    public void publishControl(String runId, TeamControlAction action) {
+        TeamControlCommand cmd = new TeamControlCommand(
+            newMessageId(), runId, null, Instant.now(), 0, action
+        );
+        doPublish(TeamRabbitMQConfig.CONTROL_ROUTING_KEY, cmd, "team-control", runId);
     }
 
     private void doPublish(String routingKey, TeamMessage message, String type, String businessId) {

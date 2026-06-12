@@ -25,7 +25,7 @@ public class TeamRuntimeProperties {
     private int maxConcurrentSteps = 7;
     private int stepTimeoutSeconds = 180;
     private int runTimeoutSeconds = 1200;
-    private int dagEventShards = 4;
+    private int dagEventShards = 16;
     private int stepExecuteConsumers = 10;
     private int maxRetryRequeues = 5;
 

@@ -15,10 +15,11 @@ import java.time.Instant;
     @JsonSubTypes.Type(value = StepFailed.class, name = "STEP_FAILED"),
     @JsonSubTypes.Type(value = StepTimeout.class, name = "STEP_TIMEOUT"),
     @JsonSubTypes.Type(value = RunCancelled.class, name = "RUN_CANCELLED"),
+    @JsonSubTypes.Type(value = TeamControlCommand.class, name = "TEAM_CONTROL"),
     @JsonSubTypes.Type(value = ExecuteStepCommand.class, name = "EXECUTE_STEP")
 })
 public sealed interface TeamMessage
-    permits TeamRunEvent, ExecuteStepCommand {
+    permits TeamRunEvent, TeamControlCommand, ExecuteStepCommand {
 
     String messageId();
 

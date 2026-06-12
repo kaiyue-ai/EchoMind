@@ -5,6 +5,7 @@ import com.echomind.agent.team.messaging.RunStarted;
 import com.echomind.agent.team.messaging.StepCompleted;
 import com.echomind.agent.team.messaging.StepFailed;
 import com.echomind.agent.team.messaging.StepTimeout;
+import com.echomind.agent.team.messaging.TeamControlAction;
 import com.echomind.agent.team.messaging.TeamRunEvent;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
@@ -72,20 +73,15 @@ public class TeamDagCoordinator {
   /**
    * 处理 Run 启动事件。
    *
-   * <p>执行流程： 1. 调用黑板服务进行规划和审查，创建步骤并初始化 Redis DAG 2. 调度所有就绪的步骤
+   * <p>执行流程：派发耗时的规划命令。Run event 消费者只保留轻量 DAG 推进，避免 Planner LLM 调用阻塞
+   * 同 shard 后续事件。
    *
    * @param event RunStarted 事件
    */
   void onRunStarted(RunStarted event) {
     String runId = event.runId();
-    log.info("DAG 协调器启动 Run {}", runId);
-
-    // 1. 规划 + 审查 + 初始化 Redis DAG
-    // planAndReview 创建 MySQL 步骤，然后初始化 Redis DAG
-    blackboard.planAndReviewForCoordinator(runId);
-
-    // 2. 调度就绪步骤
-    dispatchReadySteps(runId);
+    log.info("DAG 协调器收到 RunStarted，派发规划命令 runId={}", runId);
+    producer.publishControl(runId, TeamControlAction.PLAN_AND_REVIEW);
   }
 
   /**
@@ -111,8 +107,8 @@ public class TeamDagCoordinator {
 
     // 4. 检查 DAG 是否全部完成
     if (dagStore.isDagComplete(runId)) {
-      log.info("DAG 完成，Run {}", runId);
-      blackboard.onDagCompleteInCoordinator(runId);
+      log.info("DAG 完成，派发汇总命令 runId={}", runId);
+      producer.publishControl(runId, TeamControlAction.DAG_COMPLETE);
     }
   }
 
@@ -220,5 +216,18 @@ public class TeamDagCoordinator {
       // 发布执行命令到 RabbitMQ
       producer.publishExecuteStep(runId, claimed);
     }
+  }
+
+  void failRun(String runId, String message) {
+    blackboard.failRunFromCoordinator(runId, message);
+  }
+
+  void startRunPlan(String runId) {
+    blackboard.planAndReviewForCoordinator(runId);
+    dispatchReadySteps(runId);
+  }
+
+  void completeDag(String runId) {
+    blackboard.onDagCompleteInCoordinator(runId);
   }
 }

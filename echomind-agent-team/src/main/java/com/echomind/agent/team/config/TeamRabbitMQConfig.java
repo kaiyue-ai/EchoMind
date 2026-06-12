@@ -29,17 +29,21 @@ public class TeamRabbitMQConfig {
     public static final String TEAM_EXCHANGE = "echomind.team.exchange";
     public static final String RUN_EVENT_ROUTING_PREFIX = "run.shard.";
     public static final String RUN_EVENT_QUEUE_PREFIX = "echomind.team.run.events.shard.";
+    public static final String CONTROL_QUEUE = "echomind.team.control";
+    public static final String CONTROL_ROUTING_KEY = "team.control";
     public static final String STEP_EXECUTE_QUEUE = "echomind.team.step.execute";
     public static final String STEP_EXECUTE_ROUTING_KEY = "step.execute";
-    public static final String TEAM_RUN_EVENTS_DLQ = "echomind.team.run-events.dlq";
-    public static final String TEAM_STEP_EXECUTE_DLQ = "echomind.team.step-execute.dlq";
+    public static final String TEAM_RUN_EVENTS_DLQ = RabbitQueueNames.TEAM_RUN_EVENTS_DLQ;
+    public static final String TEAM_CONTROL_DLQ = RabbitQueueNames.TEAM_CONTROL_DLQ;
+    public static final String TEAM_STEP_EXECUTE_DLQ = RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ;
 
     public static final String TEAM_RUN_EVENT_LISTENER_FACTORY = "teamRunEventListenerFactory";
+    public static final String TEAM_CONTROL_LISTENER_FACTORY = "teamControlListenerFactory";
     public static final String TEAM_STEP_EXECUTE_LISTENER_FACTORY = "teamStepExecuteListenerFactory";
     public static final String TEAM_RUN_EVENT_SHARD_QUEUES_BEAN = "teamRunEventShardQueues";
     public static final String TEAM_DEAD_LETTER_QUEUES_BEAN = "teamDeadLetterQueues";
 
-    private static final int DEFAULT_SHARDS = 4;
+    private static final int DEFAULT_SHARDS = 16;
 
     // ---- Exchange ----
 
@@ -84,6 +88,19 @@ public class TeamRabbitMQConfig {
     // ---- Step Execute Queue ----
 
     @Bean
+    public Queue teamControlQueue() {
+        return new Queue(CONTROL_QUEUE, true, false, false, Map.of(
+            "x-dead-letter-exchange", RabbitReliableMessaging.DEAD_LETTER_EXCHANGE,
+            "x-dead-letter-routing-key", TEAM_CONTROL_DLQ
+        ));
+    }
+
+    @Bean
+    public Binding teamControlBinding(DirectExchange teamExchange, Queue teamControlQueue) {
+        return BindingBuilder.bind(teamControlQueue).to(teamExchange).with(CONTROL_ROUTING_KEY);
+    }
+
+    @Bean
     public Queue teamStepExecuteQueue() {
         return new Queue(STEP_EXECUTE_QUEUE, true, false, false, Map.of(
             "x-dead-letter-exchange", RabbitReliableMessaging.DEAD_LETTER_EXCHANGE,
@@ -100,7 +117,7 @@ public class TeamRabbitMQConfig {
 
     @Bean(name = TEAM_DEAD_LETTER_QUEUES_BEAN)
     public String[] teamDeadLetterQueues() {
-        return new String[]{TEAM_RUN_EVENTS_DLQ, TEAM_STEP_EXECUTE_DLQ};
+        return new String[]{TEAM_RUN_EVENTS_DLQ, TEAM_CONTROL_DLQ, TEAM_STEP_EXECUTE_DLQ};
     }
 
     // ---- Consumer Factories (no RetryInterceptor — use requeue + x-death counting) ----
@@ -126,6 +143,23 @@ public class TeamRabbitMQConfig {
             Jackson2JsonMessageConverter converter,
             @Value("${echomind.team.runtime.step-execute-consumers:10}") int consumers) {
         int c = Math.max(1, Math.min(consumers, 50));
+        var factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(converter);
+        factory.setConcurrentConsumers(c);
+        factory.setMaxConcurrentConsumers(c);
+        factory.setPrefetchCount(1);
+        factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+        factory.setDefaultRequeueRejected(false);
+        return factory;
+    }
+
+    @Bean(name = TEAM_CONTROL_LISTENER_FACTORY)
+    public SimpleRabbitListenerContainerFactory teamControlListenerFactory(
+            ConnectionFactory connectionFactory,
+            Jackson2JsonMessageConverter converter,
+            @Value("${echomind.team.runtime.control-consumers:4}") int consumers) {
+        int c = Math.max(1, Math.min(consumers, 16));
         var factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(converter);

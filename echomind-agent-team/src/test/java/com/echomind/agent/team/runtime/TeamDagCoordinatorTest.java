@@ -2,6 +2,9 @@ package com.echomind.agent.team.runtime;
 
 import com.echomind.agent.team.messaging.StepFailed;
 import com.echomind.agent.team.messaging.StepTimeout;
+import com.echomind.agent.team.messaging.RunStarted;
+import com.echomind.agent.team.messaging.StepCompleted;
+import com.echomind.agent.team.messaging.TeamControlAction;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -18,6 +21,29 @@ class TeamDagCoordinatorTest {
     private final TeamStepCommandProducer producer = mock(TeamStepCommandProducer.class);
     private final TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
     private final TeamDagCoordinator coordinator = new TeamDagCoordinator(dagStore, producer, blackboard);
+
+    @Test
+    void runStartedDispatchesPlanningControlCommandInsteadOfRunningPlannerInline() {
+        coordinator.onRunStarted(new RunStarted(
+            UUID.randomUUID().toString(), "run-1", null, Instant.now(), 0, "team-1"
+        ));
+
+        verify(producer).publishControl("run-1", TeamControlAction.PLAN_AND_REVIEW);
+        verify(blackboard, never()).planAndReviewForCoordinator("run-1");
+    }
+
+    @Test
+    void dagCompleteDispatchesMergeControlCommandInsteadOfMergingInline() {
+        when(dagStore.completeStepAndCascade("run-1", "step-1", "out")).thenReturn(java.util.List.of());
+        when(dagStore.isDagComplete("run-1")).thenReturn(true);
+
+        coordinator.onStepCompleted(new StepCompleted(
+            UUID.randomUUID().toString(), "run-1", "step-1", Instant.now(), 0, "out"
+        ));
+
+        verify(producer).publishControl("run-1", TeamControlAction.DAG_COMPLETE);
+        verify(blackboard, never()).onDagCompleteInCoordinator("run-1");
+    }
 
     @Test
     void stepFailureRetryReleasesRunningSlotBeforeRequeue() {
