@@ -31,7 +31,6 @@ class TeamBlackboardServicePromptTest {
     void plannerPromptIncludesReviewerRevisionInstructionsOnRetry() {
         TeamRunEntity run = new TeamRunEntity();
         run.setTask("策划活动");
-        run.setClarificationAnswer("预算300元/人");
         TeamSnapshot team = new TeamSnapshot(
             "team-1",
             "default",
@@ -53,7 +52,7 @@ class TeamBlackboardServicePromptTest {
         assertThat(prompt).contains("Previous plan");
         assertThat(prompt).contains("旧天气查询");
         assertThat(prompt).contains("补充天气风险和备用方案");
-        assertThat(prompt).contains("预算300元/人");
+        assertThat(prompt).doesNotContain("User clarification");
         assertThat(prompt).contains("Do not create a final integration");
         assertThat(prompt).contains("The Reviewer is responsible for the final report");
     }
@@ -127,15 +126,13 @@ class TeamBlackboardServicePromptTest {
     }
 
     @Test
-    void mergerPromptIncludesGlobalClarificationAnswer() {
+    void mergerPromptDoesNotIncludeClarificationSection() {
         TeamRunEntity run = new TeamRunEntity();
         run.setTask("策划公司团建活动");
-        run.setClarificationAnswer("最终方案请优先控制预算");
 
         String prompt = TeamPromptFactory.merger(run, List.of(), new TeamJsonSupport());
 
-        assertThat(prompt).contains("User clarification, if any");
-        assertThat(prompt).contains("最终方案请优先控制预算");
+        assertThat(prompt).doesNotContain("User clarification");
     }
 
     @Test

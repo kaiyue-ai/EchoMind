@@ -281,11 +281,6 @@ function Wait-TeamRun($TeamId, $RunId, [int]$TimeoutSec) {
         if ($last.status -in @("COMPLETED", "FAILED")) {
             return $last
         }
-        if ($last.status -eq "NEEDS_CLARIFICATION") {
-            try {
-                $last = Invoke-Json "Post" "$ApiBase/teams/$TeamId/runs/$RunId/resume" @{ clarificationAnswer = "请按当前信息继续，优先给出工程上可落地的保守方案。" } @{} 20
-            } catch {}
-        }
         Start-Sleep -Seconds 3
     }
     return $last
@@ -336,7 +331,7 @@ function Invoke-TeamScenario($TeamId, $Scenario) {
                 message = $_.message
             }
         })
-        preview = ShortPreview -Values @($complete.finalOutput, $complete.mergeOutput, $complete.clarificationQuestion)
+        preview = ShortPreview -Values @($complete.finalOutput, $complete.mergeOutput)
     }
 }
 
@@ -540,11 +535,6 @@ EchoMind Codex E2E 知识库夹具。
             while ((Get-Date) -lt $deadline) {
                 $view = Invoke-RestMethod "$ApiBase/teams/$TeamId/runs/$($run.runId)" -TimeoutSec 20
                 if ($view.status -in @("COMPLETED", "FAILED")) { break }
-                if ($view.status -eq "NEEDS_CLARIFICATION") {
-                    try {
-                        Invoke-RestMethod -Method Post "$ApiBase/teams/$TeamId/runs/$($run.runId)/resume" -ContentType "application/json; charset=utf-8" -Body (ToJson @{ clarificationAnswer = "继续执行，按保守工程判断给出结论。" }) -TimeoutSec 20 | Out-Null
-                    } catch {}
-                }
                 Start-Sleep -Seconds 3
             }
             $sw.Stop()
@@ -616,7 +606,6 @@ EchoMind Codex E2E 知识库夹具。
         $statusText = switch ($_.status) {
             "COMPLETED" { "完成" }
             "FAILED" { "失败" }
-            "NEEDS_CLARIFICATION" { "需要澄清" }
             default { $_.status }
         }
         "- $($_.name)：$statusText，总耗时=$($_.durationMs)ms，Step数=$($_.stepCount)，事件数=$($_.eventCount)"

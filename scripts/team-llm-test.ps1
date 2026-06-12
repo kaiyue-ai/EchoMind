@@ -25,21 +25,6 @@ function Wait-RunComplete($teamId, $runId, $maxWaitMin) {
             $status = $run.status
             if ($status -eq "COMPLETED") { return @{ Status = "COMPLETED"; Run = $run } }
             if ($status -eq "FAILED") { return @{ Status = "FAILED"; Run = $run } }
-            if ($status -eq "NEEDS_CLARIFICATION") {
-                Write-Status "  Run needs clarification, auto-answering..."
-                $answer = "请按照你的专业判断继续执行"
-                try {
-                    $run = Invoke-RestMethod -Method Post "$BaseUrl/teams/$teamId/runs/$runId/resume" `
-                        -ContentType "application/json" `
-                        -Body (@{ clarificationAnswer = $answer } | ConvertTo-Json) `
-                        -TimeoutSec 10
-                    Write-Status "  Clarification answered, waiting for completion..."
-                    continue
-                } catch {
-                    Write-Status "  WARN: Resume failed: $_"
-                }
-                return @{ Status = "NEEDS_CLARIFICATION"; Run = $run }
-            }
         } catch {
             Write-Status "  WARN: Poll error: $_"
         }
@@ -144,10 +129,9 @@ Write-Status "========================================="
 $completed = ($results | Where-Object { $_.Status -eq "COMPLETED" }).Count
 $failed = ($results | Where-Object { $_.Status -eq "FAILED" }).Count
 $timeout = ($results | Where-Object { $_.Status -eq "TIMEOUT" }).Count
-$clarified = ($results | Where-Object { $_.Status -eq "NEEDS_CLARIFICATION" }).Count
 $total = $results.Count
 
-Write-Status "Total: $total | Completed: $completed | Failed: $failed | Timeout: $timeout | Clarified: $clarified"
+Write-Status "Total: $total | Completed: $completed | Failed: $failed | Timeout: $timeout"
 Write-Status "Success Rate: $([math]::Round($completed / $total * 100, 1))%"
 Write-Status ""
 

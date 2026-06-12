@@ -226,7 +226,7 @@ export default {
     uploadKnowledge: (agentId, file) => {
       const form = new FormData()
       form.append('file', file)
-      return api.post(`/agents/${agentId}/knowledge`, form, { timeout: 180000 }).then(r => r.data)
+      return api.post(`/agents/${agentId}/knowledge`, form, { timeout: 600000 }).then(r => r.data)
     },
     /** 删除Agent私有知识库文档 */
     deleteKnowledge: (agentId, documentId) =>
@@ -273,9 +273,6 @@ export default {
     listRuns: (teamId) =>
       api.get(`/teams/${teamId}/runs`).then(r => r.data),
     /** 当前用户的Team Run历史，和普通会话历史分开 */
-    listUserRuns: () => api.get('/team-runs').then(r => r.data),
-    /** 提交澄清信息并继续Run */
-    resumeRun: (teamId, runId, payload) =>
-      api.post(`/teams/${teamId}/runs/${runId}/resume`, payload).then(r => r.data)
+    listUserRuns: () => api.get('/team-runs').then(r => r.data)
   }
 }

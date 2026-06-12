@@ -14,8 +14,6 @@ import java.time.Instant;
     @JsonSubTypes.Type(value = StepCompleted.class, name = "STEP_COMPLETED"),
     @JsonSubTypes.Type(value = StepFailed.class, name = "STEP_FAILED"),
     @JsonSubTypes.Type(value = StepTimeout.class, name = "STEP_TIMEOUT"),
-    @JsonSubTypes.Type(value = RunPaused.class, name = "RUN_PAUSED"),
-    @JsonSubTypes.Type(value = RunResumed.class, name = "RUN_RESUMED"),
     @JsonSubTypes.Type(value = RunCancelled.class, name = "RUN_CANCELLED"),
     @JsonSubTypes.Type(value = ExecuteStepCommand.class, name = "EXECUTE_STEP")
 })

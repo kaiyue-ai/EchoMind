@@ -5,13 +5,13 @@ import com.echomind.agent.team.messaging.ExecuteStepCommand;
 import com.echomind.agent.team.messaging.StepCompleted;
 import com.echomind.agent.team.messaging.StepFailed;
 import com.echomind.agent.team.messaging.StepTimeout;
+import com.echomind.agent.team.state.TeamStepStatus;
 import com.echomind.agent.team.store.TeamStepEntity;
 import com.echomind.agent.team.store.TeamStepMapper;
 import com.rabbitmq.client.Channel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.support.AmqpHeaders;
-
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
@@ -58,34 +58,36 @@ public class TeamStepExecutionConsumer {
         String runId = cmd.runId();
         String stepId = cmd.stepId();
         try {
-            // 1. Control flag check
             String stopping = dagStore.getControlFlag(runId, "stopping");
             if (stopping != null) {
-                log.info("Run {} is stopping ({}), skip step {}", runId, stopping, stepId);
+                log.info("Run {} 正在停止 ({}), 跳过步骤 {}", runId, stopping, stepId);
                 dagStore.markMessageProcessed(cmd.messageId());
                 channel.basicAck(deliveryTag, false);
                 return;
             }
 
-            // 2. Deduplication
             if (dagStore.isMessageProcessed(cmd.messageId())) {
                 channel.basicAck(deliveryTag, false);
                 return;
             }
 
-            // 3. Idempotency via MySQL status
             TeamStepEntity step = stepMapper.selectById(stepId);
             if (step == null || isTerminal(step.getStatus())) {
-                log.info("Step {} already terminal ({}), skip", stepId, step != null ? step.getStatus() : "null");
+                log.info("步骤 {} 已是终态 ({}), 跳过", stepId, step != null ? step.getStatus() : "null");
                 dagStore.markMessageProcessed(cmd.messageId());
                 channel.basicAck(deliveryTag, false);
                 return;
             }
+            if (!isExecutable(step.getStatus())) {
+                log.warn("步骤 {} 在 MySQL 状态 {} 下不可执行，发布失败事件", stepId, step.getStatus());
+                publishStepFailed(runId, stepId,
+                    "步骤在 MySQL 状态 " + step.getStatus() + " 下不可执行", cmd, channel, deliveryTag);
+                return;
+            }
 
-            // 4. Mark RUNNING in Redis
             dagStore.setStepRunning(runId, stepId);
+            blackboard.markStepExecutionAccepted(runId, stepId);
 
-            // 5. Execute step with timeout protection
             long startedAt = System.currentTimeMillis();
             int stepTimeoutSecs = properties.getStepTimeoutSeconds();
             if (stepTimeoutSecs > 0) {
@@ -93,44 +95,31 @@ public class TeamStepExecutionConsumer {
             } else {
                 blackboard.executeStepPublic(runId, stepId);
                 long elapsed = System.currentTimeMillis() - startedAt;
-                publishStepCompleted(runId, stepId, cmd, channel, deliveryTag, elapsed);
+                publishOutcome(runId, stepId, cmd, channel, deliveryTag, elapsed);
             }
 
         } catch (StepExecutionException e) {
-            // Business-level step failure → publish StepFailed, ack
-            log.warn("Step {} execution failed: {}", stepId, e.getMessage());
-            StepFailed failed = new StepFailed(
-                UUID.randomUUID().toString(), runId, stepId, Instant.now(), 0,
-                e.getMessage()
-            );
-            producer.publishRunEvent(runId, failed);
-            dagStore.markMessageProcessed(cmd.messageId());
-            try {
-                channel.basicAck(deliveryTag, false);
-            } catch (Exception ignored) {
-            }
+            log.warn("步骤 {} 执行失败: {}", stepId, e.getMessage());
+            publishStepFailed(runId, stepId, e.getMessage(), cmd, channel, deliveryTag);
 
         } catch (Exception e) {
-            // Check if it's a data source / Redis connectivity error (requeue)
             if (isInfrastructureException(e)) {
-                // Count prior requeues
                 int priorRetries = countPriorRetries(xDeathHeader);
                 if (priorRetries >= MAX_REQUEUE_RETRIES) {
-                    log.error("Step {} requeue retries exhausted ({}), sending to DLQ", stepId, priorRetries);
+                    log.error("步骤 {} 重新入队重试次数耗尽 ({})，发送到 DLQ", stepId, priorRetries);
                     try {
                         channel.basicNack(deliveryTag, false, false);
                     } catch (Exception ignored) {
                     }
                 } else {
-                    log.warn("Infra failure for step {}, requeue ({}/{})", stepId, priorRetries + 1, MAX_REQUEUE_RETRIES);
+                    log.warn("步骤 {} 基础设施失败，重新入队 ({}/{})", stepId, priorRetries + 1, MAX_REQUEUE_RETRIES);
                     try {
                         channel.basicNack(deliveryTag, false, true);
                     } catch (Exception ignored) {
                     }
                 }
             } else {
-                // Unexpected exception → DLQ
-                log.error("Unexpected error executing step {}, sending to DLQ", stepId, e);
+                log.error("步骤 {} 执行遇到未预期异常，发送到 DLQ", stepId, e);
                 try {
                     channel.basicNack(deliveryTag, false, false);
                 } catch (Exception ignored) {
@@ -172,17 +161,21 @@ public class TeamStepExecutionConsumer {
                 .runAsync(() -> blackboard.executeStepPublic(runId, stepId))
                 .orTimeout(timeoutSecs, TimeUnit.SECONDS)
                 .join();
+
             long elapsed = System.currentTimeMillis() - startedAt;
-            publishStepCompleted(runId, stepId, cmd, channel, deliveryTag, elapsed);
+            publishOutcome(runId, stepId, cmd, channel, deliveryTag, elapsed);
+
         } catch (CompletionException e) {
             if (e.getCause() instanceof TimeoutException) {
                 long elapsed = System.currentTimeMillis() - startedAt;
-                log.warn("Step {} timed out after {}ms (limit {}s)", stepId, elapsed, timeoutSecs);
+                log.warn("步骤 {} 超时，耗时 {}ms (限制 {}s)", stepId, elapsed, timeoutSecs);
+
                 StepTimeout timeoutEvent = new StepTimeout(
                     UUID.randomUUID().toString(), runId, stepId, Instant.now(), 0, elapsed
                 );
                 producer.publishRunEvent(runId, timeoutEvent);
                 dagStore.markMessageProcessed(cmd.messageId());
+
                 try {
                     channel.basicAck(deliveryTag, false);
                 } catch (Exception ignored) {
@@ -195,30 +188,78 @@ public class TeamStepExecutionConsumer {
                 if (cause instanceof RuntimeException re) {
                     throw re;
                 }
-                throw new RuntimeException("Unexpected error during step execution", cause);
+                throw new StepExecutionException("步骤执行遇到未预期异常: " + cause.getMessage(), cause);
             }
         }
     }
 
-    private void publishStepCompleted(String runId, String stepId, ExecuteStepCommand cmd,
-                                       Channel channel, long deliveryTag, long elapsedMs) {
-        String output = stepMapper.selectById(stepId).getRawOutput();
+    private void publishOutcome(String runId, String stepId, ExecuteStepCommand cmd,
+                                Channel channel, long deliveryTag, long elapsedMs) {
+        StepExecutionOutcome outcome = blackboard.stepExecutionOutcome(stepId);
+
+        if (outcome.completed()) {
+            publishStepCompleted(runId, stepId, outcome.output(), cmd, channel, deliveryTag, elapsedMs);
+            return;
+        }
+
+        if (outcome.retrying()) {
+            dagStore.releaseSlotForRetry(runId, stepId, outcome.retryCount());
+            if (dagStore.markStepReady(runId, stepId)) {
+                producer.publishExecuteStep(runId, stepId);
+            }
+            ackProcessed(cmd, channel, deliveryTag);
+            log.info("步骤 {} 执行后需要重试，已重新入队，重试次数={}", stepId, outcome.retryCount());
+            return;
+        }
+
+        if (outcome.runTerminal()) {
+            ackProcessed(cmd, channel, deliveryTag);
+            log.info("步骤 {} 执行结束，Run 状态为终态 {}，不发布 DAG 完成事件", stepId, outcome.runStatus());
+            return;
+        }
+
+        String message = outcome.missing()
+            ? "步骤在执行过程中消失"
+            : "步骤执行未完成，状态=" + outcome.stepStatus();
+        publishStepFailed(runId, stepId, message, cmd, channel, deliveryTag);
+    }
+
+    private void publishStepCompleted(String runId, String stepId, String output, ExecuteStepCommand cmd,
+                                      Channel channel, long deliveryTag, long elapsedMs) {
         StepCompleted completed = new StepCompleted(
             UUID.randomUUID().toString(), runId, stepId, Instant.now(), 0,
             output != null ? output : ""
         );
         producer.publishRunEvent(runId, completed);
+        ackProcessed(cmd, channel, deliveryTag);
+        log.debug("步骤 {} 执行成功，耗时 {}ms", stepId, elapsedMs);
+    }
+
+    private void publishStepFailed(String runId, String stepId, String message, ExecuteStepCommand cmd,
+                                   Channel channel, long deliveryTag) {
+        StepFailed failed = new StepFailed(
+            UUID.randomUUID().toString(), runId, stepId, Instant.now(), 0,
+            message == null || message.isBlank() ? "步骤执行失败" : message
+        );
+        producer.publishRunEvent(runId, failed);
+        ackProcessed(cmd, channel, deliveryTag);
+    }
+
+    private void ackProcessed(ExecuteStepCommand cmd, Channel channel, long deliveryTag) {
         dagStore.markMessageProcessed(cmd.messageId());
         try {
             channel.basicAck(deliveryTag, false);
         } catch (Exception ignored) {
         }
-        log.debug("Step {} completed successfully in {}ms", stepId, elapsedMs);
     }
 
-    /**
-     * Thrown when step execution fails at the business level (LLM error, tool error).
-     */
+    private boolean isExecutable(Object status) {
+        String s = status instanceof String ? (String) status : String.valueOf(status);
+        return TeamStepStatus.READY.name().equals(s)
+            || TeamStepStatus.RETRYING.name().equals(s)
+            || TeamStepStatus.RUNNING.name().equals(s);
+    }
+
     public static class StepExecutionException extends RuntimeException {
         public StepExecutionException(String message) {
             super(message);

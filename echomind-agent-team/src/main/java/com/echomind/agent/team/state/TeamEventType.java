@@ -5,7 +5,6 @@ package com.echomind.agent.team.state;
  */
 public enum TeamEventType {
     RUN_CREATED, // 运行创建
-    RUN_RESUMED, // 运行恢复
     PLAN_STARTED, // 计划开始
     PLAN_CREATED, // 计划创建
     PLAN_REVIEW_STARTED, // 计划审核开始
@@ -33,7 +32,6 @@ public enum TeamEventType {
     ARBITRATION_COMPLETED, // 仲裁完成
     GLOBAL_REVIEW_STARTED, // 全局审核开始
     GLOBAL_REVIEWED, // 全局审核完成
-    CLARIFICATION_REQUESTED, // 澄清请求
     STEP_TIMEOUT, // 步骤超时
     RUN_TIMEOUT, // 运行超时
     RUN_COMPLETED, // 运行完成

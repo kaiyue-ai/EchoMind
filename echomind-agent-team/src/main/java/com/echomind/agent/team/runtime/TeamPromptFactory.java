@@ -53,9 +53,6 @@ final class TeamPromptFactory {
             User task:
             %s
 
-            User clarification, if any:
-            %s
-
             Previous plan, if Reviewer requested replanning:
             %s
 
@@ -69,7 +66,6 @@ final class TeamPromptFactory {
             %s
             """.formatted(
             run.getTask(),
-            nullToBlank(run.getClarificationAnswer()),
             json.toJson(previousPlan == null ? List.of() : previousPlan),
             nullToBlank(plannerRevisionInstructions),
             json.toJson(previousExecutionResults == null ? List.of() : previousExecutionResults),
@@ -87,9 +83,9 @@ final class TeamPromptFactory {
             Do not use ASCII double quotes inside text values; use Chinese corner quotes 「」 instead.
             Respond only with JSON:
             {
-              "action": "CONTINUE | RETRY | ASK_CLARIFICATION | FAILED",
+              "action": "CONTINUE | RETRY | FAILED",
               "reason": "why",
-              "questions": ["only if clarification is needed"],
+              "questions": [],
               "retryStepIds": [],
               "revisionInstructions": "instructions for Planner if retry is needed",
               "finalReport": ""
@@ -98,12 +94,9 @@ final class TeamPromptFactory {
             Original task:
             %s
 
-            User clarification, if any:
-            %s
-
             Planned steps:
             %s
-            """.formatted(run.getTask(), nullToBlank(run.getClarificationAnswer()), json.toJson(planned));
+            """.formatted(run.getTask(), json.toJson(planned));
     }
 
     static String agentSelector(TeamRunEntity run, TeamStepEntity step, List<String> requiredCapabilities,
@@ -212,9 +205,6 @@ final class TeamPromptFactory {
             Original user task:
             %s
 
-            User clarification, if any:
-            %s
-
             Step title:
             %s
 
@@ -237,7 +227,6 @@ final class TeamPromptFactory {
             %s
             """.formatted(
             run.getTask(),
-            nullToBlank(run.getClarificationAnswer()),
             step.getTitle(),
             nullToBlank(step.getDescription()),
             nullToBlank(step.getAcceptanceCriteria()),
@@ -263,9 +252,6 @@ final class TeamPromptFactory {
             Original user task:
             %s
 
-            User clarification, if any:
-            %s
-
             Step title:
             %s
 
@@ -289,7 +275,6 @@ final class TeamPromptFactory {
             """.formatted(
             nullToBlank(failureReason),
             run.getTask(),
-            nullToBlank(run.getClarificationAnswer()),
             step.getTitle(),
             nullToBlank(step.getDescription()),
             nullToBlank(step.getAcceptanceCriteria()),
@@ -317,9 +302,6 @@ final class TeamPromptFactory {
             原始用户任务：
             %s
 
-            User clarification, if any:
-            %s
-
             Step 结果：
             %s
 
@@ -333,7 +315,6 @@ final class TeamPromptFactory {
             %s
             """.formatted(
             run.getTask(),
-            nullToBlank(run.getClarificationAnswer()),
             json.toJson(steps),
             nullToBlank(run.getConflictReportJson()),
             nullToBlank(run.getArbitrationJson()),
@@ -420,9 +401,6 @@ final class TeamPromptFactory {
             Original task:
             %s
 
-            User clarification, if any:
-            %s
-
             MergeAgent draft:
             %s
 
@@ -436,7 +414,6 @@ final class TeamPromptFactory {
             %s
             """.formatted(
             run.getTask(),
-            nullToBlank(run.getClarificationAnswer()),
             nullToBlank(run.getMergeOutput()),
             nullToBlank(run.getConflictReportJson()),
             nullToBlank(run.getArbitrationJson()),

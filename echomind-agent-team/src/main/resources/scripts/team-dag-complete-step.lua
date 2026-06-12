@@ -14,20 +14,25 @@ local completed_step_key = ARGV[3]
 local completed_step_id = ARGV[1]
 local output = ARGV[2]
 
--- 1. Mark current step COMPLETED
+-- 1. Mark current step COMPLETED. StepCompleted events may be retried, so only the
+-- first completion is allowed to mutate run counters.
+local previous_status = redis.call('HGET', completed_step_key, 'status')
+local first_completion = previous_status ~= 'COMPLETED'
 redis.call('HSET', completed_step_key, 'status', 'COMPLETED', 'output_json', output)
 
 -- 2. Update run-level counters
-local running = tonumber(redis.call('HGET', dag_key, 'running_count') or '0')
-local completed = tonumber(redis.call('HGET', dag_key, 'completed_count') or '0')
-redis.call('HSET', dag_key, 'running_count', math.max(0, running - 1), 'completed_count', completed + 1)
+if first_completion then
+    local running = tonumber(redis.call('HGET', dag_key, 'running_count') or '0')
+    local completed = tonumber(redis.call('HGET', dag_key, 'completed_count') or '0')
+    redis.call('HSET', dag_key, 'running_count', math.max(0, running - 1), 'completed_count', completed + 1)
+end
 
 -- 3. Check each dependent step
 local newly_ready = {}
 for i = 2, #KEYS do
     local dep_key = KEYS[i]
     local dep_status = redis.call('HGET', dep_key, 'status')
-    if dep_status ~= false and dep_status ~= 'COMPLETED' and dep_status ~= 'FAILED' and dep_status ~= 'SUPERSEDED' then
+    if dep_status == 'BLOCKED' or dep_status == 'PENDING' then
         -- Check if ALL deps of this dependent are COMPLETED
         local deps_json = redis.call('HGET', dep_key, 'deps_json')
         if deps_json ~= false then
@@ -45,7 +50,8 @@ for i = 2, #KEYS do
             end
             if ok then
                 redis.call('HSET', dep_key, 'status', 'READY')
-                table.insert(newly_ready, string.gsub(dep_key, '.*:', ''))
+                local dep_id = string.gsub(dep_key, '.*:', '')
+                table.insert(newly_ready, dep_id)
             end
         end
     end
@@ -58,8 +64,15 @@ if #newly_ready > 0 then
     if pending_json ~= false then
         pending = cjson.decode(pending_json)
     end
+    local present = {}
+    for _, sid in ipairs(pending) do
+        present[sid] = true
+    end
     for _, sid in ipairs(newly_ready) do
-        table.insert(pending, sid)
+        if not present[sid] then
+            table.insert(pending, sid)
+            present[sid] = true
+        end
     end
     redis.call('HSET', dag_key, 'pending_ready', cjson.encode(pending))
 end

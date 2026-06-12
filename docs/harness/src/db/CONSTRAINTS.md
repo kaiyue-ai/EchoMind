@@ -22,7 +22,7 @@
 | Agent 知识库文档 | MySQL 文档表 + 对象存储文件 | Milvus `echomind_agent_knowledge_spring_ai_v1` 保存切片正文、切片元数据和知识库向量索引 |
 | 上传文件 | 阿里云 OSS 或本地对象目录 | 数据库只保存引用信息 |
 | 外部 MCP 运行状态 | 配置文件或后续 MySQL 配置表 | `ExternalMcpRuntimeService` 持有的 Spring AI MCP client 和工具 provider |
-| Team 定义和执行记录 | MySQL `echomind_agent_teams` / `members` / `runs` / `steps` / `events` | `TeamExecutionEngine` 调度的本地 `TaskExecutor` 运行中任务 |
+| Team 定义和执行记录 | MySQL `echomind_agent_teams` / `members` / `runs` / `steps` / `events` | RabbitMQ Run Event / Step Execute 队列；Redis `echomind:team:run:*` DAG 热投影 |
 
 ## 禁止事项
 
@@ -50,7 +50,7 @@ MySQL 保存可以审计、可以恢复、不能因为重启丢失的数据：
 - 敏感数据规则、脱敏事件、告警规则和告警事件。敏感事件只能保存脱敏后的样本或请求侧 `BLOCK` 替代词结果，不允许落原始手机号、身份证、邮箱、银行卡等命中文本。
 - RabbitMQ 死信归档记录，包含消息去重 hash、DLQ 名称、消息类型、业务 key、traceId、原始 payload、错误 headers、状态、重放次数和最后一次重放错误。
 - Agent 知识库文档元数据和原文件引用。
-- 后续 Agent Team 的 Team、Member、Run、Step。
+- Agent Team 的 Team、Member、Run、Step、Event。
 
 管理端用户管理只能操作客户端用户表 `echomind_users`。封禁账号只改 `status`；删除账号是硬删除该客户端用户的
 账号、普通聊天会话、消息、AI 调用用量、Token 配额配置、Token 配额账本和旧 MySQL 记忆嵌入，并尽力清理 Redis 近期上下文、
@@ -73,6 +73,7 @@ Redis 和 Milvus 负责速度、短期上下文和向量检索；用户长期事
 - 用户长期事实向量，按 `userId` 全局隔离，事实带 `firstObservedAt`、`lastObservedAt` 和 `updatedAt`；召回和合并旧事实必须同时过滤事实置信度和 Milvus COSINE 向量相似度，不能只取无阈值 TopK。
 - 旧手写 Milvus collection 保留但不再读取；新数据写入 Spring AI collection，需要重新索引旧知识库文件和重新沉淀用户长期事实。
 - 用户画像快照，存 Redis Hash，是长期事实的固定长度压缩摘要。
+- Team DAG 热投影，存 Redis Hash，只保存 ready/running/completed、依赖展开、并发计数和幂等消息标记；Redis 丢失时应从 MySQL Run/Step/Event 事实重建，不允许把 Redis 当最终事实。
 - 可以重建的临时检索结构。
 
 Redis 里的数据必须满足：
@@ -153,14 +154,16 @@ Team 协作不能长期只放内存。当前 Team v2 表结构方向：
 
 - `echomind_agent_teams`：团队定义，全局资源。
 - `echomind_agent_team_members`：成员 Agent、角色、能力标签、排序；可配置 `PLANNER`、多个 `EXECUTOR`、必选 `REVIEWER`，可选 `SUB_REVIEWER` / `MERGER`。
-- `echomind_agent_team_runs`：一次任务执行，也是 Team 黑板首页；按 `user_id` 隔离；保存 `task_level`、每次 Run 的 `plan_review_enabled` / `sub_review_enabled` / `global_review_enabled` / `simple_fast_path_enabled` 审查策略、`merge_output`、`global_review_json`、`conflict_report_json`、`arbitration_json`、最终报告、计划阶段澄清字段、规划重试、历史重规划计数和仲裁次数。`sub_review_enabled` 字段名保留作兼容，新语义是“每步 Review”。
+- `echomind_agent_team_runs`：一次任务执行，也是 Team 黑板首页；按 `user_id` 隔离；保存 `task_level`、每次 Run 的 `plan_review_enabled` / `sub_review_enabled` / `global_review_enabled` / `simple_fast_path_enabled` 审查策略、`merge_output`、`global_review_json`、`conflict_report_json`、`arbitration_json`、最终报告、规划重试、历史重规划计数和仲裁次数。`sub_review_enabled` 字段名保留作兼容，新语义是“每步 Review”。
 - `echomind_agent_team_steps`：Planner 拆出的 DAG 子任务、`client_step_id`、依赖 Step、风险等级、质量状态、分配 Agent、输入、原始输出、StepReviewer 审查、Reflexion 重做上下文。
 - `echomind_agent_team_events`：协作事件流，前端时间线和 Mermaid 从这里恢复。
 
-Team 黑板是角色记忆互通的事实来源。Planner、Executor、Reviewer 不依赖同一个聊天 session 互相“碰上下文”，而是由后端从 Run / Step / Event 组装最小必要上下文。
+Team 黑板是角色记忆互通和调度状态的事实来源。Planner、Executor、Reviewer 不依赖同一个聊天 session 互相“碰上下文”，而是由后端从 Run / Step / Event 组装最小必要上下文。
+Team 当前执行入口是 RabbitMQ：`TeamBlackboardService` 在 Run 创建事务提交后通过 `TeamStepCommandProducer` 发布 `RunStarted`，`TeamRunEventConsumer` 按 runId 分片串行交给 `TeamDagCoordinator`，Coordinator 初始化/推进 Redis DAG 投影并发布 `ExecuteStepCommand`，`TeamStepExecutionConsumer` 执行单 Step 后只根据 MySQL Step 终态发布完成、失败或重试事件。
 Team 内部调用不能落入 `echomind_chat_sessions` / `echomind_chat_messages`；普通会话历史只保存用户在 Chat 页面发起的真实对话。
 删除 Team 是硬删除：必须同时删除 members、runs、steps、events，不保留逻辑删除标记。
 当前 GlobalReviewer 不再修改 DAG：它只允许通过、要求 MergeAgent 重新合并或失败。旧的局部/整体重规划计数字段保留用于历史 Run 展示，新流程不再把终审作为重规划入口。
+Redis DAG 投影必须跟 MySQL Step 状态同步：根 Step 进入队列前 MySQL 要标为 `READY`；依赖解锁后 Coordinator 要把 MySQL Step 标为 `READY`；Step 执行消费者不得把 `PENDING`、`BLOCKED` 或 `RETRYING` 的中间态伪装成完成事件；DAG 完成前必须再次确认 MySQL active Step 全部 `COMPLETED`。
 
 Team v2 迁移 `20260521_team_v2_dag_reflexion.sql` 会清空旧 Team 数据，避免旧消息总线/旧 Step 格式混入新 DAG 状态机。后续数据迁移如果要保留历史，需要先写显式升级脚本，不要让运行时代码兼容过多旧结构。
 

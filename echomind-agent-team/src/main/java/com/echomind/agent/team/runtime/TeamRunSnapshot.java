@@ -16,9 +16,6 @@ public record TeamRunSnapshot(
     TeamRunStatus status, // 状态
     String taskLevel, // 任务等级
     TeamReviewOptions reviewOptions, // 审查策略
-    String clarificationQuestion, // 澄清问题
-    String clarificationAnswer, //澄清答案
-    String clarificationStage, // 澄清阶段
     String planReviewJson, // 计划审查json
     String resultReviewJson, // �果审查json
     String mergeOutput, // 合并输出

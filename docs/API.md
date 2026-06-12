@@ -436,7 +436,6 @@ Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进
     "globalReviewEnabled": true,
     "simpleFastPathEnabled": false
   },
-  "clarificationStage": null,
   "planReviewJson": "{\"action\":\"CONTINUE\"}",
   "resultReviewJson": null,
   "mergeOutput": null,
@@ -476,16 +475,16 @@ Planner 不在计划里硬指定 Agent；执行前 `AgentSelector` 会把候选 
 模型选择失败或返回无效候选时才按能力匹配分与 `sortOrder` 稳定兜底。
 `RiskPolicy` 是唯一风险裁决入口，裁决结果会写入 `RISK_DECIDED` 事件。
 
-Reviewer 决策支持 `CONTINUE`、`RETRY`、`PARTIAL_REPLAN`、`REPLAN`、`ASK_CLARIFICATION`、`FAILED`：
-`RETRY` 重跑指定 Step，`PARTIAL_REPLAN` 重跑局部 DAG 分支，`REPLAN` 回到 Planner 做整体重规划。
-每次重试都会把 Reviewer 错误原因、修改意见、上一轮输出摘要写入 `reflectionJson`，再带给 Executor。
+Reviewer 分为三段质量闸门：PlanReview 支持 `CONTINUE`、`RETRY`、`FAILED`；StepReviewer 支持
+`PASS`、`REWORK`、`ACCEPT_WITH_RISK`、`FAILED`；GlobalReviewer 支持 `SUCCESS`、`REMERGE`、`FAILED`。
+每次 Step 返工都会把 Reviewer 错误原因、修改意见、上一轮输出摘要写入 `reflectionJson`，再带给 Executor。
 MergeAgent 后会写入 `conflictReportJson`；存在冲突时 Planner 仲裁结果写入 `arbitrationJson`，MergeAgent 带仲裁结果二次聚合。
 
-### POST `/api/teams/{teamId}/runs/{runId}/resume` — 提交澄清并继续
-```json
-// 请求
-{ "clarificationAnswer": "活动日期是下周五，预算每人300元以内。" }
-```
+### POST `/api/teams/{teamId}/runs/{runId}/repair-dag` — 修复 Run DAG 热投影
+
+受控重建当前用户拥有的非终态 Run 的 Redis DAG 状态。仅当该 Run 没有 `ASSIGNED`、`RUNNING`
+或 `RETRYING` Step 时允许执行；服务会以 MySQL Step 事实重新计算 `READY` / `BLOCKED`，
+并在事务提交后重新调度可执行 Step。
 
 ---
 

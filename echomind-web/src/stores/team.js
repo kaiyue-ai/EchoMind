@@ -30,7 +30,6 @@ export const useTeamStore = defineStore('team', {
     creating: false,
     deleting: false,
     executing: false,
-    resuming: false,
     error: null
   }),
   actions: {
@@ -192,25 +191,7 @@ export const useTeamStore = defineStore('team', {
       this.pollingDelay = POLLING_INITIAL_DELAY_MS
     },
     isTerminalRun(status) {
-      return ['COMPLETED', 'FAILED', 'NEEDS_CLARIFICATION'].includes(status)
-    },
-    async resumeRun(payload) {
-      const hasRunAnswer = payload?.clarificationAnswer?.trim()
-      const hasStepAnswers = payload?.stepClarificationAnswers
-        && Object.values(payload.stepClarificationAnswers).some(answer => answer?.trim())
-      if (!this.selectedTeam || !this.currentRun || (!hasRunAnswer && !hasStepAnswers)) return null
-      this.resuming = true
-      this.error = null
-      try {
-        this.currentRun = await api.team.resumeRun(this.selectedTeam.teamId, this.currentRun.runId, payload)
-        this.startPolling(this.currentRun.runId)
-        return this.currentRun
-      } catch (error) {
-        this.error = api.parseError(error, '继续团队任务失败')
-        throw error
-      } finally {
-        this.resuming = false
-      }
+      return ['COMPLETED', 'FAILED'].includes(status)
     }
   }
 })
