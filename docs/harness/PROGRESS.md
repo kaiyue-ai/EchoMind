@@ -1,6 +1,6 @@
 # 当前进度
 
-最后更新：2026-06-10
+最后更新：2026-06-12
 
 ## 已完成
 
@@ -41,7 +41,7 @@
 - 已新增告警治理：调用错误、错误率、Provider Token 预算超限/预警和敏感数据事件进入告警事件表，支持飞书自定义机器人 Webhook、静默期、静默累计升级和管理端规则配置；Provider budget 也使用 Redis 预留和 `echomind_provider_token_budget_usage` 日/周/月真实已用账本；用户日/月 Token quota 不再保留单用户百分比预警。
 - 管理端已新增脱敏治理和告警中心页面，仪表盘增加错误率、脱敏事件数和告警事件数。
 - 聊天入口已进一步解耦：`ChatGovernanceService` 统一收口配额、脱敏、用量和调用错误告警；流式聊天改为 `POST /api/chat` 入队、`GET /api/chat/stream/{requestId}` 订阅 token 事件；`MemoryApplicationService` 统一会话摘要、历史读取和附件展示 URL 刷新。
-- RabbitMQ 使用面已梳理：当前只用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入和 `echomind.user-memory.requests` 用户长期记忆事件；聊天 token、tool、result、failure 事件由消费端直接交给 SSE 推送服务；Agent Team 仍不走 RabbitMQ，Run 级调度由 `TeamExecutionEngine` 适配本地 `TaskExecutor` 推进 MySQL 黑板状态机。
+- RabbitMQ 使用面已梳理：当前用于 `echomind.chat.requests` 异步聊天请求、`echomind.chat-memory.persist.exchange` 普通聊天记忆分片写入、`echomind.user-memory.requests` 用户长期记忆事件，以及 Agent Team Run Event / Step Execute 队列；聊天 token、tool、result、failure 事件由消费端直接交给 SSE 推送服务。
 - SSE token 级 RabbitMQ 中转及其消费者配置已移除。
 - 聊天请求入队前已携带用户 quota 和 Provider budget 两类 initial Redis reservation；消费端不重复请求前配额校验，Agent Pipeline 在 `ResultAggregationStage` 生成完整 `ProviderRequest` 后执行 final preflight，按 system prompt、工具 schema、附件元信息和输出上限重估，只补两类预算不足的 delta；RabbitMQ 聊天请求死信重放会在重新入队前重建两类 reservation。
 - Team 内部 LLM 调用已改为每次调用前按本轮 prompt 显式预留用户 quota 和 Provider budget，并复用 Agent Pipeline 的 final `ProviderRequest` preflight；reservation id 会随 `PipelineContext` 进入统一用量结算。
@@ -58,8 +58,10 @@
 - README、CLAUDE、AGENTS、docs/API 和 harness 文档已同步项目详解、运行步骤、整体架构图、工具路由边界和验证命令。
 - Agent Team v2 已合并 DAG 调度与 Reflexion 重试：Planner 输出 SIMPLE/COMPLEX 和 DAG，调度器按依赖推进可并发 Step，AgentSelector 将候选 Executor、能力/负载/健康度评分交给模型自主选择并保留规则兜底，RiskPolicy 只给 StepReviewer 提供重点校验提示，MergeAgent 聚合，ConflictDetector 检测冲突，必要时 PlannerArbitration 仲裁，GlobalReviewer 只负责终审通过、要求重新合并或失败。
 - Team Run 已支持按次选择质量/速度策略：默认保持 PlanReview、每步 Review、GlobalReview 全开；用户可跳过指定 Review，或在 SIMPLE 单 Step 任务上启用直返以减少串行 LLM 调用。DAG 默认可并发 Step 从 3 提升到 7，Team 线程池随运行时并发配置扩容。
-- Team Review 语义已收窄为三段质量闸门：PlanReview 只允许计划阶段继续、重试、澄清或失败；StepReviewer 只审当前 Step，可通过、重做当前 Step、带风险接受或失败；GlobalReviewer 只审最终合并稿，可通过、要求 MergeAgent 重新合并或失败，不再重试 Step、不重规划 DAG、不向用户澄清。
-- Team 执行已拆出 `TeamExecutionEngine` Run 级边界：负责事务提交后再派发 Run、统一捕获执行异常并回调失败处理；具体 DAG/Step 状态机仍在 `TeamBlackboardService` 和 MySQL 黑板中，底层仍使用本地 `TaskExecutor`。
+- Team Review 语义已收窄为三段质量闸门：PlanReview 只允许计划阶段继续、重试或失败；StepReviewer 只审当前 Step，可通过、重做当前 Step、带风险接受或失败；GlobalReviewer 只审最终合并稿，可通过、要求 MergeAgent 重新合并或失败，不再重试 Step、不重规划 DAG、不向用户澄清。
+- Team 执行已移除冗余 Run 级薄封装；`TeamBlackboardService` 在 Run 创建事务提交后直接通过 `TeamStepCommandProducer` 发布 `RunStarted`，并接入 RabbitMQ Run Event 分片队列和 Step Execute 队列；`TeamDagCoordinator` 使用 Redis DAG 热投影做依赖解锁和并发计数，`TeamBlackboardService` 与 MySQL 黑板仍保存 Run/Step/Event 事实。
+- Team DAG 状态同步已修复：规划审核通过后根 Step 会同步写入 MySQL `READY`，依赖解锁时 Coordinator 同步 MySQL Step 状态，Step 消费者只根据 MySQL 终态发布完成/失败/重试事件，避免 Redis 投影把 `PENDING` Step 误推进到 Merge/GlobalReview。
+- Team Mermaid 流程图已增加一致性保护：历史 Run 若出现 Step 未完成但后续聚合/终审已出现，会显示状态不一致节点，不再渲染成“已完成”链路；前端 Mermaid 容器改为可横向展开，减少多 Step DAG 节点挤压。
 - Team Run 已按当前用户隔离落 MySQL 黑板，并新增 `/api/team-runs` 与普通聊天历史分开查询；Team 内部调用继续走 `executeInternal`，不写普通聊天会话。
 - 前端 Team 看板进入 Run 后立即刷新一次，随后 1 秒轮询；数据未变化时按 0.5 秒退避，最多 3 秒。页面可看到中文状态、DAG 流程图、风险/质量/Reflexion、冲突/仲裁信息，并下载最终 Markdown。
 
@@ -73,7 +75,7 @@
 
 ## 已知问题
 
-- Agent Team 当前异步执行基于 `TeamExecutionEngine + TaskExecutor`，不是 RabbitMQ Consumer；DAG 推进仍由 MySQL 黑板状态机和线程池完成，后续如需跨实例队列、失败恢复和真正事件驱动 DAG，需要按 MySQL Edge/Outbox + Redis DAG 投影 + RabbitMQ Team command 队列分切片演进。
+- Agent Team 当前已有 RabbitMQ Consumer 和 Redis DAG 投影，但还没有独立 Step Edge 表、MySQL Outbox 或 Reconciler；Redis 投影丢失后的自动恢复仍需补齐。
 - Team Run 取消和手动 Step 重试仍未实现。
 - 部分历史功能经过多轮修改，仍需要继续清理过时文档、死代码和重复 DTO。
 - Docker 后端部署依赖宿主机环境变量；Windows 手动部署优先使用 `scripts/deploy-runtime.ps1`，
@@ -84,8 +86,8 @@
 
 优先级从高到低：
 
-1. 新增 Team Step Edge 表和 Redis DAG 热投影，停止调度层全量扫 JSON 依赖。
-2. Team 执行由 `TeamExecutionEngine + TaskExecutor` 演进为 RabbitMQ Consumer，并通过 Outbox 发布 Team command。
+1. 新增 Team Step Edge 表，停止调度层全量扫 JSON 依赖。
+2. 为 Team command 发布补 MySQL Outbox、epoch / iteration / attemptId 幂等字段和 CAS 边界。
 3. 为 Team Run 增加 Reconciler，支持 Redis 投影丢失后从 MySQL 黑板恢复 ready/running 状态。
 4. 多 Executor 能力匹配继续纳入 MCP 工具标签、知识库范围和模型能力。
 5. 为更多非标准模型协议补原生 usage 解析；不允许回退到本地预估 Token。

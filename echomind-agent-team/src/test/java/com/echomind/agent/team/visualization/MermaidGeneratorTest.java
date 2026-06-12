@@ -81,6 +81,29 @@ class MermaidGeneratorTest {
     }
 
     @Test
+    void doesNotRenderCompletedTerminalWhenRunCompletedButStepsAreUnfinished() {
+        String mermaid = MermaidGenerator.generateFromSnapshots(
+            "活动策划团队",
+            TeamRunStatus.COMPLETED,
+            "COMPLEX",
+            List.of(
+                step("step-1", 1, "venues", "搜索场地", List.of(), TeamStepStatus.PENDING, null, 0),
+                step("step-2", 2, "weather", "查询天气", List.of(), TeamStepStatus.PENDING, null, 0)
+            ),
+            List.of(
+                event(TeamEventType.MERGE_STARTED, null, "MergeAgent 开始聚合 Step 输出"),
+                event(TeamEventType.GLOBAL_REVIEW_STARTED, null, "GlobalReviewer 开始终审"),
+                event(TeamEventType.RUN_COMPLETED, null, "GlobalReviewer completed final report")
+            )
+        );
+
+        assertThat(mermaid).contains("INCONSISTENT[\"状态不一致<br/>Step 未完成，后续阶段已阻断\"]");
+        assertThat(mermaid).doesNotContain("END[\"Run 完成<br/>最终报告已生成\"]");
+        assertThat(mermaid).doesNotContain("MERGE{{");
+        assertThat(mermaid).doesNotContain("GLOBAL_REVIEW{{");
+    }
+
+    @Test
     void rendersEmptyStateWhenPlannerHasNoStepsYet() {
         String mermaid = MermaidGenerator.generateFromSnapshots(
             "活动策划团队",

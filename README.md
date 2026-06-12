@@ -195,9 +195,8 @@ flowchart TB
         A2["TeamBlackboardService"]
     end
 
-    subgraph Engine["执行引擎"]
-        B["TeamExecutionEngine"]
-        B2["TeamStepCommandProducer"]
+    subgraph Engine["Run 发布"]
+        B["TeamStepCommandProducer"]
     end
 
     subgraph Events["事件驱动"]
@@ -235,7 +234,7 @@ flowchart TB
     end
 
     A -->|创建 Run| A2 -->|写 MySQL| P
-    A2 -->|scheduleRun| B -->|RunStarted| B2 --> C
+    A2 -->|scheduleRun| B -->|RunStarted| C
     C -->|顺序消费| E
     E -->|初始化 DAG| E2 --> Q
     E -->|dispatch| D
@@ -263,8 +262,8 @@ RunStarted 事件
 TeamDagCoordinator.onRunStarted()
   ├─ planAndReviewForCoordinator()   ← Planner ↔ Reviewer 闭环
   │    ├─ Planner 拆解 Step
-  │    ├─ Reviewer 审核 → CONTINUE / RETRY / ASK_CLARIFICATION
-  │    └─ 审核通过 → 初始化 Redis DAG
+  │    ├─ Reviewer 审核 → CONTINUE / RETRY / FAILED
+  │    └─ 审核通过 → Run=EXECUTING，根 Step=READY，初始化 Redis DAG
   └─ dispatchReadySteps()
        ├─ 检查 stopping flag
        ├─ Lua claim_step_slot: CAS 抢占并发槽位
@@ -272,12 +271,13 @@ TeamDagCoordinator.onRunStarted()
 
 StepExecutionConsumer (Worker)
   ├─ 检查 stopping flag / 去重 / 幂等
-  ├─ executeStepPublic() → LLM 调用 → SubReview
+  ├─ Step=RUNNING / startedAt / STEP_STARTED
+  ├─ AgentSelector 选择 Executor → executeStepPublic() → LLM 调用 → SubReview
   └─ 发布 StepCompleted → Run Events Queue
 
 TeamDagCoordinator.onStepCompleted()
-  ├─ Lua complete_step: 原子更新 + 级联检查依赖
-  ├─ 新就绪步骤 → dispatchReadySteps()
+  ├─ Lua complete_step: 幂等完成计数 + 原子级联检查依赖
+  ├─ 新就绪步骤写 MySQL READY → dispatchReadySteps()
   └─ DAG 全部完成 → mergeAndReviewResults()
        ├─ MergeAgent 聚合 → ConflictDetector 冲突检测
        ├─ 有冲突 → Planner 仲裁 → MergeAgent 二次聚合
@@ -288,7 +288,7 @@ TeamDagCoordinator.onStepCompleted()
 
 | 阶段 | 审查者 | 允许的决策 | 重试上限 |
 | --- | --- | --- | --- |
-| **PlanReview** | REVIEWER | CONTINUE, RETRY, ASK_CLARIFICATION, FAILED | `maxPlanRetries` |
+| **PlanReview** | REVIEWER | CONTINUE, RETRY, FAILED | `maxPlanRetries` |
 | **SubReview**（每 Step） | SUB_REVIEWER | PASS, REWORK, ACCEPT_WITH_RISK, FAILED | `maxStepRetries` |
 | **ConflictDetection** | ConflictDetector | hasConflict (boolean) | — |
 | **Arbitration** | PLANNER | 仲裁建议（自由文本） | `maxArbitrations` |

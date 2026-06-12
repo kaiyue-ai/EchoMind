@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.echomind.agent.team.state.TeamClarificationStage;
 import com.echomind.agent.team.state.TeamRunStatus;
 import com.echomind.agent.team.state.TeamTaskLevel;
 import lombok.Getter;
@@ -54,18 +53,6 @@ public class TeamRunEntity {
 
     @TableField("simple_fast_path_enabled")
     private boolean simpleFastPathEnabled;
-
-    @TableField("clarification_question")
-    // 任务澄清问题
-    private String clarificationQuestion;
-
-    @TableField("clarification_answer")
-    // 任务澄清回答
-    private String clarificationAnswer;
-
-    @TableField("clarification_stage")
-    // 任务澄清阶段
-    private TeamClarificationStage clarificationStage;
 
     @TableField("plan_review_json")
     // 任务计划审核json

@@ -7,7 +7,6 @@ import com.echomind.agent.team.state.TeamRole;
 import com.echomind.console.auth.AuthContext;
 import com.echomind.console.dto.TeamCreateRequest;
 import com.echomind.console.dto.TeamMemberRequest;
-import com.echomind.console.dto.TeamResumeRequest;
 import com.echomind.console.dto.TeamRunCreateRequest;
 import com.echomind.console.dto.TeamRunView;
 import com.echomind.console.dto.TeamView;
@@ -69,15 +68,8 @@ public class TeamApplicationService {
         return TeamRunView.from(blackboardService.getRun(teamId, AuthContext.userId(), runId));
     }
 
-    public TeamRunView resumeRun(String teamId, String runId, TeamResumeRequest request) {
-        String answer = request == null ? null : request.clarificationAnswer();
-        return TeamRunView.from(blackboardService.resumeRun(
-            teamId,
-            AuthContext.userId(),
-            runId,
-            answer,
-            request == null ? null : request.stepClarificationAnswers()
-        ));
+    public TeamRunView repairRunDag(String teamId, String runId) {
+        return TeamRunView.from(blackboardService.repairRunDag(teamId, AuthContext.userId(), runId));
     }
 
     private List<TeamMemberSpec> toMemberSpecs(TeamCreateRequest request) {

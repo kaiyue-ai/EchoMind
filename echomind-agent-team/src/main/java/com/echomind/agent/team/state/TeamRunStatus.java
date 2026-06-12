@@ -10,7 +10,6 @@ public enum TeamRunStatus {
     EXECUTING,
     MERGING,
     GLOBAL_REVIEWING,
-    NEEDS_CLARIFICATION,
     COMPLETED,
     FAILED
 }

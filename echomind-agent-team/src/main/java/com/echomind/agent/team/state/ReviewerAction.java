@@ -13,6 +13,5 @@ public enum ReviewerAction {
     REMERGE, // 终审要求重新聚合
     PARTIAL_REPLAN, // 部分重新计划
     REPLAN, // 重新计划
-    ASK_CLARIFICATION, // 要求补充信息
     FAILED // 失败
 }

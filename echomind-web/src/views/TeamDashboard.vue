@@ -162,45 +162,6 @@
             </template>
           </ResourceCard>
 
-          <el-alert
-            v-if="currentRun.status === 'NEEDS_CLARIFICATION'"
-            type="warning"
-            show-icon
-            :title="stepClarificationSteps.length ? '历史 Step Review 需要补充信息' : (currentRun.clarificationQuestion || 'Reviewer 需要用户补充信息')"
-          >
-            <div v-if="stepClarificationSteps.length" class="clarify-box step-clarify-box">
-              <div v-for="step in stepClarificationSteps" :key="step.stepId" class="step-clarify-item">
-                <strong>{{ step.stepIndex }}. {{ step.title }}</strong>
-                <p>{{ stepClarificationQuestion(step) }}</p>
-                <el-input
-                  v-model="stepClarificationAnswers[step.stepId]"
-                  type="textarea"
-                  :rows="2"
-                  :placeholder="`补充 ${step.title} 需要的信息...`"
-                />
-              </div>
-              <el-button
-                type="primary"
-                :loading="resuming"
-                :disabled="stepClarificationSubmitDisabled"
-                @click="resumeRun"
-              >
-                继续 Run
-              </el-button>
-            </div>
-            <div v-else class="clarify-box">
-              <el-input v-model="clarificationAnswer" placeholder="补充说明..." />
-              <el-button
-                type="primary"
-                :loading="resuming"
-                :disabled="runClarificationSubmitDisabled"
-                @click="resumeRun"
-              >
-                继续 Run
-              </el-button>
-            </div>
-          </el-alert>
-
           <ResourceCard v-if="currentRun.finalOutput" ref="finalReportRef" :class="currentRun.status === 'FAILED' ? 'failed-panel' : 'final-panel'">
             <template #title>{{ currentRun.status === 'FAILED' ? 'Reviewer 拦截原因' : '最终报告' }}</template>
             <template #actions>
@@ -353,7 +314,6 @@ const {
   creating,
   deleting,
   executing,
-  resuming,
   loadingRuns,
   teamRuns,
   error
@@ -364,8 +324,6 @@ const showCreateTeamDrawer = ref(false)
 const mermaidRef = ref(null)
 const lastRenderedMermaid = ref('')
 const finalReportRef = ref(null)
-const clarificationAnswer = ref('')
-const stepClarificationAnswers = ref({})
 const capabilityOptions = ['planning', 'search', 'weather', 'venue', 'budget', 'coordination', 'review', 'report', 'general']
 const reviewPresetOptions = [
   { label: '质量优先', value: 'quality' },
@@ -398,11 +356,6 @@ const runIsLive = computed(() => {
   return ['PENDING', 'PLANNING', 'PLAN_REVIEWING', 'EXECUTING', 'MERGING', 'GLOBAL_REVIEWING']
     .includes(currentRun.value?.status)
 })
-const stepClarificationSteps = computed(() => (currentRun.value?.steps || []).filter(isStepClarificationRequested))
-const stepClarificationSubmitDisabled = computed(() => {
-  return stepClarificationSteps.value.some(step => !stepClarificationAnswers.value[step.stepId]?.trim())
-})
-const runClarificationSubmitDisabled = computed(() => !clarificationAnswer.value.trim())
 const createTeamDisabled = computed(() => {
   return !newTeam.value.name.trim()
     || agentList.value.length === 0
@@ -430,14 +383,6 @@ watch(mermaidTheme, async () => {
   lastRenderedMermaid.value = ''
   await nextTick()
   renderMermaid()
-})
-
-watch(stepClarificationSteps, (steps) => {
-  const nextAnswers = {}
-  for (const step of steps) {
-    nextAnswers[step.stepId] = stepClarificationAnswers.value[step.stepId] || ''
-  }
-  stepClarificationAnswers.value = nextAnswers
 })
 
 watch(reviewOptions, (options) => {
@@ -592,25 +537,6 @@ async function openRun(run) {
   }
 }
 
-async function resumeRun() {
-  try {
-    if (stepClarificationSteps.value.length) {
-      const stepAnswers = {}
-      for (const step of stepClarificationSteps.value) {
-        stepAnswers[step.stepId] = stepClarificationAnswers.value[step.stepId]?.trim() || ''
-      }
-      await teamStore.resumeRun({ stepClarificationAnswers: stepAnswers })
-      stepClarificationAnswers.value = {}
-    } else {
-      await teamStore.resumeRun({ clarificationAnswer: clarificationAnswer.value.trim() })
-      clarificationAnswer.value = ''
-    }
-    ElMessage.success('已继续 Run')
-  } catch (e) {
-    ElMessage.error('继续失败: ' + (e.response?.data?.error || e.message))
-  }
-}
-
 function addExecutor() {
   newTeam.value.members.push({
     role: 'EXECUTOR',
@@ -627,7 +553,6 @@ function removeMember(index) {
 function statusTone(status) {
   if (status === 'COMPLETED') return 'success'
   if (status === 'FAILED') return 'danger'
-  if (status === 'NEEDS_CLARIFICATION') return 'warning'
   return 'primary'
 }
 
@@ -657,7 +582,6 @@ function runStatusLabel(status) {
     EXECUTING: '执行中',
     MERGING: '聚合中',
     GLOBAL_REVIEWING: '全局终审中',
-    NEEDS_CLARIFICATION: '等待用户澄清',
     COMPLETED: '已完成',
     FAILED: '失败'
   }[status] || status
@@ -741,28 +665,13 @@ function actionLabel(action) {
     REMERGE: '要求重新合并',
     PARTIAL_REPLAN: '历史局部重规划',
     REPLAN: '历史整体重规划',
-    ASK_CLARIFICATION: '请求澄清',
     FAILED: '判定失败'
   }[action] || action
-}
-
-function isStepClarificationRequested(step) {
-  if (!step) return false
-  if (step.reviewStatus === 'ASK_CLARIFICATION') return true
-  return parseJson(step.subReviewJson)?.action === 'ASK_CLARIFICATION'
-}
-
-function stepClarificationQuestion(step) {
-  const decision = parseJson(step?.subReviewJson)
-  const questions = Array.isArray(decision?.questions) ? decision.questions.filter(Boolean) : []
-  if (questions.length) return questions.join(' / ')
-  return decision?.reason || step?.lastReviewReason || currentRun.value?.clarificationQuestion || '请补充该 Step 需要的信息'
 }
 
 function eventTypeLabel(type) {
   return {
     RUN_CREATED: 'Run 已创建',
-    RUN_RESUMED: 'Run 已恢复',
     PLAN_STARTED: '开始规划',
     PLAN_CREATED: '计划已生成',
     PLAN_REVIEW_STARTED: '开始规划审查',
@@ -790,7 +699,6 @@ function eventTypeLabel(type) {
     GLOBAL_REVIEWED: '全局终审完成',
     RETRY_REQUESTED: '要求重试',
     REPLAN_REQUESTED: '要求重规划',
-    CLARIFICATION_REQUESTED: '请求澄清',
     STEP_TIMEOUT: 'Step 超时熔断',
     RUN_TIMEOUT: 'Run 超时熔断',
     RUN_COMPLETED: 'Run 已完成',
@@ -898,10 +806,10 @@ async function renderMermaid() {
       theme: mermaidTheme.value,
       flowchart: {
         htmlLabels: true,
-        nodeSpacing: 10,
-        rankSpacing: 16,
-        padding: 2,
-        useMaxWidth: true
+        nodeSpacing: 26,
+        rankSpacing: 34,
+        padding: 8,
+        useMaxWidth: false
       },
       themeVariables: {
         fontSize: '10px',
@@ -915,8 +823,9 @@ async function renderMermaid() {
     const svgEl = mermaidRef.value.querySelector('svg')
     if (svgEl) {
       svgEl.removeAttribute('height')
-      svgEl.setAttribute('width', '100%')
-      svgEl.style.maxWidth = '100%'
+      svgEl.removeAttribute('width')
+      svgEl.style.minWidth = `${Math.max(760, (currentRun.value.steps?.length ?? 1) * 190)}px`
+      svgEl.style.maxWidth = 'none'
       svgEl.style.height = 'auto'
     }
     lastRenderedMermaid.value = renderKey

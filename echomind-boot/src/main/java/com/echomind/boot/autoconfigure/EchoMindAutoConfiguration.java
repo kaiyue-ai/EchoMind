@@ -796,13 +796,6 @@ public class EchoMindAutoConfiguration {
         return new com.echomind.agent.team.runtime.TeamDeadLetterCompensator(blackboard);
     }
 
-    @Bean
-    public com.echomind.agent.team.runtime.TeamExecutionEngine teamExecutionEngine(
-            @org.springframework.beans.factory.annotation.Autowired(required = false)
-            com.echomind.agent.team.runtime.TeamStepCommandProducer producer) {
-        return new com.echomind.agent.team.runtime.TeamExecutionEngine(producer);
-    }
-
     // Wire DAG store into the blackboard service
     @org.springframework.context.annotation.Bean
     @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(

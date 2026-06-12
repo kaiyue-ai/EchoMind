@@ -6,7 +6,6 @@ import com.rabbitmq.client.Channel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.support.AmqpHeaders;
-
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
@@ -36,44 +35,78 @@ public class TeamRunEventConsumer {
                            @Header(value = "x-death", required = false) List<Map<String, Object>> xDeathHeader) {
         String runId = event.runId();
         try {
-            // Deduplication
             if (dagStore.isMessageProcessed(event.messageId())) {
                 channel.basicAck(deliveryTag, false);
                 return;
             }
 
-            // Count prior requeues from x-death header
-            int priorRetries = countPriorRetries(xDeathHeader);
+            int priorRetries = Math.max(event.retryCount(), countPriorRetries(xDeathHeader));
             if (priorRetries >= MAX_REQUEUE_RETRIES) {
-                log.error("Run event {} retries exhausted ({}), sending to DLQ",
-                    event.messageId(), priorRetries);
+                log.error(
+                    "Run 事件重试耗尽，发送到 DLQ: type={} runId={} stepId={} messageId={} retries={}",
+                    event.getClass().getSimpleName(),
+                    runId,
+                    event.stepId(),
+                    event.messageId(),
+                    priorRetries);
                 channel.basicNack(deliveryTag, false, false);
                 return;
             }
+
             TeamRunEvent enriched = (TeamRunEvent) event.withRetryCount(priorRetries);
 
-            // Process
+            log.debug(
+                "处理 Run 事件: type={} runId={} stepId={} messageId={} retry={}",
+                enriched.getClass().getSimpleName(),
+                runId,
+                enriched.stepId(),
+                enriched.messageId(),
+                enriched.retryCount());
             coordinator.handle(runId, enriched);
 
-            // Mark processed and ack
             dagStore.markMessageProcessed(event.messageId());
             channel.basicAck(deliveryTag, false);
 
         } catch (DagStateConflictException e) {
-            log.warn("DAG state conflict for event {}: {}", event.messageId(), e.getMessage());
+            log.warn("DAG 状态冲突，事件 {}: {}", event.messageId(), e.getMessage());
             try {
-                channel.basicNack(deliveryTag, false, false); // → DLQ
+                channel.basicNack(deliveryTag, false, false);
             } catch (Exception ignored) {
-                // channel error, message will eventually be redelivered
             }
 
         } catch (Exception e) {
-            log.error("Failed to process run event {}, will requeue: {}",
-                event.messageId(), e.getMessage(), e);
+            int nextRetries = Math.max(
+                dagStore.incrementMessageRetry(event.messageId()),
+                Math.max(event.retryCount(), countPriorRetries(xDeathHeader)) + 1);
+            if (nextRetries > MAX_REQUEUE_RETRIES) {
+                log.error(
+                    "处理 Run 事件失败且重试耗尽，发送到 DLQ: type={} runId={} stepId={} messageId={} retries={} error={}",
+                    event.getClass().getSimpleName(),
+                    runId,
+                    event.stepId(),
+                    event.messageId(),
+                    nextRetries - 1,
+                    e.getMessage(),
+                    e);
+                try {
+                    channel.basicNack(deliveryTag, false, false);
+                } catch (Exception ignored) {
+                }
+                return;
+            }
+            log.warn(
+                "处理 Run 事件失败，将重新入队: type={} runId={} stepId={} messageId={} retry={}/{} error={}",
+                event.getClass().getSimpleName(),
+                runId,
+                event.stepId(),
+                event.messageId(),
+                nextRetries,
+                MAX_REQUEUE_RETRIES,
+                e.getMessage(),
+                e);
             try {
-                channel.basicNack(deliveryTag, false, true); // requeue
+                channel.basicNack(deliveryTag, false, true);
             } catch (Exception ignored) {
-                // channel error
             }
         }
     }

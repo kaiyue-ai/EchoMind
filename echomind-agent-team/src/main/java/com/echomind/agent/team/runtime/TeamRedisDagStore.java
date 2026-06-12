@@ -1,7 +1,7 @@
 package com.echomind.agent.team.runtime;
 
 import com.echomind.agent.team.store.TeamStepEntity;
-import com.echomind.common.model.ErrorDetail;
+import com.echomind.agent.team.state.TeamStepStatus;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -21,6 +22,7 @@ public class TeamRedisDagStore {
     static final String STEP_KEY_PREFIX = "echomind:team:run:";
     static final String CONTROL_KEY_PREFIX = "echomind:team:run:";
     static final String PROCESSED_KEY_PREFIX = "echomind:team:msg:";
+    static final String RETRY_KEY_PREFIX = "echomind:team:msg-retry:";
     static final Duration DAG_TTL = Duration.ofHours(2);
     static final Duration PROCESSED_TTL = Duration.ofHours(1);
 
@@ -68,13 +70,29 @@ public class TeamRedisDagStore {
         return PROCESSED_KEY_PREFIX + messageId;
     }
 
+    String retryKey(String messageId) {
+        return RETRY_KEY_PREFIX + messageId;
+    }
+
     // ---- DAG Initialization ----
 
     public void initializeDag(String runId, List<TeamStepEntity> steps, int maxConcurrent) {
+        List<TeamStepEntity> activeSteps = steps == null
+            ? List.of()
+            : steps.stream()
+                .filter(step -> step.getStatus() != TeamStepStatus.SUPERSEDED)
+                .toList();
+        Map<String, TeamStepStatus> statusByStepId = new HashMap<>();
+        for (TeamStepEntity step : activeSteps) {
+            statusByStepId.put(step.getStepId(), step.getStatus());
+        }
+
         String dagKey = dagKey(runId);
         Map<String, String> dagFields = new java.util.HashMap<>();
-        dagFields.put("total_steps", String.valueOf(steps.size()));
-        dagFields.put("completed_count", "0");
+        dagFields.put("total_steps", String.valueOf(activeSteps.size()));
+        dagFields.put("completed_count", String.valueOf(activeSteps.stream()
+            .filter(step -> step.getStatus() == TeamStepStatus.COMPLETED)
+            .count()));
         dagFields.put("running_count", "0");
         dagFields.put("max_concurrent", String.valueOf(maxConcurrent));
         dagFields.put("status", "EXECUTING");
@@ -83,21 +101,21 @@ public class TeamRedisDagStore {
         redis.opsForHash().putAll(dagKey, dagFields);
         redis.expire(dagKey, DAG_TTL);
 
-        for (TeamStepEntity step : steps) {
+        for (TeamStepEntity step : activeSteps) {
             String stepKey = stepKey(runId, step.getStepId());
             Map<String, String> stepFields = new java.util.HashMap<>();
-            stepFields.put("status", "PENDING");
+            stepFields.put("status", redisInitialStatus(step, statusByStepId));
             stepFields.put("deps_json", step.getDependsOnStepIdsJson() != null
                 ? step.getDependsOnStepIdsJson() : "[]");
             stepFields.put("dependents_json", "[]");
-            stepFields.put("retry_count", "0");
-            stepFields.put("output_json", "");
+            stepFields.put("retry_count", String.valueOf(Math.max(0, step.getRetryCount())));
+            stepFields.put("output_json", step.getRawOutput() == null ? "" : truncate(step.getRawOutput(), 2000));
             redis.opsForHash().putAll(stepKey, stepFields);
             redis.expire(stepKey, DAG_TTL);
         }
 
         // Build reverse dependency index
-        for (TeamStepEntity step : steps) {
+        for (TeamStepEntity step : activeSteps) {
             List<String> deps = parseDepIds(step.getDependsOnStepIdsJson());
             for (String depId : deps) {
                 String depKey = stepKey(runId, depId);
@@ -110,11 +128,10 @@ public class TeamRedisDagStore {
             }
         }
 
-        // Mark steps with no dependencies as READY
+        // Mark unfinished steps whose dependencies are already complete as READY.
         List<String> readyNow = new ArrayList<>();
-        for (TeamStepEntity step : steps) {
-            List<String> deps = parseDepIds(step.getDependsOnStepIdsJson());
-            if (deps.isEmpty()) {
+        for (TeamStepEntity step : activeSteps) {
+            if (!isTerminal(step.getStatus()) && dependenciesCompleted(step, statusByStepId)) {
                 String stepKey = stepKey(runId, step.getStepId());
                 redis.opsForHash().put(stepKey, "status", "READY");
                 readyNow.add(step.getStepId());
@@ -158,6 +175,18 @@ public class TeamRedisDagStore {
         redis.execute(releaseSlotScript,
             List.of(dagKey(runId), stepKey(runId, stepId)),
             stepId);
+    }
+
+    public void releaseSlotForRetry(String runId, String stepId, int retryCount) {
+        String dagKey = dagKey(runId);
+        String stepKey = stepKey(runId, stepId);
+        String runningStr = (String) redis.opsForHash().get(dagKey, "running_count");
+        int running = runningStr == null ? 0 : Integer.parseInt(runningStr);
+        redis.opsForHash().put(dagKey, "running_count", String.valueOf(Math.max(0, running - 1)));
+        Map<String, String> fields = new java.util.HashMap<>();
+        fields.put("status", "RETRYING");
+        fields.put("retry_count", String.valueOf(Math.max(0, retryCount)));
+        redis.opsForHash().putAll(stepKey, fields);
     }
 
     // ---- Mark Ready (Lua script 1) ----
@@ -269,6 +298,13 @@ public class TeamRedisDagStore {
 
     public void markMessageProcessed(String messageId) {
         redis.opsForValue().set(processedKey(messageId), "1", PROCESSED_TTL);
+        redis.delete(retryKey(messageId));
+    }
+
+    public int incrementMessageRetry(String messageId) {
+        Long count = redis.opsForValue().increment(retryKey(messageId));
+        redis.expire(retryKey(messageId), PROCESSED_TTL);
+        return count == null ? 1 : count.intValue();
     }
 
     // ---- Helpers ----
@@ -294,5 +330,34 @@ public class TeamRedisDagStore {
     static String truncate(String s, int maxLen) {
         if (s == null) return "";
         return s.length() <= maxLen ? s : s.substring(0, maxLen);
+    }
+
+    private static String redisInitialStatus(TeamStepEntity step, Map<String, TeamStepStatus> statusByStepId) {
+        TeamStepStatus status = step.getStatus();
+        if (status == TeamStepStatus.COMPLETED
+            || status == TeamStepStatus.FAILED
+            || status == TeamStepStatus.RETRYING) {
+            return status.name();
+        }
+        return dependenciesCompleted(step, statusByStepId) ? "READY" : "BLOCKED";
+    }
+
+    private static boolean dependenciesCompleted(TeamStepEntity step, Map<String, TeamStepStatus> statusByStepId) {
+        List<String> deps = parseDepIds(step.getDependsOnStepIdsJson());
+        if (deps.isEmpty()) {
+            return true;
+        }
+        for (String depId : deps) {
+            if (statusByStepId.get(depId) != TeamStepStatus.COMPLETED) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isTerminal(TeamStepStatus status) {
+        return status == TeamStepStatus.COMPLETED
+            || status == TeamStepStatus.FAILED
+            || status == TeamStepStatus.SUPERSEDED;
     }
 }

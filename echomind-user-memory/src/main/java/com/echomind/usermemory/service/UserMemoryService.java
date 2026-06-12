@@ -140,6 +140,11 @@ public class UserMemoryService {
                 .filter(hit -> hit.entryId().equals(item.factId()))
                 .findFirst()
                 .orElse(null);
+            Instant firstObservedAt =
+                old == null || old.firstObservedAt() == null ? observedAt : old.firstObservedAt();
+            Instant lastObservedAt = monotonicAfter(observedAt, old == null ? null : old.lastObservedAt());
+            Instant updatedAt = monotonicAfter(Instant.now(), old == null ? lastObservedAt : old.updatedAt());
+            updatedAt = monotonicAfter(updatedAt, lastObservedAt);
             vectorStore.deleteEntry(userMemoryKey, item.factId());
             vectorStore.save(new UserMemoryEntry(
                 userMemoryKey,
@@ -148,9 +153,9 @@ public class UserMemoryService {
                 item.content(),
                 item.evidence(),
                 item.confidence(),
-                old == null || old.firstObservedAt() == null ? observedAt : old.firstObservedAt(),
-                observedAt,
-                Instant.now()
+                firstObservedAt,
+                lastObservedAt,
+                updatedAt
             ));
             changed++;
         }
@@ -232,5 +237,13 @@ public class UserMemoryService {
 
     private double clampSimilarity(double value) {
         return Math.max(-1, Math.min(1, value));
+    }
+
+    private Instant monotonicAfter(Instant candidate, Instant previous) {
+        Instant value = candidate == null ? Instant.now() : candidate;
+        if (previous != null && !value.isAfter(previous)) {
+            return previous.plusNanos(1);
+        }
+        return value;
     }
 }

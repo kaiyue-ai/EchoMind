@@ -29,11 +29,18 @@ public class MermaidGenerator {
         Set<TeamEventType> occurred = occurredEvents(safeEvents);
         int planRetryCount = countPlanRetries(safeEvents);
         boolean hasPlanReview = occurred.contains(TeamEventType.PLAN_REVIEW_STARTED);
-        boolean hasMerge = occurred.contains(TeamEventType.MERGE_STARTED);
-        boolean hasConflict = occurred.contains(TeamEventType.CONFLICT_DETECTED);
-        boolean hasArbitration = occurred.contains(TeamEventType.ARBITRATION_STARTED);
-        boolean hasGlobalReview = occurred.contains(TeamEventType.GLOBAL_REVIEW_STARTED);
-        boolean hasClarification = occurred.contains(TeamEventType.CLARIFICATION_REQUESTED);
+        boolean rawHasMerge = occurred.contains(TeamEventType.MERGE_STARTED);
+        boolean rawHasConflict = occurred.contains(TeamEventType.CONFLICT_DETECTED);
+        boolean rawHasArbitration = occurred.contains(TeamEventType.ARBITRATION_STARTED);
+        boolean rawHasGlobalReview = occurred.contains(TeamEventType.GLOBAL_REVIEW_STARTED);
+        boolean stepsComplete = stepsComplete(safeSteps);
+        boolean inconsistentPostStep = !stepsComplete
+            && (rawHasMerge || rawHasConflict || rawHasArbitration || rawHasGlobalReview
+                || status == TeamRunStatus.COMPLETED);
+        boolean hasMerge = rawHasMerge && !inconsistentPostStep;
+        boolean hasConflict = rawHasConflict && !inconsistentPostStep;
+        boolean hasArbitration = rawHasArbitration && !inconsistentPostStep;
+        boolean hasGlobalReview = rawHasGlobalReview && !inconsistentPostStep;
 
         StringBuilder sb = new StringBuilder();
         sb.append("flowchart TD\n");
@@ -76,9 +83,10 @@ public class MermaidGenerator {
         if (hasGlobalReview) {
             sb.append("    GLOBAL_REVIEW{{\"").append(escapeLabel(phaseLabel("全局终审", occurred, TeamEventType.GLOBAL_REVIEW_STARTED, TeamEventType.GLOBAL_REVIEWED))).append("\"}}\n");
         }
-        if (hasClarification) {
-            String clarificationMsg = clarificationQuestion(safeEvents);
-            sb.append("    CLARIFICATION{{\"").append(escapeLabel("等待澄清<br/>" + blankToDefault(clarificationMsg, "用户需回答问题"))).append("\"}}\n");
+        if (inconsistentPostStep) {
+            sb.append("    INCONSISTENT[\"")
+                .append(escapeLabel("状态不一致<br/>Step 未完成，后续阶段已阻断"))
+                .append("\"]\n");
         }
 
         boolean[] hasOutgoing = new boolean[safeSteps.size()];
@@ -126,7 +134,9 @@ public class MermaidGenerator {
 
         String lastStepNode = findLastStepNode(safeSteps, hasOutgoing);
 
-        if (hasMerge) {
+        if (inconsistentPostStep) {
+            edges.add("    " + lastStepNode + " --> INCONSISTENT");
+        } else if (hasMerge) {
             edges.add("    " + lastStepNode + " --> MERGE");
         }
 
@@ -147,13 +157,8 @@ public class MermaidGenerator {
 
         String postGlobalReview = hasGlobalReview ? "GLOBAL_REVIEW" : postConflict;
 
-        if (hasClarification) {
-            edges.add("    " + postGlobalReview + " --> CLARIFICATION");
-        }
-
-        String terminalNode = appendTerminal(sb, status, safeSteps, safeEvents, hasOutgoing);
+        String terminalNode = inconsistentPostStep ? null : appendTerminal(sb, status, safeSteps, safeEvents, hasOutgoing);
         if (terminalNode != null) {
-            String terminalSource = hasClarification ? "CLARIFICATION" : postGlobalReview;
             if (status == TeamRunStatus.FAILED) {
                 List<Integer> failed = failedStepIndexes(safeSteps);
                 if (!failed.isEmpty()) {
@@ -161,10 +166,10 @@ public class MermaidGenerator {
                         edges.add("    S" + (index + 1) + " --> " + terminalNode);
                     }
                 } else {
-                    edges.add("    " + terminalSource + " --> " + terminalNode);
+                    edges.add("    " + postGlobalReview + " --> " + terminalNode);
                 }
             } else {
-                edges.add("    " + terminalSource + " --> " + terminalNode);
+                edges.add("    " + postGlobalReview + " --> " + terminalNode);
             }
         }
 
@@ -179,7 +184,7 @@ public class MermaidGenerator {
         if (hasConflict) sb.append("    class CONFLICT phase_conflict;\n");
         if (hasArbitration) sb.append("    class ARBITRATION phase_arbitration;\n");
         if (hasGlobalReview) sb.append("    class GLOBAL_REVIEW phase_review;\n");
-        if (hasClarification) sb.append("    class CLARIFICATION phase_clarification;\n");
+        if (inconsistentPostStep) sb.append("    class INCONSISTENT state_warning;\n");
         sb.append("    class START start;\n");
         return sb.toString();
     }
@@ -225,16 +230,6 @@ public class MermaidGenerator {
         return "已检测";
     }
 
-    private static String clarificationQuestion(List<TeamEventSnapshot> events) {
-        for (int i = events.size() - 1; i >= 0; i--) {
-            TeamEventSnapshot e = events.get(i);
-            if (e.type() == TeamEventType.CLARIFICATION_REQUESTED && e.message() != null && !e.message().isBlank()) {
-                return e.message().length() > 40 ? e.message().substring(0, 40) + "..." : e.message();
-            }
-        }
-        return "";
-    }
-
     private static String findLastStepNode(List<TeamStepSnapshot> steps, boolean[] hasOutgoing) {
         for (int i = steps.size() - 1; i >= 0; i--) {
             if (!hasOutgoing[i]) {
@@ -257,8 +252,8 @@ public class MermaidGenerator {
         sb.append("    classDef phase_merge fill:#1a3c34,stroke:#34d399,color:#d1fae5,stroke-width:2px;\n");
         sb.append("    classDef phase_conflict fill:#4a3000,stroke:#fbbf24,color:#fef3c7,stroke-width:2px;\n");
         sb.append("    classDef phase_arbitration fill:#4a1d1d,stroke:#f87171,color:#fee2e2,stroke-width:2px;\n");
-        sb.append("    classDef phase_clarification fill:#3b2a57,stroke:#c4b5fd,color:#f5f3ff,stroke-width:2px;\n");
         sb.append("    classDef phase_plan_retry fill:#4a2500,stroke:#fb923c,color:#fed7aa,stroke-width:2px;\n");
+        sb.append("    classDef state_warning fill:#4a3000,stroke:#fbbf24,color:#fef3c7,stroke-width:2px;\n");
     }
 
     private static String appendTerminal(StringBuilder sb, TeamRunStatus status, List<TeamStepSnapshot> steps,
@@ -273,11 +268,6 @@ public class MermaidGenerator {
             sb.append("    END[\"Run 完成<br/>最终报告已生成\"]\n");
             sb.append("    class END completed;\n");
             return "END";
-        }
-        if (status == TeamRunStatus.NEEDS_CLARIFICATION) {
-            sb.append("    WAIT[\"等待用户澄清\"]\n");
-            sb.append("    class WAIT terminal;\n");
-            return "WAIT";
         }
         sb.append("    INPROGRESS[\"进行中...\"]\n");
         sb.append("    class INPROGRESS running;\n");
@@ -341,6 +331,20 @@ public class MermaidGenerator {
         return indexes;
     }
 
+    private static boolean stepsComplete(List<TeamStepSnapshot> steps) {
+        boolean hasActiveStep = false;
+        for (TeamStepSnapshot step : steps) {
+            if (step.status() == TeamStepStatus.SUPERSEDED) {
+                continue;
+            }
+            hasActiveStep = true;
+            if (step.status() != TeamStepStatus.COMPLETED) {
+                return false;
+            }
+        }
+        return hasActiveStep;
+    }
+
     private static int indexOfNode(List<TeamStepSnapshot> steps, Map<String, String> nodeIds, String nodeId) {
         for (int i = 0; i < steps.size(); i++) {
             TeamStepSnapshot step = steps.get(i);
@@ -362,7 +366,6 @@ public class MermaidGenerator {
             case EXECUTING -> "执行中";
             case MERGING -> "聚合中";
             case GLOBAL_REVIEWING -> "全局终审中";
-            case NEEDS_CLARIFICATION -> "等待用户澄清";
             case COMPLETED -> "已完成";
             case FAILED -> "失败";
         };

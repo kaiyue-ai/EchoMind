@@ -258,22 +258,27 @@ RabbitMQ 的实际使用面保持收敛：
   hash 出 `shard.N` routing key，消费端监听 `echomind.chat-memory.persist.requests.shard.N`。
 - `echomind.user-memory.requests`：用户长期记忆事件队列。主应用发布，独立 `echomind-user-memory`
   worker 消费。
+- `echomind.team.run.events.shard.N` / `echomind.team.step.execute`：Team Run Event 分片队列和
+  Step Execute 队列。`TeamBlackboardService` 在 Run 创建事务提交后通过 `TeamStepCommandProducer`
+  发布 `RunStarted`，`TeamDagCoordinator` 按 runId
+  串行推进 Redis DAG 投影，`TeamStepExecutionConsumer` 执行 Step 后基于 MySQL 终态发布完成、
+  失败或重试事件。
 
-RabbitMQ 可靠性边界：`echomind.chat.requests`、普通聊天记忆分片队列和
-`echomind.user-memory.requests` 是核心消息，发布端使用 publisher confirm、publisher return、
-`mandatory=true` 和 persistent delivery mode；消费端有限重试后进入 `echomind.dlx` 下的对应
-DLQ。主后端低并发监听 `echomind.chat.requests.dlq`、
-`echomind.chat-memory.persist.requests.dlq` 和 `echomind.user-memory.requests.dlq`，
+RabbitMQ 可靠性边界：`echomind.chat.requests`、普通聊天记忆分片队列、
+`echomind.user-memory.requests` 和 Team Run/Step 队列是核心消息，发布端使用 publisher confirm、
+publisher return、`mandatory=true` 和 persistent delivery mode；消费端有限重试后进入
+`echomind.dlx` 下的对应 DLQ。主后端低并发监听聊天、记忆、用户记忆和 Team DLQ，
 把原始 payload、错误 headers、业务 key 和 traceId 落到 MySQL
 `echomind_rabbitmq_dead_letters`；归档和必要补偿成功后才 ack，失败会保持消息在 DLQ 中可见。
 聊天请求死信会释放入队前冻结的用户 reservation，并向 SSE buffer 推送 `failure` 终态；
-聊天记忆和用户记忆死信只归档，不自动重放，避免重复写历史或重复沉淀长期事实。运维可通过
+聊天记忆、用户记忆和 Team 死信默认只归档，避免重复写历史、重复沉淀长期事实或重复推进 Step。运维可通过
 `POST /api/admin/rabbitmq/dead-letters/{id}/replay` 按记录 id 受控重放到原业务队列。
 在线 SSE token/result 体验不进入 RabbitMQ 强可靠队列；断线恢复仍依赖 `SsePushService`
 的短期内存 buffer 和终态事件。
 
-Agent Team 当前不使用 RabbitMQ；Team Run 由 `TeamExecutionEngine` 做事务提交后的 Run 级调度，
-当前底层仍使用 `TaskExecutor` 在单体进程内异步推进 MySQL 黑板状态。
+Agent Team 当前使用 RabbitMQ + Redis DAG 投影推进：MySQL 保存 Run / Step / Event 事实，
+Redis 只保存可重建的 ready/running/completed、依赖展开和并发计数热状态。任何 Run 终态和
+最终报告都必须以 MySQL 黑板为准，不能只相信 Redis 投影或消息事件。
 
 旧同步聊天入口和旧直连流式入口已删除。前端若需要流式体验，必须先 `POST /api/chat`
 入队，再订阅 `GET /api/chat/stream/{requestId}`；SSE 层只转发事件，不承担模型执行。
@@ -374,30 +379,30 @@ Skill JAR
   协议细节交给 Spring AI。EchoMind 的工具回调仍按 Schema 校验参数。Provider 不允许按具体 Skill
   名称硬编码默认参数或最终答案策略；工具调用结果统一回到 LLM 生成最终答复。
 
-## Agent Team 接口演进方向
+## Agent Team 接口与运行时
 
-Team 已演进为 MySQL 黑板驱动的异步协作：
+Team 已演进为 MySQL 黑板 + Redis DAG 投影 + RabbitMQ 队列驱动的异步协作：
 
 - `GET /api/teams`：只列出当前用户拥有的 Team。
 - `POST /api/teams`：为当前用户创建 Team，Reviewer 必填；成员包含角色、Agent 和能力标签。
 - `DELETE /api/teams/{teamId}`：只允许当前用户硬删除自己拥有的 Team、Member、Run、Step、Event 黑板记录。
-- `POST /api/teams/{teamId}/runs`：只允许在当前用户拥有的 Team 上创建异步 Run，写 MySQL 后由 `TeamExecutionEngine` 后台调度执行。
+- `POST /api/teams/{teamId}/runs`：只允许在当前用户拥有的 Team 上创建异步 Run，写 MySQL 后由 `TeamBlackboardService` 在事务提交后通过 `TeamStepCommandProducer` 发布 `RunStarted` 到 Team Run Event 队列。
 - `GET /api/teams/{teamId}/runs`：查询当前用户在自己 Team 下的 Run。
 - `GET /api/teams/{teamId}/runs/{runId}`：轮询 Run、Step、Event、Reviewer 决策、Mermaid 和最终报告。
-- `POST /api/teams/{teamId}/runs/{runId}/resume`：Reviewer 要求澄清后提交用户补充信息并继续 Run。
+- `POST /api/teams/{teamId}/runs/{runId}/repair-dag`：受控修复当前用户拥有的非终态 Run；仅在没有 `ASSIGNED` / `RUNNING` / `RETRYING` Step 时，从 MySQL Step 事实重建 Redis DAG 热投影，并在事务提交后重新调度可执行 Step。
 - `GET /api/team-runs`：查询当前用户所有 Team Run 历史，与普通聊天会话历史分离。
 
-Team v2 的默认执行链路是 `Planner -> Reviewer 规划审查 -> TeamControlCenter DAG 调度 -> AgentSelector -> Executor -> StepReviewer(每步审查) -> MergeAgent -> ConflictDetector -> PlannerArbitration(必要时) -> GlobalReviewer`。
+Team v2 的默认执行链路是 `Planner -> Reviewer 规划审查 -> TeamDagCoordinator Redis DAG 调度 -> AgentSelector -> Executor -> StepReviewer(每步审查) -> MergeAgent -> ConflictDetector -> PlannerArbitration(必要时) -> GlobalReviewer`。
 Planner 只输出 `taskLevel`、`requiredCapabilities`、`dependsOn`、`riskLevel` 等结构化约束，不在计划里硬指定 Agent；执行前 `AgentSelector` 会把候选 Executor、能力标签和能力匹配分交给模型自主选择，模型选择失败或返回无效候选时才按能力匹配分与 `sortOrder` 稳定兜底。`RiskPolicy` 只给 StepReviewer 提供重点校验提示，不再决定是否进入审查。
 每次 Run 可携带 `reviewOptions` 选择是否启用 PlanReview、每步 Review、GlobalReview 和 SIMPLE 直返；字段名仍为 `subReviewEnabled` 以兼容前端和历史数据。默认保持质量优先，全审查开启且 SIMPLE 不直返。开启 SIMPLE 直返后，`taskLevel=SIMPLE` 且只有一个可执行 Step 时使用规则能力匹配选择单 Executor，执行后直接写最终结果；其他任务继续进入 DAG 并发调度。
 
-Reviewer 分成三段质量闸门：PlanReview 只审 Planner 计划，允许 `CONTINUE`、`RETRY`、`ASK_CLARIFICATION`、`FAILED`；StepReviewer 只审当前 Step 输出，允许 `PASS`、`REWORK`、`ACCEPT_WITH_RISK`、`FAILED`；GlobalReviewer 只审最终 MergeAgent 草稿，允许 `SUCCESS`、`REMERGE`、`FAILED`。
+Reviewer 分成三段质量闸门：PlanReview 只审 Planner 计划，允许 `CONTINUE`、`RETRY`、`FAILED`；StepReviewer 只审当前 Step 输出，允许 `PASS`、`REWORK`、`ACCEPT_WITH_RISK`、`FAILED`；GlobalReviewer 只审最终 MergeAgent 草稿，允许 `SUCCESS`、`REMERGE`、`FAILED`。
 `REWORK` 只重跑当前 Step，并把错误原因、修改意见和上一轮输出摘要写入该 Step 的 `reflectionJson` 后带回 Executor prompt。
 `REMERGE` 只带终审意见重新调用 MergeAgent，不重试 Step、不重规划 DAG、不向用户澄清；超过 `max-merge-attempts` 后 Run 失败。
 MergeAgent 输出后仍先走 ConflictDetector；如 `conflictReportJson.hasConflict=true`，Planner 产出 `arbitrationJson`，MergeAgent 带仲裁结果二次聚合。如果该 Run 关闭 GlobalReview，则直接使用 MergeAgent 输出完成。
 Team 运行保护由 `echomind.team.runtime` 配置：默认 Planner 复审重试 2 次、Step 重做 2 次、Reviewer JSON 修复 3 次、仲裁 2 次、终审重新合并 2 次、并发 Step 7 个、单 Step 180 秒、单 Run 1200 秒；属性类会对外部配置做上限钳制，避免误配成无限或过高重试。
 
-Team 后续 RabbitMQ / Redis 演进目标是：MySQL 继续保存 Run / Step / Event / Edge / Outbox 事实；Redis 保存可重建 DAG 热投影，包括 remaining dependency counter、downstream set、ready queue、running lease 和并发计数；RabbitMQ 只做可靠 Team command 队列，传递 `PLAN_RUN`、`DISPATCH_READY`、`EXECUTE_STEP`、`REVIEW_STEP`、`STEP_COMPLETED`、`STEP_FAILED`、`MERGE_RESULTS`、`GLOBAL_REVIEW`。任何“状态变更后必须发命令”的动作必须先在同一 MySQL 事务写 Outbox，再由 publisher 投递 RabbitMQ；消费者必须用 `controlEpoch`、`planIteration`、`attemptId` 和 MySQL CAS 做幂等，Redis 丢失时由 Reconciler 从 MySQL 重建投影。当前 `TeamExecutionEngine` 是这条路线上先抽出的 Run 级派发边界，后续可把本地 `TaskExecutor` 适配替换为 Team command publisher。
+Team 当前 RabbitMQ / Redis 链路是：`TeamBlackboardService` 在 Run 创建事务提交后通过 `TeamStepCommandProducer` 发布 `RunStarted`，Run Event 队列按 runId 分片保持同一 Run 串行，`TeamDagCoordinator` 初始化或推进 Redis DAG 投影并发布 `ExecuteStepCommand`，Step Execute 队列可并发消费，`TeamStepExecutionConsumer` 执行后读取 MySQL Step 终态再发布 `StepCompleted`、`StepFailed` 或重试命令。MySQL Step 状态必须与 Redis DAG 同步：根 Step 和依赖解锁 Step 入队前要写 `READY`，消费者不能把 `PENDING` / `BLOCKED` / 中间重试态伪装成完成，DAG 完成前必须确认 MySQL active Step 全部 `COMPLETED`。后续仍可补 Step Edge 表、Outbox、epoch / iteration / attemptId 和 Reconciler，但这些增强不能改变 MySQL 事实优先的边界。
 
 不要让 Agent 之间直接互调。Team 协作上下文通过 Run / Step / Event 黑板传递，统一由 Team 运行时服务编排。
 Team 内部的 Planner / Executor / Reviewer / MergeAgent / ConflictDetector LLM 调用走 `AgentOrchestrator.executeInternal`，不读取或写入普通聊天会话历史；前端只通过 Team Run 看板展示黑板数据、DAG 事件和最终报告。看板进入 Run 后立即刷新一次，随后 1 秒轮询；数据未变化时按 0.5 秒退避，最多 3 秒。Team 内部 LLM 用量通过 `TeamUsageRecorder` 端口由 console 层写入 `echomind_ai_call_usage`，归属 Team Run 创建者，并复用用户日/月 Token 配额；固定 operation 为 `echomind.team.planner/reviewer/executor/sub_reviewer/merge/conflict_detector/arbitration/repair`。Team 内部调用会在每次内部模型请求前按本轮 prompt 显式预留用户 quota 和 Provider budget，并复用 Agent Pipeline 的 final `ProviderRequest` preflight 补足工具 schema、附件元信息和输出上限带来的 delta；治理拒绝直接让 Team Run 进入配额或预算失败，不进入修复重试分支。真实 provider usage 返回后再结算 `echomind_token_quota_usage` 与 `echomind_provider_token_budget_usage` 账本。

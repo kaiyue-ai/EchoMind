@@ -1,7 +1,6 @@
 package com.echomind.console.controller.rest;
 
 import com.echomind.console.dto.TeamCreateRequest;
-import com.echomind.console.dto.TeamResumeRequest;
 import com.echomind.console.dto.TeamRunCreateRequest;
 import com.echomind.console.dto.TeamRunView;
 import com.echomind.console.dto.TeamView;
@@ -73,18 +72,17 @@ public class TeamController {
      */
     @GetMapping("/{teamId}/runs/{runId}")
     public ResponseEntity<TeamRunView> getRun(@PathVariable String teamId,
-                                              @PathVariable String runId) {
+                                               @PathVariable String runId) {
         return ResponseEntity.ok(teamService.getRun(teamId, runId));
     }
 
     /**
-     * Reviewer 要求澄清后，用户提交补充信息并继续 Run。
+     * 重建一次非终态 Run 的 Redis DAG，并重新派发已就绪 Step。
      */
-    @PostMapping("/{teamId}/runs/{runId}/resume")
-    public ResponseEntity<TeamRunView> resumeRun(@PathVariable String teamId,
-                                                 @PathVariable String runId,
-                                                 @RequestBody TeamResumeRequest request) {
-        return ResponseEntity.ok(teamService.resumeRun(teamId, runId, request));
+    @PostMapping("/{teamId}/runs/{runId}/repair-dag")
+    public ResponseEntity<TeamRunView> repairRunDag(@PathVariable String teamId,
+                                                    @PathVariable String runId) {
+        return ResponseEntity.ok(teamService.repairRunDag(teamId, runId));
     }
 
 }

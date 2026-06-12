@@ -1,6 +1,7 @@
 package com.echomind.console.config;
 
 import com.echomind.agent.messaging.RabbitReliableMessaging;
+import com.echomind.common.messaging.RabbitQueueNames;
 import com.echomind.console.deadletter.RabbitDeadLetterConsumer;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AcknowledgeMode;
@@ -68,13 +69,17 @@ class RabbitMQConfigTest {
             .containsExactlyInAnyOrder(
                 RabbitReliableMessaging.CHAT_REQUESTS_DLQ,
                 RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ,
-                RabbitReliableMessaging.USER_MEMORY_DLQ
+                RabbitReliableMessaging.USER_MEMORY_DLQ,
+                RabbitQueueNames.TEAM_RUN_EVENTS_DLQ,
+                RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ
             );
         assertThat(bindings).extracting(Binding::getDestination)
             .containsExactlyInAnyOrder(
                 RabbitReliableMessaging.CHAT_REQUESTS_DLQ,
                 RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ,
-                RabbitReliableMessaging.USER_MEMORY_DLQ
+                RabbitReliableMessaging.USER_MEMORY_DLQ,
+                RabbitQueueNames.TEAM_RUN_EVENTS_DLQ,
+                RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ
             );
         assertThat(bindings).extracting(Binding::getExchange)
             .containsOnly(RabbitReliableMessaging.DEAD_LETTER_EXCHANGE);
@@ -106,7 +111,9 @@ class RabbitMQConfigTest {
             .containsExactlyInAnyOrder(
                 RabbitReliableMessaging.CHAT_REQUESTS_DLQ,
                 RabbitReliableMessaging.CHAT_MEMORY_PERSIST_DLQ,
-                RabbitReliableMessaging.USER_MEMORY_DLQ
+                RabbitReliableMessaging.USER_MEMORY_DLQ,
+                RabbitQueueNames.TEAM_RUN_EVENTS_DLQ,
+                RabbitQueueNames.TEAM_STEP_EXECUTE_DLQ
             );
     }
 
