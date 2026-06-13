@@ -30,6 +30,7 @@ public class TeamRedisDagStore {
     private final RedisScript<List> completeStepScript;
     private final RedisScript<String> claimSlotScript;
     private final RedisScript<Long> releaseSlotScript;
+    private final RedisScript<Long> releaseSlotForRetryScript;
     private final RedisScript<Long> markReadyScript;
     private final RedisScript<Long> setControlFlagScript;
     private final TeamJsonSupport json = new TeamJsonSupport();
@@ -38,12 +39,14 @@ public class TeamRedisDagStore {
                              @Qualifier("teamCompleteStepScript") RedisScript<List> completeStepScript,
                              @Qualifier("teamClaimSlotScript") RedisScript<String> claimSlotScript,
                              @Qualifier("teamReleaseSlotScript") RedisScript<Long> releaseSlotScript,
+                             @Qualifier("teamReleaseSlotForRetryScript") RedisScript<Long> releaseSlotForRetryScript,
                              @Qualifier("teamMarkReadyScript") RedisScript<Long> markReadyScript,
                              @Qualifier("teamSetControlFlagScript") RedisScript<Long> setControlFlagScript) {
         this.redis = redis;
         this.completeStepScript = completeStepScript;
         this.claimSlotScript = claimSlotScript;
         this.releaseSlotScript = releaseSlotScript;
+        this.releaseSlotForRetryScript = releaseSlotForRetryScript;
         this.markReadyScript = markReadyScript;
         this.setControlFlagScript = setControlFlagScript;
     }
@@ -177,16 +180,10 @@ public class TeamRedisDagStore {
             stepId);
     }
 
-    public void releaseSlotForRetry(String runId, String stepId, int retryCount) {
-        String dagKey = dagKey(runId);
-        String stepKey = stepKey(runId, stepId);
-        String runningStr = (String) redis.opsForHash().get(dagKey, "running_count");
-        int running = runningStr == null ? 0 : Integer.parseInt(runningStr);
-        redis.opsForHash().put(dagKey, "running_count", String.valueOf(Math.max(0, running - 1)));
-        Map<String, String> fields = new java.util.HashMap<>();
-        fields.put("status", "RETRYING");
-        fields.put("retry_count", String.valueOf(Math.max(0, retryCount)));
-        redis.opsForHash().putAll(stepKey, fields);
+    public Long releaseSlotForRetry(String runId, String stepId, int retryCount) {
+        return redis.execute(releaseSlotForRetryScript,
+            List.of(dagKey(runId), stepKey(runId, stepId)),
+            stepId, String.valueOf(Math.max(0, retryCount)));
     }
 
     // ---- Mark Ready (Lua script 1) ----

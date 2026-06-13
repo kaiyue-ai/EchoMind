@@ -64,6 +64,7 @@
 - Team Mermaid 流程图已增加一致性保护：历史 Run 若出现 Step 未完成但后续聚合/终审已出现，会显示状态不一致节点，不再渲染成“已完成”链路；Run 刚创建、Planner 尚未产出 Step 时也会显示规划阶段节点；前端 Mermaid 容器改为可横向展开，减少多 Step DAG 节点挤压。
 - Team Run 已按当前用户隔离落 MySQL 黑板，并新增 `/api/team-runs` 与普通聊天历史分开查询；Team 内部调用继续走 `executeInternal`，不写普通聊天会话，也跳过用户长期记忆召回和 Agent 知识库召回，避免控制面被普通聊天检索和 query rewrite 拖慢。
 - 前端 Team 看板进入 Run 后立即刷新一次，活跃 Run 以 800ms 间隔轮询并避免重叠请求。页面可看到规划执行中、Step 执行中、DAG 流程图、风险/质量/Reflexion、冲突/仲裁信息，并下载最终 Markdown。
+- Team Run Reconciler 已补齐孤儿 Run 自愈：定期扫描超过宽限窗口的非终态 Run，无 Step 的 Run 重投规划，Step 全完成但未汇总的 Run 重投 DAG 完成命令，没有活动 Step 的未完成 DAG 从 MySQL Step 事实重建 Redis 投影并重新调度 READY Step。
 
 ## 进行中
 
@@ -75,7 +76,7 @@
 
 ## 已知问题
 
-- Agent Team 当前已有 RabbitMQ Consumer 和 Redis DAG 投影，但还没有独立 Step Edge 表、MySQL Outbox 或 Reconciler；Redis 投影丢失后的自动恢复仍需补齐。
+- Agent Team 当前已有 RabbitMQ Consumer、Redis DAG 投影和基础 Reconciler，但还没有独立 Step Edge 表、MySQL Outbox、epoch / iteration / attemptId 等更强幂等边界。
 - Team Run 取消和手动 Step 重试仍未实现。
 - 部分历史功能经过多轮修改，仍需要继续清理过时文档、死代码和重复 DTO。
 - Docker 后端部署依赖宿主机环境变量；Windows 手动部署优先使用 `scripts/deploy-runtime.ps1`，
@@ -88,11 +89,10 @@
 
 1. 新增 Team Step Edge 表，停止调度层全量扫 JSON 依赖。
 2. 为 Team command 发布补 MySQL Outbox、epoch / iteration / attemptId 幂等字段和 CAS 边界。
-3. 为 Team Run 增加 Reconciler，支持 Redis 投影丢失后从 MySQL 黑板恢复 ready/running 状态。
-4. 多 Executor 能力匹配继续纳入 MCP 工具标签、知识库范围和模型能力。
-5. 为更多非标准模型协议补原生 usage 解析；不允许回退到本地预估 Token。
-6. 继续拆分 `EchoMindAutoConfiguration`：优先把 LLM、Memory、Agent Runtime、Messaging 和 Storage 装配分成独立 auto-configuration module。
-7. 继续清理历史冗余代码，尤其是已废弃的 MCP Server 暴露逻辑和重复能力注册路径。
+3. 多 Executor 能力匹配继续纳入 MCP 工具标签、知识库范围和模型能力。
+4. 为更多非标准模型协议补原生 usage 解析；不允许回退到本地预估 Token。
+5. 继续拆分 `EchoMindAutoConfiguration`：优先把 LLM、Memory、Agent Runtime、Messaging 和 Storage 装配分成独立 auto-configuration module。
+6. 继续清理历史冗余代码，尤其是已废弃的 MCP Server 暴露逻辑和重复能力注册路径。
 
 ## 阻塞项
 

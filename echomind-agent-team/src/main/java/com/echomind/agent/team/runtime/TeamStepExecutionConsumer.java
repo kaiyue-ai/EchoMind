@@ -85,7 +85,7 @@ public class TeamStepExecutionConsumer {
                 return;
             }
 
-            dagStore.setStepRunning(runId, stepId);
+            // tryClaimSlot already atomically sets step status to RUNNING in Redis
             blackboard.markStepExecutionAccepted(runId, stepId);
 
             long startedAt = System.currentTimeMillis();

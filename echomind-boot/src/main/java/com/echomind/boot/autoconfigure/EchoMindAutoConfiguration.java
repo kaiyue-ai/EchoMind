@@ -758,13 +758,15 @@ public class EchoMindAutoConfiguration {
             org.springframework.data.redis.core.script.RedisScript<String> claimSlotScript,
             @org.springframework.beans.factory.annotation.Qualifier("teamReleaseSlotScript")
             org.springframework.data.redis.core.script.RedisScript<Long> releaseSlotScript,
+            @org.springframework.beans.factory.annotation.Qualifier("teamReleaseSlotForRetryScript")
+            org.springframework.data.redis.core.script.RedisScript<Long> releaseSlotForRetryScript,
             @org.springframework.beans.factory.annotation.Qualifier("teamMarkReadyScript")
             org.springframework.data.redis.core.script.RedisScript<Long> markReadyScript,
             @org.springframework.beans.factory.annotation.Qualifier("teamSetControlFlagScript")
             org.springframework.data.redis.core.script.RedisScript<Long> setControlFlagScript) {
         return new com.echomind.agent.team.runtime.TeamRedisDagStore(
             teamStringRedisTemplate, completeStepScript, claimSlotScript,
-            releaseSlotScript, markReadyScript, setControlFlagScript);
+            releaseSlotScript, releaseSlotForRetryScript, markReadyScript, setControlFlagScript);
     }
 
     @Bean

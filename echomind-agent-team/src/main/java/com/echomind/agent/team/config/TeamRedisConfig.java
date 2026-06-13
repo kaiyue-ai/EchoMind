@@ -60,4 +60,12 @@ public class TeamRedisConfig {
         script.setResultType(Long.class);
         return script;
     }
+
+    @Bean("teamReleaseSlotForRetryScript")
+    public DefaultRedisScript<Long> teamReleaseSlotForRetryScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("scripts/team-dag-release-slot-for-retry.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
 }
