@@ -216,7 +216,7 @@ flowchart TB
     subgraph Pipeline["执行管线"]
         G["AgentOrchestrator"]
         H["Agent"]
-        I["ExecutionPipeline"]
+        I["ExecutionPipeline<br/>内部调用跳过聊天记忆/知识库召回"]
         J["TeamPromptFactory"]
     end
 
@@ -283,6 +283,12 @@ TeamDagCoordinator.onStepCompleted()
        ├─ 有冲突 → Planner 仲裁 → MergeAgent 二次聚合
        └─ GlobalReviewer 终审 → SUCCESS / REMERGE / FAILED
 ```
+
+Team Run、Step 和 Event 全部按当前登录用户隔离；`GET /api/teams`、`GET /api/teams/{teamId}/runs` 和 `/api/team-runs` 不返回其他用户的数据。前端 Team 看板只展示当前用户自己的 Team 和 Run 历史。
+
+Team 内部 Planner、AgentSelector、Executor、Reviewer、MergeAgent 等调用都走 `AgentOrchestrator.executeInternal`。内部控制面不读取或写入普通聊天会话，也跳过用户长期记忆召回和 Agent 私有知识库召回，避免 Team 规划/调度被聊天记忆、知识库 query rewrite 或外部 embedding/LLM 请求拖慢；Team 需要的上下文只从 MySQL 黑板 Run / Step / Event 组装。
+
+Team 看板的流程图由后端 Mermaid 和前端兜底图共同保证：Run 刚创建、Planner 尚未产出 Step 时也会显示规划阶段节点；Run 进入 `EXECUTING` 后 Step 消费器先写 `RUNNING` / `startedAt` / `STEP_STARTED`，再执行 AgentSelector 和 Executor，因此前端能看到正在执行的 Step。活跃 Run 轮询间隔为 800ms，并带 in-flight guard，避免请求重叠造成卡顿。
 
 ### 审查阶段
 

@@ -1,6 +1,7 @@
 package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
+import com.echomind.common.exception.ModelRoutingException;
 import com.echomind.llm.provider.MockModelProvider;
 import com.echomind.llm.router.DynamicModelRouter;
 import com.echomind.llm.router.ModelCapability;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ModelResolutionStageTest {
 
@@ -31,5 +33,21 @@ class ModelResolutionStageTest {
 
         assertThat(ctx.getModelId()).isEqualTo("mock:fast-tool-model");
         assertThat(ctx.getResolvedModel()).isEqualTo(model);
+    }
+
+    @Test
+    void rejectsInvalidModelIdInsteadOfFallingBackToDefaultModel() {
+        ModelProviderRegistry registry = new ModelProviderRegistry();
+        registry.registerProvider(new MockModelProvider(), List.of(new ModelSpec("mock", "fast-tool-model",
+            Set.of(ModelCapability.TEXT, ModelCapability.FUNCTION), true)));
+        ModelResolutionStage stage = new ModelResolutionStage(new DynamicModelRouter(registry));
+
+        PipelineContext ctx = new PipelineContext();
+        ctx.setSessionId("session-1");
+        ctx.setModelId("mock/fast-tool-model");
+
+        assertThatThrownBy(() -> stage.process(ctx))
+            .isInstanceOf(ModelRoutingException.class)
+            .hasMessageContaining("Invalid modelId format");
     }
 }

@@ -48,6 +48,22 @@ class UserMemoryRetrievalStageTest {
     }
 
     @Test
+    void skipsForInternalExecutionWhenMemoryPersistenceIsDisabled() {
+        UserMemoryStore store = mock(UserMemoryStore.class);
+        UserProfileSnapshotStore snapshotStore = mock(UserProfileSnapshotStore.class);
+        UserMemoryRetrievalStage stage = new UserMemoryRetrievalStage(
+            store, snapshotStore, true, 5, 0.3);
+        PipelineContext ctx = context();
+        ctx.setMemoryPersistenceEnabled(false);
+
+        stage.process(ctx);
+
+        verify(snapshotStore, never()).get("default");
+        verify(store, never()).search("user:default", "我喜欢简洁代码", 5, 0.3, 0.40);
+        assertThat(ctx.getMessages()).isEmpty();
+    }
+
+    @Test
     void injectsUserProfileHits() {
         UserMemoryStore store = mock(UserMemoryStore.class);
         when(store.search("user:default", "我喜欢简洁代码", 5, 0.3, 0.40)).thenReturn(List.of(

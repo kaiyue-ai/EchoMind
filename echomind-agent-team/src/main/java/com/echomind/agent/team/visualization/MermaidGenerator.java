@@ -49,10 +49,10 @@ public class MermaidGenerator {
         sb.append("    START[\"").append(escapeLabel(header(teamName, status, taskLevel, planRetryCount))).append("\"]\n");
 
         if (safeSteps.isEmpty()) {
-            sb.append("    EMPTY[\"暂无 Step<br/>等待 Planner 生成本次 DAG\"]\n");
-            sb.append("    START --> EMPTY\n");
+            sb.append("    PLAN_PHASE[\"").append(escapeLabel(emptyPlanLabel(status))).append("\"]\n");
+            sb.append("    START --> PLAN_PHASE\n");
             sb.append("    class START start;\n");
-            sb.append("    class EMPTY waiting;\n");
+            sb.append("    class PLAN_PHASE ").append(emptyPlanClass(status)).append(";\n");
             return sb.toString();
         }
 
@@ -386,6 +386,29 @@ public class MermaidGenerator {
             case FAILED -> "失败";
             case SUPERSEDED -> "已替换";
         };
+    }
+
+    private static String emptyPlanLabel(TeamRunStatus status) {
+        if (status == TeamRunStatus.PLANNING) {
+            return "规划执行中<br/>Planner 正在生成本次 DAG";
+        }
+        if (status == TeamRunStatus.PENDING) {
+            return "等待调度<br/>Planner 尚未开始";
+        }
+        if (status == TeamRunStatus.FAILED) {
+            return "Run 失败<br/>未生成 Step";
+        }
+        return "等待 Planner 输出<br/>暂无 Step";
+    }
+
+    private static String emptyPlanClass(TeamRunStatus status) {
+        if (status == TeamRunStatus.PLANNING) {
+            return "running";
+        }
+        if (status == TeamRunStatus.FAILED) {
+            return "failed";
+        }
+        return "waiting";
     }
 
     private static String blankToDefault(String value, String fallback) {

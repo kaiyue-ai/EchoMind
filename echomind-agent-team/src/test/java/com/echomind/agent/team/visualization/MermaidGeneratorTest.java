@@ -113,8 +113,9 @@ class MermaidGeneratorTest {
             List.of()
         );
 
-        assertThat(mermaid).contains("EMPTY[\"暂无 Step<br/>等待 Planner 生成本次 DAG\"]");
-        assertThat(mermaid).contains("START --> EMPTY");
+        assertThat(mermaid).contains("PLAN_PHASE[\"规划执行中<br/>Planner 正在生成本次 DAG\"]");
+        assertThat(mermaid).contains("START --> PLAN_PHASE");
+        assertThat(mermaid).contains("class PLAN_PHASE running");
         assertThat(mermaid).doesNotContain("TaskPlanner 规划器");
     }
 

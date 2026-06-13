@@ -28,7 +28,7 @@
 - 已新增独立项目三管理端前端容器 `admin-frontend`，端口 `8081`；客户端端口 `80` 保持对话、Agent、Skill、MCP、Team 工作台，不混入管理端页面。
 - 已新增 Trace 管理前端和后端查询代理接口；未配置查询后端时页面显示未接入，不影响主业务。
 - Trace 管理端默认只展示 `echomind.chat.*` 业务链路，避免管理端刷新和查询接口产生的单 Span 噪声淹没对话链路；页面可切换到全部 Trace。
-- 普通聊天会话列表、历史查询、删除、Redis 最近上下文和异步记忆写入已按当前用户隔离；用户长期事实和画像按用户全局共享；Agent、Skill、MCP、Team 仍为全局资源。
+- 普通聊天会话列表、历史查询、删除、Redis 最近上下文和异步记忆写入已按当前用户隔离；用户长期事实和画像按用户全局共享；Team 定义和 Team Run 按当前用户隔离；Agent、Skill、MCP 仍为全局资源。
 - 用户头像已支持上传到统一对象存储，MySQL 用户表仅保存 `avatar_uri`，前端侧栏可直接更换头像。
 - 管理端账号已和客户端账号分离：管理端使用 `/api/admin/auth/*` 与 `echomind_admin_users`，客户端继续使用 `/api/auth/*` 与 `echomind_users`，两类 token 不互认。
 - 已新增 `echomind_ai_call_usage` 调用用量表和管理端用户用量页面：支持查看所有客户端总 Token、客户端用户列表、单用户总 Token、每次调用 Token 和 TraceID。
@@ -61,9 +61,9 @@
 - Team Review 语义已收窄为三段质量闸门：PlanReview 只允许计划阶段继续、重试或失败；StepReviewer 只审当前 Step，可通过、重做当前 Step、带风险接受或失败；GlobalReviewer 只审最终合并稿，可通过、要求 MergeAgent 重新合并或失败，不再重试 Step、不重规划 DAG、不向用户澄清。
 - Team 执行已移除冗余 Run 级薄封装；`TeamBlackboardService` 在 Run 创建事务提交后直接通过 `TeamStepCommandProducer` 发布 `RunStarted`，并接入 RabbitMQ Run Event 分片队列和 Step Execute 队列；`TeamDagCoordinator` 使用 Redis DAG 热投影做依赖解锁和并发计数，`TeamBlackboardService` 与 MySQL 黑板仍保存 Run/Step/Event 事实。
 - Team DAG 状态同步已修复：规划审核通过后根 Step 会同步写入 MySQL `READY`，依赖解锁时 Coordinator 同步 MySQL Step 状态，Step 消费者只根据 MySQL 终态发布完成/失败/重试事件，避免 Redis 投影把 `PENDING` Step 误推进到 Merge/GlobalReview。
-- Team Mermaid 流程图已增加一致性保护：历史 Run 若出现 Step 未完成但后续聚合/终审已出现，会显示状态不一致节点，不再渲染成“已完成”链路；前端 Mermaid 容器改为可横向展开，减少多 Step DAG 节点挤压。
-- Team Run 已按当前用户隔离落 MySQL 黑板，并新增 `/api/team-runs` 与普通聊天历史分开查询；Team 内部调用继续走 `executeInternal`，不写普通聊天会话。
-- 前端 Team 看板进入 Run 后立即刷新一次，随后 1 秒轮询；数据未变化时按 0.5 秒退避，最多 3 秒。页面可看到中文状态、DAG 流程图、风险/质量/Reflexion、冲突/仲裁信息，并下载最终 Markdown。
+- Team Mermaid 流程图已增加一致性保护：历史 Run 若出现 Step 未完成但后续聚合/终审已出现，会显示状态不一致节点，不再渲染成“已完成”链路；Run 刚创建、Planner 尚未产出 Step 时也会显示规划阶段节点；前端 Mermaid 容器改为可横向展开，减少多 Step DAG 节点挤压。
+- Team Run 已按当前用户隔离落 MySQL 黑板，并新增 `/api/team-runs` 与普通聊天历史分开查询；Team 内部调用继续走 `executeInternal`，不写普通聊天会话，也跳过用户长期记忆召回和 Agent 知识库召回，避免控制面被普通聊天检索和 query rewrite 拖慢。
+- 前端 Team 看板进入 Run 后立即刷新一次，活跃 Run 以 800ms 间隔轮询并避免重叠请求。页面可看到规划执行中、Step 执行中、DAG 流程图、风险/质量/Reflexion、冲突/仲裁信息，并下载最终 Markdown。
 
 ## 进行中
 

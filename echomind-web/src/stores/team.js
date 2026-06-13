@@ -1,9 +1,7 @@
 import { defineStore } from 'pinia'
 import api from '../api'
 
-const POLLING_INITIAL_DELAY_MS = 1000
-const POLLING_MAX_DELAY_MS = 3000
-const POLLING_BACKOFF_MS = 500
+const POLLING_ACTIVE_DELAY_MS = 800
 
 /**
  * Agent Team状态中心。
@@ -23,8 +21,9 @@ export const useTeamStore = defineStore('team', {
     userRuns: [],
     teamRuns: [],
     pollingTimer: null,
-    pollingDelay: POLLING_INITIAL_DELAY_MS,
+    pollingDelay: POLLING_ACTIVE_DELAY_MS,
     lastRunSnapshot: '',
+    pollingInFlight: false,
     loading: false,
     loadingRuns: false,
     creating: false,
@@ -152,10 +151,8 @@ export const useTeamStore = defineStore('team', {
         if (nextSnapshot !== this.lastRunSnapshot) {
           this.currentRun = nextRun
           this.lastRunSnapshot = nextSnapshot
-          this.pollingDelay = POLLING_INITIAL_DELAY_MS
-        } else {
-          this.pollingDelay = Math.min(this.pollingDelay + POLLING_BACKOFF_MS, POLLING_MAX_DELAY_MS)
         }
+        this.pollingDelay = POLLING_ACTIVE_DELAY_MS
         if (this.isTerminalRun(nextRun.status)) {
           this.stopPolling()
           this.currentRun = nextRun
@@ -171,12 +168,18 @@ export const useTeamStore = defineStore('team', {
     },
     startPolling(runId) {
       this.stopPolling()
-      this.pollingDelay = POLLING_INITIAL_DELAY_MS
+      this.pollingDelay = POLLING_ACTIVE_DELAY_MS
       this.lastRunSnapshot = ''
       const tick = () => {
+        if (this.pollingInFlight) {
+          this.pollingTimer = window.setTimeout(tick, this.pollingDelay)
+          return
+        }
+        this.pollingInFlight = true
         this.refreshRun(runId)
           .catch(() => {})
           .finally(() => {
+            this.pollingInFlight = false
             if (!this.pollingTimer || this.isTerminalRun(this.currentRun?.status)) return
             this.pollingTimer = window.setTimeout(tick, this.pollingDelay)
           })
@@ -188,7 +191,8 @@ export const useTeamStore = defineStore('team', {
         window.clearTimeout(this.pollingTimer)
         this.pollingTimer = null
       }
-      this.pollingDelay = POLLING_INITIAL_DELAY_MS
+      this.pollingDelay = POLLING_ACTIVE_DELAY_MS
+      this.pollingInFlight = false
     },
     isTerminalRun(status) {
       return ['COMPLETED', 'FAILED'].includes(status)

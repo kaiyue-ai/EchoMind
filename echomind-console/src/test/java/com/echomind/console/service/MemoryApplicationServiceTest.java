@@ -3,6 +3,8 @@ package com.echomind.console.service;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.common.model.MessageAttachment;
 import com.echomind.common.model.SessionSummary;
+import com.echomind.console.auth.AuthContext;
+import com.echomind.console.auth.AuthUser;
 import com.echomind.memory.MemoryManager;
 import com.echomind.skill.storage.ObjectStorageService;
 import org.junit.jupiter.api.Test;
@@ -14,6 +16,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -24,6 +27,48 @@ import static org.mockito.Mockito.when;
  * 合法请求则直接委托给当前“用户 + 一次对话一份记忆”的事实来源。</p>
  */
 class MemoryApplicationServiceTest {
+
+    @Test
+    void listSessionsUsesCurrentAuthenticatedUser() {
+        MemoryManager memoryManager = mock(MemoryManager.class);
+        MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        when(memoryManager.listSessions("user-a")).thenReturn(List.of(
+            new SessionSummary("session-a", 1, "用户 A 的历史", Instant.now())
+        ));
+
+        try {
+            List<SessionSummary> result = service.listSessions();
+
+            assertThat(result)
+                .extracting(SessionSummary::sessionId)
+                .containsExactly("session-a");
+            verify(memoryManager).listSessions("user-a");
+        } finally {
+            AuthContext.clear();
+        }
+    }
+
+    @Test
+    void getChatHistoryUsesCurrentAuthenticatedUser() {
+        MemoryManager memoryManager = mock(MemoryManager.class);
+        MemoryApplicationService service = new MemoryApplicationService(memoryManager, mock(ObjectStorageService.class));
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        when(memoryManager.getFullContext("user-a", "session-a")).thenReturn(List.of(
+            AgentMessage.user("用户 A 的消息")
+        ));
+
+        try {
+            List<AgentMessage> result = service.getChatHistory("session-a");
+
+            assertThat(result)
+                .extracting(AgentMessage::content)
+                .containsExactly("用户 A 的消息");
+            verify(memoryManager).getFullContext("user-a", "session-a");
+        } finally {
+            AuthContext.clear();
+        }
+    }
 
     @Test
     void listSessionsStripsLeakedHiddenMemoryDecisionFromPreview() {
