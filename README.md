@@ -198,62 +198,50 @@ flowchart TB
         A2["TeamBlackboardService"]
     end
 
-    subgraph Engine["Run 发布"]
-        B["TeamStepCommandProducer"]
+    subgraph Queues["消息队列"]
+        C["Run Events Queue<br/>16 shards × 1 consumer"]
+        Ctrl["Control Queue<br/>4 consumers + per‑run lock"]
+        D["Step Execute Queue<br/>1 queue × N consumers"]
     end
 
-    subgraph Events["事件驱动"]
-        C["RabbitMQ: Run Events Queue<br/>16 shards × 1 consumer"]
-        D["RabbitMQ: Step Execute Queue<br/>1 queue × N consumers"]
-        Ctrl["RabbitMQ: Control Queue<br/>PLAN_AND_REVIEW / DAG_COMPLETE"]
-    end
-
-    subgraph Coordinator["DAG 协调器"]
-        E["TeamDagCoordinator"]
-        E2["TeamRedisDagStore<br/>Lua 脚本原子操作"]
-    end
-
-    subgraph Workers["Worker 池"]
-        CW["TeamControlConsumer<br/>4 consumers + per‑run lock"]
+    subgraph Workers["Worker"]
+        CW["TeamControlConsumer"]
         F["TeamStepExecutionConsumer"]
     end
 
-    subgraph Pipeline["执行管线"]
-        J["TeamPromptFactory<br/>角色 Prompt 生成"]
-        G["AgentOrchestrator<br/>executeInternal"]
-        H["Agent"]
-        I["ExecutionPipeline<br/>通用串行管道"]
+    subgraph Coordinator["DAG 协调器"]
+        E["TeamDagCoordinator + TeamRedisDagStore<br/>Lua 原子操作"]
     end
 
     subgraph Roles["Agent 角色"]
-        K["Planner"]
-        L["Executor"]
-        M["Reviewer / SubReviewer"]
-        N["Merger"]
-        O["ConflictDetector（Reviewer Prompt）"]
+        K["Planner — 拆解任务为 Step"]
+        M["Reviewer — 审核规划方案"]
+        L["Executor — 执行 Step"]
+        N["Merger — 聚合结果"]
     end
 
     subgraph Storage["持久化"]
         P["MySQL: Team/Run/Step/Event"]
-        Q["Redis: DAG 状态"]
+        Q["Redis: DAG 状态 + 槽位"]
     end
 
-    A -->|创建 Run| A2 -->|写 MySQL| P
-    A2 -->|scheduleRun| B -->|RunStarted| C
+    A -->|创建 Run| A2
+    A2 -->|scheduleRun| C
     C -->|顺序消费| E
-    E -->|RunStarted: 派发规划| Ctrl
-    Ctrl -->|PlanAndReview| CW -->|startRunPlan| A2
-    A2 -->|规划闭环| J -->|Planner Prompt| G -->|executeInternal| H --> I --> K
-    A2 -->|审核闭环| J -->|Reviewer Prompt| G --> M
-    A2 -->|规划通过: 初始化 DAG| E2 --> Q
-    A2 -->|dispatchReadySteps| D
-    D -->|并发执行| F -->|executeStep| J -->|Executor Prompt| G -->|executeInternal| H --> I --> L
-    F -->|StepCompleted| C
-    E -->|DAG 完成| Ctrl -->|completeDag| CW -->|mergeAndReview| A2
-    A2 -->|汇总闭环| J -->|Merger Prompt| G --> N
-    A2 -->|冲突检测| J -->|ConflictDetector Prompt| G --> O
-    E2 -.->|Lua 原子| Q
+    E -->|RunStarted| Ctrl
+    Ctrl --> CW -->|planAndReviewForCoordinator| A2
+    A2 -->|调用 Planner 拆解任务| K
+    A2 -->|调用 Reviewer 审核| M
+    M -->|审核通过| A2
+    A2 -->|初始化 Redis DAG + 写 MySQL Step| Q
+    A2 -->|dispatchReadySteps: claimSlot 原子设 RUNNING + 派发| D
+    D --> F -->|executeStep: 调用 Executor| L
+    L -->|StepCompleted| C
+    E -->|DAG 全部完成| Ctrl
+    Ctrl --> CW -->|mergeAndReview| A2
+    A2 -->|调用 Merger 聚合 + Reviewer 终审| N
     A2 -.->|读写| P
+    E -.->|Lua 原子| Q
 ```
 
 ## Agent Team 各阶段说明
