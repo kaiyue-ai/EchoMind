@@ -5,6 +5,7 @@ import com.echomind.agent.team.state.TeamRunStatus;
 import com.echomind.common.mybatis.MybatisPlusMapper;
 import org.apache.ibatis.annotations.Mapper;
 
+import java.time.Instant;
 import java.util.List;
 
 @Mapper
@@ -52,6 +53,15 @@ public interface TeamRunMapper extends MybatisPlusMapper<TeamRunEntity> {
         return selectList(Wrappers.lambdaQuery(TeamRunEntity.class)
             .eq(TeamRunEntity::getUserId, userId)
             .orderByDesc(TeamRunEntity::getCreatedAt));
+    }
+
+    default List<TeamRunEntity> selectNonTerminalUpdatedBefore(Instant cutoff, int limit) {
+        int normalizedLimit = Math.max(1, Math.min(limit, 100));
+        return selectList(Wrappers.lambdaQuery(TeamRunEntity.class)
+            .notIn(TeamRunEntity::getStatus, TeamRunStatus.COMPLETED, TeamRunStatus.FAILED)
+            .lt(TeamRunEntity::getUpdatedAt, cutoff)
+            .orderByAsc(TeamRunEntity::getUpdatedAt)
+            .last("LIMIT " + normalizedLimit));
     }
 
     default void deleteByTeamId(String teamId) {

@@ -4,6 +4,7 @@ import com.echomind.agent.team.runtime.TeamEventSnapshot;
 import com.echomind.agent.team.runtime.TeamStepSnapshot;
 import com.echomind.agent.team.state.TeamEventType;
 import com.echomind.agent.team.state.TeamRunStatus;
+import com.echomind.agent.team.state.TeamStepQualityStatus;
 import com.echomind.agent.team.state.TeamStepStatus;
 
 import java.util.ArrayList;
@@ -57,12 +58,19 @@ public class MermaidGenerator {
         }
 
         Map<String, String> nodeIds = new LinkedHashMap<>();
+        Map<String, String> subReviewNodeIds = new LinkedHashMap<>();
         for (int i = 0; i < safeSteps.size(); i++) {
             TeamStepSnapshot step = safeSteps.get(i);
             String nodeId = "S" + (i + 1);
             nodeIds.put(step.stepId(), nodeId);
             nodeIds.put(step.clientStepId(), nodeId);
             sb.append("    ").append(nodeId).append("[\"").append(escapeLabel(stepLabel(step))).append("\"]\n");
+            // Add SubReview node for each step if SubReview events occurred or qualityStatus indicates review
+            if (hasSubReview(step, occurred)) {
+                String subNodeId = "SUB_S" + (i + 1);
+                subReviewNodeIds.put(step.stepId(), subNodeId);
+                sb.append("    ").append(subNodeId).append("{{\"").append(escapeLabel(subReviewLabel(step, occurred))).append("\"}}\n");
+            }
         }
 
         if (planRetryCount > 0) {
@@ -106,19 +114,25 @@ public class MermaidGenerator {
             List<String> dependencies = step.dependsOnStepIds() == null ? List.of() : step.dependsOnStepIds();
             if (dependencies.isEmpty()) {
                 edges.add("    " + stepSource + " --> " + nodeId);
-                continue;
+            } else {
+                for (String dependency : dependencies) {
+                    String dependencyNode = nodeIds.get(dependency);
+                    if (dependencyNode == null || dependencyNode.equals(nodeId)) {
+                        edges.add("    " + stepSource + " -->|" + "未解析依赖" + "| " + nodeId);
+                        continue;
+                    }
+                    // Route through SubReview node if dependency has one
+                    String sourceNode = subReviewNodeIds.getOrDefault(dependency, dependencyNode);
+                    edges.add("    " + sourceNode + " --> " + nodeId);
+                    int dependencyIndex = indexOfNode(safeSteps, nodeIds, dependencyNode);
+                    if (dependencyIndex >= 0) {
+                        hasOutgoing[dependencyIndex] = true;
+                    }
+                }
             }
-            for (String dependency : dependencies) {
-                String dependencyNode = nodeIds.get(dependency);
-                if (dependencyNode == null || dependencyNode.equals(nodeId)) {
-                    edges.add("    " + stepSource + " -->|" + "未解析依赖" + "| " + nodeId);
-                    continue;
-                }
-                edges.add("    " + dependencyNode + " --> " + nodeId);
-                int dependencyIndex = indexOfNode(safeSteps, nodeIds, dependencyNode);
-                if (dependencyIndex >= 0) {
-                    hasOutgoing[dependencyIndex] = true;
-                }
+            // Connect step to its SubReview node
+            if (subReviewNodeIds.containsKey(step.stepId())) {
+                edges.add("    " + nodeId + " --> " + subReviewNodeIds.get(step.stepId()));
             }
         }
 
@@ -133,14 +147,23 @@ public class MermaidGenerator {
         }
 
         String lastStepNode = findLastStepNode(safeSteps, hasOutgoing);
-
-        if (inconsistentPostStep) {
-            edges.add("    " + lastStepNode + " --> INCONSISTENT");
-        } else if (hasMerge) {
-            edges.add("    " + lastStepNode + " --> MERGE");
+        // If the last step has a SubReview node, route through it
+        String lastEffectiveNode = lastStepNode;
+        for (int i = safeSteps.size() - 1; i >= 0; i--) {
+            String nodeId = "S" + (i + 1);
+            if (nodeId.equals(lastStepNode) && subReviewNodeIds.containsKey(safeSteps.get(i).stepId())) {
+                lastEffectiveNode = subReviewNodeIds.get(safeSteps.get(i).stepId());
+                break;
+            }
         }
 
-        String mergeOrLastStep = hasMerge ? "MERGE" : lastStepNode;
+        if (inconsistentPostStep) {
+            edges.add("    " + lastEffectiveNode + " --> INCONSISTENT");
+        } else if (hasMerge) {
+            edges.add("    " + lastEffectiveNode + " --> MERGE");
+        }
+
+        String mergeOrLastStep = hasMerge ? "MERGE" : lastEffectiveNode;
 
         if (hasConflict) {
             edges.add("    " + mergeOrLastStep + " --> CONFLICT");
@@ -163,7 +186,10 @@ public class MermaidGenerator {
                 List<Integer> failed = failedStepIndexes(safeSteps);
                 if (!failed.isEmpty()) {
                     for (Integer index : failed) {
-                        edges.add("    S" + (index + 1) + " --> " + terminalNode);
+                        String stepNodeId = "S" + (index + 1);
+                        // Route through SubReview if the failed step has one
+                        String source = subReviewNodeIds.getOrDefault(safeSteps.get(index).stepId(), stepNodeId);
+                        edges.add("    " + source + " --> " + terminalNode);
                     }
                 } else {
                     edges.add("    " + postGlobalReview + " --> " + terminalNode);
@@ -253,6 +279,7 @@ public class MermaidGenerator {
         sb.append("    classDef phase_conflict fill:#4a3000,stroke:#fbbf24,color:#fef3c7,stroke-width:2px;\n");
         sb.append("    classDef phase_arbitration fill:#4a1d1d,stroke:#f87171,color:#fee2e2,stroke-width:2px;\n");
         sb.append("    classDef phase_plan_retry fill:#4a2500,stroke:#fb923c,color:#fed7aa,stroke-width:2px;\n");
+        sb.append("    classDef phase_sub_review fill:#1e3a5f,stroke:#60a5fa,color:#dbeafe,stroke-width:2px;\n");
         sb.append("    classDef state_warning fill:#4a3000,stroke:#fbbf24,color:#fef3c7,stroke-width:2px;\n");
     }
 
@@ -277,6 +304,10 @@ public class MermaidGenerator {
     private static void appendStepClasses(StringBuilder sb, List<TeamStepSnapshot> steps) {
         for (int i = 0; i < steps.size(); i++) {
             sb.append("    class S").append(i + 1).append(" ").append(className(steps.get(i).status())).append(";\n");
+            TeamStepQualityStatus qs = steps.get(i).qualityStatus();
+            if (qs != null && qs != TeamStepQualityStatus.PENDING) {
+                sb.append("    class SUB_S").append(i + 1).append(" phase_sub_review;\n");
+            }
         }
     }
 
@@ -305,10 +336,15 @@ public class MermaidGenerator {
     }
 
     private static String stepLabel(TeamStepSnapshot step) {
-        return "#" + step.stepIndex() + " " + blankToDefault(step.title(), "未命名 Step")
+        String base = "#" + step.stepIndex() + " " + blankToDefault(step.title(), "未命名 Step")
             + "<br/>状态：" + stepStatus(step.status())
             + "<br/>Executor：" + blankToDefault(step.assignedAgentId(), "未分配")
             + "<br/>重试：" + step.retryCount();
+        TeamStepQualityStatus qs = step.qualityStatus();
+        if (qs != null && qs != TeamStepQualityStatus.PENDING) {
+            base += "<br/>审查：" + qualityStatusLabel(qs);
+        }
+        return base;
     }
 
     private static String failureReason(List<TeamEventSnapshot> events) {
@@ -388,6 +424,20 @@ public class MermaidGenerator {
         };
     }
 
+    private static String qualityStatusLabel(TeamStepQualityStatus qualityStatus) {
+        if (qualityStatus == null) {
+            return "-";
+        }
+        return switch (qualityStatus) {
+            case PENDING -> "待审查";
+            case PASSED -> "通过";
+            case FLAWED_ACCEPTED -> "有风险放行";
+            case REVIEW_SKIPPED -> "跳过";
+            case RETRY_REQUESTED -> "重试中";
+            case FAILED -> "失败";
+        };
+    }
+
     private static String emptyPlanLabel(TeamRunStatus status) {
         if (status == TeamRunStatus.PLANNING) {
             return "规划执行中<br/>Planner 正在生成本次 DAG";
@@ -413,6 +463,35 @@ public class MermaidGenerator {
 
     private static String blankToDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static boolean hasSubReview(TeamStepSnapshot step, Set<TeamEventType> occurred) {
+        TeamStepQualityStatus qs = step.qualityStatus();
+        // Only show SubReview when it actually happened (not PENDING/null)
+        return qs != null && qs != TeamStepQualityStatus.PENDING;
+    }
+
+    private static String subReviewLabel(TeamStepSnapshot step, Set<TeamEventType> occurred) {
+        String reviewOutcome;
+        if (step.qualityStatus() == null) {
+            reviewOutcome = "待审查";
+        } else {
+            reviewOutcome = switch (step.qualityStatus()) {
+                case PENDING -> "待审查";
+                case PASSED -> "通过";
+                case FLAWED_ACCEPTED -> "有风险放行";
+                case REVIEW_SKIPPED -> "跳过审查";
+                case RETRY_REQUESTED -> "重试中";
+                case FAILED -> "审查失败";
+            };
+        }
+        String label = "SubReview #" + step.stepIndex() + "<br/>" + reviewOutcome;
+        if (step.lastReviewReason() != null && !step.lastReviewReason().isBlank()) {
+            String reason = step.lastReviewReason().length() > 30
+                ? step.lastReviewReason().substring(0, 30) + "..." : step.lastReviewReason();
+            label += "<br/>" + reason;
+        }
+        return label;
     }
 
     private static String escapeLabel(String value) {

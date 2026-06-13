@@ -5,6 +5,7 @@ import com.echomind.agent.AgentFactory;
 import com.echomind.agent.orchestration.AgentOrchestrator;
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.team.messaging.RunStarted;
+import com.echomind.agent.team.messaging.TeamControlAction;
 import com.echomind.agent.team.model.PlannedStep;
 import com.echomind.agent.team.model.ReviewerDecision;
 import com.echomind.agent.team.model.StepReflection;
@@ -367,6 +368,91 @@ public class TeamBlackboardService {
         true);
   }
 
+  @Transactional
+  public boolean reconcileRunFromMysql(String runId, String source) {
+    TeamRunEntity run = runMapper.selectOptionalById(runId).orElse(null);
+    if (run == null || isTerminal(run.getStatus()) || isRunDeleted(runId)) {
+      return false;
+    }
+    if (dagStoreInstance == null || teamStepCommandProducer == null) {
+      log.debug("Skip reconciling run {} because Team DAG runtime is not available", runId);
+      return false;
+    }
+
+    List<TeamStepEntity> steps = stepMapper.selectByRunIdOrderByStepIndexAsc(runId);
+    if (steps.isEmpty()) {
+      if (run.getStatus() == TeamRunStatus.PENDING
+          || run.getStatus() == TeamRunStatus.PLANNING
+          || run.getStatus() == TeamRunStatus.PLAN_REVIEWING) {
+        recordEvent(
+            runId,
+            null,
+            TeamEventType.TEAM_CONTROL_STARTED,
+            null,
+            null,
+            "Run reconciled and planning rescheduled",
+            Map.of("reconcile", true, "source", blankToDefault(source, "unknown")));
+        scheduleRun(runId);
+        return true;
+      }
+      return false;
+    }
+
+    boolean hasActiveStep =
+        steps.stream()
+            .anyMatch(
+                step ->
+                    step.getStatus() == TeamStepStatus.ASSIGNED
+                        || step.getStatus() == TeamStepStatus.RUNNING
+                        || step.getStatus() == TeamStepStatus.RETRYING);
+    if (hasActiveStep) {
+      log.debug("Skip reconciling run {} because it still has active steps", runId);
+      return false;
+    }
+
+    boolean hasFailedStep =
+        activeStepList(steps).stream().anyMatch(step -> step.getStatus() == TeamStepStatus.FAILED);
+    if (hasFailedStep) {
+      failRunFromCoordinator(runId, "Run reconciled as failed because one or more steps failed");
+      return true;
+    }
+
+    boolean allCompleted =
+        !activeStepList(steps).isEmpty()
+            && activeStepList(steps).stream()
+                .allMatch(step -> step.getStatus() == TeamStepStatus.COMPLETED);
+    if (allCompleted) {
+      markRunExecutingFromCoordinator(run);
+      scheduleControl(runId, TeamControlAction.DAG_COMPLETE);
+      recordEvent(
+          runId,
+          null,
+          TeamEventType.TEAM_CONTROL_STARTED,
+          null,
+          null,
+          "Run reconciled and DAG completion rescheduled",
+          Map.of("reconcile", true, "source", blankToDefault(source, "unknown")));
+      return true;
+    }
+
+    repairStepStatesFromMysql(runId, steps);
+    steps = stepMapper.selectByRunIdOrderByStepIndexAsc(runId);
+    markRunExecutingFromCoordinator(run);
+    dagStoreInstance.destroyDag(runId);
+    dagStoreInstance.initializeDag(runId, steps, runtimeProperties.getMaxConcurrentSteps());
+    dagStoreInstance.setDagStatus(runId, "EXECUTING");
+    scheduleReadyStepDispatch(runId);
+    recordEvent(
+        runId,
+        null,
+        TeamEventType.TEAM_CONTROL_STARTED,
+        null,
+        null,
+        "Run reconciled and ready steps rescheduled",
+        Map.of("reconcile", true, "source", blankToDefault(source, "unknown")));
+    return true;
+  }
+
   /** 清除结果制品（用于重新规划） */
   private void clearResultArtifacts(TeamRunEntity run) {
     run.setResultReviewJson(null);
@@ -596,6 +682,13 @@ public class TeamBlackboardService {
     return stepMapper.selectByRunIdOrderByStepIndexAsc(runId).stream()
         .filter(step -> step.getStatus() != TeamStepStatus.SUPERSEDED)
         .toList();
+  }
+
+  private List<TeamStepEntity> activeStepList(List<TeamStepEntity> steps) {
+    if (steps == null || steps.isEmpty()) {
+      return List.of();
+    }
+    return steps.stream().filter(step -> step.getStatus() != TeamStepStatus.SUPERSEDED).toList();
   }
 
   /** 执行简单快路径（单步骤直接执行） */
@@ -2397,6 +2490,28 @@ public class TeamBlackboardService {
       return;
     }
     publishRunStarted(runId);
+  }
+
+  private void scheduleControl(String runId, TeamControlAction action) {
+    if (teamStepCommandProducer == null) {
+      failRun(runId, "TeamStepCommandProducer not available");
+      return;
+    }
+    if (org.springframework.transaction.support.TransactionSynchronizationManager
+            .isSynchronizationActive()
+        && org.springframework.transaction.support.TransactionSynchronizationManager
+            .isActualTransactionActive()) {
+      org.springframework.transaction.support.TransactionSynchronizationManager
+          .registerSynchronization(
+              new org.springframework.transaction.support.TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                  teamStepCommandProducer.publishControl(runId, action);
+                }
+              });
+      return;
+    }
+    teamStepCommandProducer.publishControl(runId, action);
   }
 
   private void publishRunStarted(String runId) {

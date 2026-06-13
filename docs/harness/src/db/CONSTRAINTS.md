@@ -160,6 +160,7 @@ Team 协作不能长期只放内存。当前 Team v2 表结构方向：
 
 Team 黑板是角色记忆互通和调度状态的事实来源。Planner、Executor、Reviewer 不依赖同一个聊天 session 互相“碰上下文”，而是由后端从 Run / Step / Event 组装最小必要上下文。
 Team 当前执行入口是 RabbitMQ：`TeamBlackboardService` 在 Run 创建事务提交后通过 `TeamStepCommandProducer` 发布 `RunStarted`。`TeamRunEventConsumer` 按 runId 分片串行处理轻量 DAG 事件，不能直接执行 Planner/Merger 这类长 LLM 调用；它只派发 `TeamControlCommand` 或推进 Redis DAG 投影并发布 `ExecuteStepCommand`。`TeamControlConsumer` 并发执行规划、DAG 初始化和最终汇总，同一 Run 内用锁串行；`TeamStepExecutionConsumer` 执行单 Step 后只根据 MySQL Step 终态发布完成、失败或重试事件。
+`TeamRunReconciler` 定期扫描超过宽限窗口的非终态 Run，并仅在没有活动 Step 时从 MySQL 事实源恢复队列推进：无 Step 的 Run 重投规划，Step 全完成但未汇总的 Run 重投 DAG 完成命令，未完成 DAG 重建 Redis 热投影并重新调度 READY Step。
 Team 内部调用不能落入 `echomind_chat_sessions` / `echomind_chat_messages`；普通会话历史只保存用户在 Chat 页面发起的真实对话。Team 内部控制面也不能触发普通聊天的用户长期记忆召回或 Agent 知识库召回，避免 Planner、Reviewer、AgentSelector 和 Step 执行被聊天记忆、知识库 query rewrite、embedding 或外部 LLM 请求拖慢。
 删除 Team 是硬删除：必须同时删除 members、runs、steps、events，不保留逻辑删除标记。
 当前 GlobalReviewer 不再修改 DAG：它只允许通过、要求 MergeAgent 重新合并或失败。旧的局部/整体重规划计数字段保留用于历史 Run 展示，新流程不再把终审作为重规划入口。

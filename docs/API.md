@@ -319,7 +319,7 @@ data: {"error":"模型调用失败","traceId":"1f2e3d4c..."}
 
 Team 定义和每一次 Run 都按当前登录用户写入 MySQL 黑板，不进入普通聊天会话历史。
 用户只能列出、执行和删除自己拥有的 Team；旧无 token 请求归 `default` 用户。
-状态推进由 `TaskExecutor` 后台异步执行，前端 Team 看板用 0.25 秒轮询读取 Run/Step/Event。
+状态推进由 RabbitMQ Run Event / TeamControl / Step Execute 队列驱动，MySQL 黑板保存 Run/Step/Event 事实，Redis 保存可重建 DAG 热投影。前端 Team 看板以 800ms 活跃轮询读取当前用户自己的 Run/Step/Event；后端 Reconciler 会修复超过宽限窗口且没有活动 Step 的孤儿 Run。
 
 ### GET `/api/teams` — 列出当前用户的团队
 ```json
