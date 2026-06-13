@@ -271,7 +271,7 @@ TeamDagCoordinator.onRunStarted()
   │    └─ 审核通过 → Run=EXECUTING，根 Step=READY，初始化 Redis DAG
   └─ dispatchReadySteps()
        ├─ 检查 stopping flag
-       ├─ Lua claim_step_slot: CAS 抢占并发槽位
+       ├─ Lua claim_step_slot: CAS 抢占并发槽位 + 原子设置 Step=RUNNING（消除 status/running_count 窗口）
        └─ 发布 ExecuteStep → Step Execute Queue
 
 TeamStepExecutionConsumer (Worker)

@@ -56,7 +56,8 @@ class TeamRedisDagStoreIntegrationTest {
         TeamStepEntity child = step("child", TeamStepStatus.BLOCKED, "[\"root\"]");
         dagStore.initializeDag(runId, List.of(root, child), 2);
         assertThat(dagStore.tryClaimSlot(runId)).isEqualTo("root");
-        dagStore.setStepRunning(runId, "root");
+        // tryClaimSlot now atomically sets step status to RUNNING
+        assertThat(dagStore.getStepStatus(runId, "root")).isEqualTo("RUNNING");
 
         List<String> firstReady = dagStore.completeStepAndCascade(runId, "root", "output");
         List<String> secondReady = dagStore.completeStepAndCascade(runId, "root", "output-again");
@@ -66,6 +67,30 @@ class TeamRedisDagStoreIntegrationTest {
         assertThat(dagStore.getStepStatus(runId, "child")).isEqualTo("READY");
         assertThat(dagStore.tryClaimSlot(runId)).isEqualTo("child");
         assertThat(dagStore.getDagField(runId, "completed_count")).isEqualTo("1");
+    }
+
+    @Test
+    void tryClaimSlotAtomicallySetsStepRunning() {
+        TeamStepEntity stepA = step("step-a", TeamStepStatus.READY, "[]");
+        TeamStepEntity stepB = step("step-b", TeamStepStatus.READY, "[]");
+        dagStore.initializeDag(runId, List.of(stepA, stepB), 3);
+
+        // Before claim: step-a status should be READY
+        assertThat(dagStore.getStepStatus(runId, "step-a")).isEqualTo("READY");
+        assertThat(dagStore.getDagField(runId, "running_count")).isEqualTo("0");
+
+        // Claim step-a: should atomically set status to RUNNING and increment running_count
+        assertThat(dagStore.tryClaimSlot(runId)).isEqualTo("step-a");
+        assertThat(dagStore.getStepStatus(runId, "step-a")).isEqualTo("RUNNING");
+        assertThat(dagStore.getDagField(runId, "running_count")).isEqualTo("1");
+
+        // Claim step-b: same atomic behavior
+        assertThat(dagStore.tryClaimSlot(runId)).isEqualTo("step-b");
+        assertThat(dagStore.getStepStatus(runId, "step-b")).isEqualTo("RUNNING");
+        assertThat(dagStore.getDagField(runId, "running_count")).isEqualTo("2");
+
+        // No more slots available (max_concurrent=3, but no pending ready steps)
+        assertThat(dagStore.tryClaimSlot(runId)).isNull();
     }
 
     private static TeamStepEntity step(String stepId, TeamStepStatus status, String depsJson) {
