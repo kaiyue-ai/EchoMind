@@ -99,6 +99,25 @@ class AgentApplicationServiceTest {
     }
 
     @Test
+    void createOrUpdateRejectsInvalidModelIdBeforePersistence() {
+        AgentFactory factory = mock(AgentFactory.class);
+        AgentPersistenceService persistenceService = mock(AgentPersistenceService.class);
+        AgentApplicationService service = new AgentApplicationService(
+            factory,
+            persistenceService,
+            mock(AgentKnowledgeApplicationService.class)
+        );
+        AgentConfig config = validConfig();
+        config.setModelId("mock/mock-model");
+
+        assertThatThrownBy(() -> service.createOrUpdate(config))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("模型ID格式必须为 provider:model");
+
+        verifyNoInteractions(persistenceService, factory);
+    }
+
+    @Test
     void deleteAgentCleansKnowledgeBeforeRemovingRuntimeAndPersistence() {
         AgentFactory factory = mock(AgentFactory.class);
         AgentPersistenceService persistenceService = mock(AgentPersistenceService.class);

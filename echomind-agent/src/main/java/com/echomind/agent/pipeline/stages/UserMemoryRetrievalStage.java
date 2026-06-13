@@ -74,6 +74,12 @@ public class UserMemoryRetrievalStage implements PipelineStage {
 
     @Override
     public PipelineContext process(PipelineContext ctx) {
+        // Internal control-plane calls, such as Team planner/reviewer/executor prompts, should not pay
+        // for user-memory vector retrieval when chat memory persistence is disabled.
+        if (!ctx.isMemoryPersistenceEnabled()) {
+            log.debug("Skip user memory retrieval for internal execution userMemoryKey={}", ctx.getUserMemoryKey());
+            return ctx;
+        }
         // 如果不需要获取用户画像和历史事实的记忆就直接跳过
         if (!enabled || ctx.getUserMemoryKey() == null || ctx.getUserMemoryKey().isBlank()) {
             log.info("Skip user memory retrieval enabled={} userMemoryKey={}", enabled, ctx.getUserMemoryKey());

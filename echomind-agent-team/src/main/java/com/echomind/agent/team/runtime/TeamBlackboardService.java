@@ -2237,9 +2237,6 @@ public class TeamBlackboardService {
 
   private String dynamicMermaid(
       TeamRunEntity run, List<TeamStepSnapshot> steps, List<TeamEventSnapshot> events) {
-    if (steps == null || steps.isEmpty()) {
-      return run.getMermaidDiagram();
-    }
     TeamEntity team = loadTeamForOwner(run.getTeamId(), run.getUserId());
     return MermaidGenerator.generateFromSnapshots(
         team.getName(),

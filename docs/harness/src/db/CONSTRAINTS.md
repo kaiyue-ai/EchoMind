@@ -92,8 +92,8 @@ memoryKey = userId + ":" + sessionId
 MySQL session key = user_id + session_id
 ```
 
-无 token 的兼容请求和历史无用户数据统一归属 `default` 用户。第一阶段只隔离普通聊天会话和记忆；
-Agent、Skill、MCP、Team 仍是全局资源，不在本阶段引入 RBAC、租户或应用 API Key。
+无 token 的兼容请求和历史无用户数据统一归属 `default` 用户。普通聊天会话和记忆按当前用户隔离；
+Team 定义和 Team Run 也按当前用户隔离。Agent、Skill、MCP 仍是全局资源，不在本阶段引入 RBAC、租户或应用 API Key。
 
 客户端用户和管理端用户均使用 HS256 JWT access token，但必须使用不同 secret、不同 token 类型和不同
 ThreadLocal 上下文；普通请求进入 `AuthContext`，管理端请求进入 `AdminContext`，请求结束必须清理。
@@ -160,10 +160,10 @@ Team 协作不能长期只放内存。当前 Team v2 表结构方向：
 
 Team 黑板是角色记忆互通和调度状态的事实来源。Planner、Executor、Reviewer 不依赖同一个聊天 session 互相“碰上下文”，而是由后端从 Run / Step / Event 组装最小必要上下文。
 Team 当前执行入口是 RabbitMQ：`TeamBlackboardService` 在 Run 创建事务提交后通过 `TeamStepCommandProducer` 发布 `RunStarted`。`TeamRunEventConsumer` 按 runId 分片串行处理轻量 DAG 事件，不能直接执行 Planner/Merger 这类长 LLM 调用；它只派发 `TeamControlCommand` 或推进 Redis DAG 投影并发布 `ExecuteStepCommand`。`TeamControlConsumer` 并发执行规划、DAG 初始化和最终汇总，同一 Run 内用锁串行；`TeamStepExecutionConsumer` 执行单 Step 后只根据 MySQL Step 终态发布完成、失败或重试事件。
-Team 内部调用不能落入 `echomind_chat_sessions` / `echomind_chat_messages`；普通会话历史只保存用户在 Chat 页面发起的真实对话。
+Team 内部调用不能落入 `echomind_chat_sessions` / `echomind_chat_messages`；普通会话历史只保存用户在 Chat 页面发起的真实对话。Team 内部控制面也不能触发普通聊天的用户长期记忆召回或 Agent 知识库召回，避免 Planner、Reviewer、AgentSelector 和 Step 执行被聊天记忆、知识库 query rewrite、embedding 或外部 LLM 请求拖慢。
 删除 Team 是硬删除：必须同时删除 members、runs、steps、events，不保留逻辑删除标记。
 当前 GlobalReviewer 不再修改 DAG：它只允许通过、要求 MergeAgent 重新合并或失败。旧的局部/整体重规划计数字段保留用于历史 Run 展示，新流程不再把终审作为重规划入口。
-Redis DAG 投影必须跟 MySQL Step 状态同步：根 Step 进入队列前 MySQL 要标为 `READY`；依赖解锁后 Coordinator 要把 MySQL Step 标为 `READY`；Step 执行消费者不得把 `PENDING`、`BLOCKED` 或 `RETRYING` 的中间态伪装成完成事件；DAG 完成前必须再次确认 MySQL active Step 全部 `COMPLETED`。
+Redis DAG 投影必须跟 MySQL Step 状态同步：根 Step 进入队列前 MySQL 要标为 `READY`；依赖解锁后 Coordinator 要把 MySQL Step 标为 `READY`；Step 执行消费者拿到可执行 Step 后必须先写 `RUNNING`、`startedAt` 和 `STEP_STARTED`，再执行 AgentSelector / Executor；不得把 `PENDING`、`BLOCKED` 或 `RETRYING` 的中间态伪装成完成事件；DAG 完成前必须再次确认 MySQL active Step 全部 `COMPLETED`。
 
 Team v2 迁移 `20260521_team_v2_dag_reflexion.sql` 会清空旧 Team 数据，避免旧消息总线/旧 Step 格式混入新 DAG 状态机。后续数据迁移如果要保留历史，需要先写显式升级脚本，不要让运行时代码兼容过多旧结构。
 

@@ -91,6 +91,29 @@ class TeamApplicationServiceTest {
     }
 
     @Test
+    void listCurrentUserRunsDelegatesWithAuthenticatedUser() {
+        TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
+        TeamApplicationService service = new TeamApplicationService(blackboard);
+        AuthContext.set(new AuthUser("user-a", "alice", true));
+        when(blackboard.listRunsForUser("user-a"))
+            .thenReturn(List.of(runSnapshot("run-a", "team-a", "user-a", TeamRunStatus.COMPLETED)));
+
+        try {
+            List<TeamRunView> runs = service.listCurrentUserRuns();
+
+            assertThat(runs)
+                .extracting(TeamRunView::runId)
+                .containsExactly("run-a");
+            assertThat(runs)
+                .extracting(TeamRunView::userId)
+                .containsExactly("user-a");
+            verify(blackboard).listRunsForUser("user-a");
+        } finally {
+            AuthContext.clear();
+        }
+    }
+
+    @Test
     void createTeamDelegatesExplicitReviewerMember() {
         TeamBlackboardService blackboard = mock(TeamBlackboardService.class);
         TeamApplicationService service = new TeamApplicationService(blackboard);
@@ -142,10 +165,24 @@ class TeamApplicationServiceTest {
     }
 
     private TeamRunSnapshot runSnapshot(TeamRunStatus status, String finalOutput) {
+        return runSnapshot("run-1", "team-1", "default", status, finalOutput);
+    }
+
+    private TeamRunSnapshot runSnapshot(String runId, String teamId, String userId, TeamRunStatus status) {
+        return runSnapshot(runId, teamId, userId, status, null);
+    }
+
+    private TeamRunSnapshot runSnapshot(
+        String runId,
+        String teamId,
+        String userId,
+        TeamRunStatus status,
+        String finalOutput
+    ) {
         return new TeamRunSnapshot(
-            "run-1",
-            "team-1",
-            "default",
+            runId,
+            teamId,
+            userId,
             "整理需求",
             status,
             "COMPLEX",

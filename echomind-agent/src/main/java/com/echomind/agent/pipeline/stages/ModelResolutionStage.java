@@ -2,6 +2,7 @@ package com.echomind.agent.pipeline.stages;
 
 import com.echomind.agent.pipeline.PipelineContext;
 import com.echomind.agent.pipeline.PipelineStage;
+import com.echomind.common.exception.ModelRoutingException;
 import com.echomind.llm.router.DynamicModelRouter;
 import com.echomind.llm.router.ModelSpec;
 import com.echomind.llm.session.SessionContext;
@@ -28,11 +29,12 @@ public class ModelResolutionStage implements PipelineStage {
         // 创建会话上下文
         SessionContext sessionCtx = SessionContext.create(ctx.getSessionId());
         // 获取对应供应商的对应模型
-        if (ctx.getModelId() != null) {
-            String[] parts = ctx.getModelId().split(":");
-            if (parts.length == 2) { // 一个是供应商,一个是模型名称
-                sessionCtx = sessionCtx.withModel(parts[0], parts[1]);
+        if (ctx.getModelId() != null && !ctx.getModelId().isBlank()) {
+            String[] parts = ctx.getModelId().split(":", -1);
+            if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+                throw new ModelRoutingException("Invalid modelId format, expected provider:model: " + ctx.getModelId());
             }
+            sessionCtx = sessionCtx.withModel(parts[0], parts[1]);
         }
         // 模型解析
         ModelSpec model = router.resolve(sessionCtx);

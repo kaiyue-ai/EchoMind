@@ -227,8 +227,7 @@
 
           <div class="board-grid run-artifact-grid">
             <ResourceCard title="协作流程" class="mermaid-card">
-              <div v-if="currentRun.mermaidDiagram" ref="mermaidRef" class="mermaid-container"></div>
-              <div v-else class="empty-note">Run 启动后实时生成中文 DAG 流程图</div>
+              <div ref="mermaidRef" class="mermaid-container"></div>
             </ResourceCard>
 
             <ResourceCard title="事件时间线" class="timeline-card">
@@ -356,6 +355,9 @@ const runIsLive = computed(() => {
   return ['PENDING', 'PLANNING', 'PLAN_REVIEWING', 'EXECUTING', 'MERGING', 'GLOBAL_REVIEWING']
     .includes(currentRun.value?.status)
 })
+const visibleMermaidDiagram = computed(() => {
+  return currentRun.value?.mermaidDiagram || buildRunFallbackMermaid(currentRun.value)
+})
 const createTeamDisabled = computed(() => {
   return !newTeam.value.name.trim()
     || agentList.value.length === 0
@@ -374,7 +376,7 @@ onBeforeUnmount(() => {
 })
 
 watch(availableAgents, normalizeTeamAgents)
-watch(() => currentRun.value?.mermaidDiagram, async () => {
+watch(visibleMermaidDiagram, async () => {
   await nextTick()
   renderMermaid()
 })
@@ -795,9 +797,47 @@ function downloadFinalReport() {
   URL.revokeObjectURL(url)
 }
 
+function buildRunFallbackMermaid(run) {
+  if (!run) return ''
+  return [
+    'flowchart TD',
+    '    classDef start fill:#111827,stroke:#38bdf8,color:#f8fafc,stroke-width:2px;',
+    '    classDef waiting fill:#1f2937,stroke:#64748b,color:#cbd5e1;',
+    '    classDef running fill:#123c69,stroke:#38bdf8,color:#ffffff,stroke-width:2px;',
+    '    classDef failed fill:#5c1b1b,stroke:#fb7185,color:#fff1f2,stroke-width:2px;',
+    `    START["${escapeMermaidLabel(`本次协作流程<br/>团队：${selectedTeam.value?.name || '-'}<br/>状态：${runStatusLabel(run.status)}<br/>任务等级：${taskLevelLabel(run.taskLevel)}`)}"]`,
+    `    PLAN["${escapeMermaidLabel(fallbackPhaseLabel(run.status))}"]`,
+    '    START --> PLAN',
+    '    class START start;',
+    `    class PLAN ${fallbackPhaseClass(run.status)};`
+  ].join('\n')
+}
+
+function fallbackPhaseLabel(status) {
+  if (status === 'PLANNING') return '规划执行中<br/>Planner 正在生成本次 DAG'
+  if (status === 'PENDING') return '等待调度<br/>Planner 尚未开始'
+  if (status === 'FAILED') return 'Run 失败<br/>未生成 Step'
+  return '等待 Planner 输出<br/>暂无 Step'
+}
+
+function fallbackPhaseClass(status) {
+  if (status === 'PLANNING') return 'running'
+  if (status === 'FAILED') return 'failed'
+  return 'waiting'
+}
+
+function escapeMermaidLabel(value) {
+  return String(value || '-')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '＂')
+    .replaceAll('\r', ' ')
+    .replaceAll('\n', '<br/>')
+}
+
 async function renderMermaid() {
-  if (!mermaidRef.value || !currentRun.value?.mermaidDiagram) return
-  const renderKey = `${mermaidTheme.value}:${currentRun.value.mermaidDiagram}`
+  const diagram = visibleMermaidDiagram.value
+  if (!mermaidRef.value || !diagram) return
+  const renderKey = `${mermaidTheme.value}:${diagram}`
   if (lastRenderedMermaid.value === renderKey && mermaidRef.value.innerHTML) return
   try {
     const mermaid = await import('mermaid')
@@ -818,7 +858,7 @@ async function renderMermaid() {
       }
     })
     const id = 'team-flow-' + currentRun.value.runId.replaceAll('-', '') + '-' + Date.now()
-    const { svg } = await mermaid.default.render(id, currentRun.value.mermaidDiagram)
+    const { svg } = await mermaid.default.render(id, diagram)
     mermaidRef.value.innerHTML = svg
     const svgEl = mermaidRef.value.querySelector('svg')
     if (svgEl) {
@@ -830,7 +870,7 @@ async function renderMermaid() {
     }
     lastRenderedMermaid.value = renderKey
   } catch (e) {
-    mermaidRef.value.innerHTML = '<pre>' + currentRun.value.mermaidDiagram + '</pre>'
+    mermaidRef.value.innerHTML = '<pre>' + diagram + '</pre>'
     lastRenderedMermaid.value = renderKey
   }
 }

@@ -90,9 +90,24 @@ public class AgentApplicationService {
         if (config.getModelId() == null || config.getModelId().isBlank()) {
             throw new IllegalArgumentException("模型ID不能为空");
         }
+        if (!isValidModelId(config.getModelId())) {
+            throw new IllegalArgumentException("模型ID格式必须为 provider:model");
+        }
         if (config.getSkillIds() == null) {
             config.setSkillIds(List.of());
         }
+    }
+
+    private boolean isValidModelId(String modelId) {
+        if (modelId == null) {
+            return false;
+        }
+        int separator = modelId.indexOf(':');
+        return separator > 0
+            && separator == modelId.lastIndexOf(':')
+            && separator < modelId.length() - 1
+            && !modelId.substring(0, separator).isBlank()
+            && !modelId.substring(separator + 1).isBlank();
     }
 
     /**

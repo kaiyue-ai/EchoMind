@@ -6,6 +6,7 @@ import com.echomind.agent.pipeline.RetrievalQueryRewriter;
 import com.echomind.common.model.AgentMessage;
 import com.echomind.memory.knowledge.AgentKnowledgeHit;
 import com.echomind.memory.knowledge.AgentKnowledgeService;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -16,6 +17,7 @@ import java.util.stream.Collectors;
  * <p>会话记忆解决“这个对话之前说过什么”，知识库解决“这个 Agent 上传过哪些资料”。
  * 两者不能混成一份记忆，否则不同 Agent 的知识会互相污染。</p>
  */
+@Slf4j
 public class KnowledgeRetrievalStage implements PipelineStage {
 
     // 知识库服务
@@ -45,6 +47,10 @@ public class KnowledgeRetrievalStage implements PipelineStage {
     @Override
     // 搜素与用户消息相关的向量数据库的三四条消息
     public PipelineContext process(PipelineContext ctx) {
+        if (!ctx.isMemoryPersistenceEnabled()) {
+            log.debug("Skip agent knowledge retrieval for internal execution agentId={}", ctx.getAgentId());
+            return ctx;
+        }
         String retrievalQuery = queryRewriter.queryFor(ctx);
         List<AgentKnowledgeHit> hits = knowledgeService.search(ctx.getAgentId(), retrievalQuery, topK);
         return injectHits(ctx, hits);
