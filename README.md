@@ -205,7 +205,7 @@ flowchart TB
     subgraph Events["事件驱动"]
         C["RabbitMQ: Run Events Queue<br/>16 shards × 1 consumer"]
         D["RabbitMQ: Step Execute Queue<br/>1 queue × N consumers"]
-        Ctrl["RabbitMQ: Control Queue<br/>PlanAndReview / DAG_COMPLETE"]
+        Ctrl["RabbitMQ: Control Queue<br/>PLAN_AND_REVIEW / DAG_COMPLETE"]
     end
 
     subgraph Coordinator["DAG 协调器"]
@@ -214,12 +214,13 @@ flowchart TB
     end
 
     subgraph Workers["Worker 池"]
+        CW["TeamControlConsumer<br/>4 consumers + per‑run lock"]
         F["TeamStepExecutionConsumer"]
     end
 
     subgraph Pipeline["执行管线"]
         J["TeamPromptFactory<br/>角色 Prompt 生成"]
-        G["AgentOrchestrator"]
+        G["AgentOrchestrator<br/>executeInternal"]
         H["Agent"]
         I["ExecutionPipeline<br/>通用串行管道"]
     end
@@ -240,18 +241,17 @@ flowchart TB
     A -->|创建 Run| A2 -->|写 MySQL| P
     A2 -->|scheduleRun| B -->|RunStarted| C
     C -->|顺序消费| E
-    E -->|初始化 DAG| E2 --> Q
-    E -->|dispatch| D
-    D -->|并发执行| F
-    F -->|executeStep| J -->|生成 Prompt| G -->|executeInternal| H --> I
-    G -->|调用| K
-    G -->|调用| L
-    G -->|调用| M
-    G -->|调用| N
-    G -->|调用| O
+    E -->|RunStarted: 派发规划| Ctrl
+    Ctrl -->|PlanAndReview| CW -->|startRunPlan| A2
+    A2 -->|规划闭环| J -->|Planner Prompt| G -->|executeInternal| H --> I --> K
+    A2 -->|审核闭环| J -->|Reviewer Prompt| G --> M
+    A2 -->|规划通过: 初始化 DAG| E2 --> Q
+    A2 -->|dispatchReadySteps| D
+    D -->|并发执行| F -->|executeStep| J -->|Executor Prompt| G -->|executeInternal| H --> I --> L
     F -->|StepCompleted| C
-    E -->|DAG 完成| Ctrl
-    Ctrl -->|completeDag| A2
+    E -->|DAG 完成| Ctrl -->|completeDag| CW -->|mergeAndReview| A2
+    A2 -->|汇总闭环| J -->|Merger Prompt| G --> N
+    A2 -->|冲突检测| J -->|ConflictDetector Prompt| G --> O
     E2 -.->|Lua 原子| Q
     A2 -.->|读写| P
 ```
