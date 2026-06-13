@@ -107,8 +107,8 @@ flowchart TB
 | ----------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `echomind-common`       | 共享模型（AgentMessage）、异常体系、JSON Schema 校验                                                                      |
 | `echomind-skill-api`    | Skill 接口规范 —— 零依赖纯 SPI                                                                                      |
-| `echomind-llm`          | 动态模型路由，基于 Spring AI adapter 接入 DeepSeek、OpenAI-compatible Provider（Qwen/阿里云百炼通过 OpenAI 兼容协议接入）和 Mock                                           |
-| `echomind-memory`       | MySQL 完整会话历史供前端展示 + Redis 最近上下文供 LLM 读取 + Spring AI Milvus VectorStore 向量检索，普通聊天记忆按 `userId + sessionId` 隔离 |
+| `echomind-llm`          | 动态模型路由，基于 Spring AI  接入 DeepSeek、OpenAI-compatible Provider（Qwen/阿里云百炼通过 OpenAI 兼容协议接入）和 Mock                                           |
+| `echomind-memory`       | MySQL 完整会话历史供前端展示 + Redis 最近上下文以及用户画像供 LLM 读取 + Spring AI Milvus VectorStore 向量检索，普通聊天记忆按 `userId + sessionId` 隔离 |
 | `echomind-user-memory`  | RabbitMQ 异步消费主 LLM 决策后的聊天事件，用轻量模型即时更新 Milvus 用户事实和 Redis 用户画像快照                                             |
 | `echomind-mcp`          | MCP 工具 SPI 接口定义（ToolProvider / ToolSpec / ToolResult），运行时客户端和传输适配器在 echomind-agent 中实现                                             |
 | `echomind-skill`        | Skill 注册中心、ClassLoader 隔离、市场管理                                                                              |
