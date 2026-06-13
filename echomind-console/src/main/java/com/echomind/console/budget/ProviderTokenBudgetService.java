@@ -65,12 +65,12 @@ public class ProviderTokenBudgetService {
         this.clock = clock == null ? Clock.system(BUDGET_ZONE) : clock;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<String> reserveProviderBudget(String providerId, String requestId, long estimatedTokens) {
         return reserveProviderBudget(providerId, requestId, null, null, estimatedTokens);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<String> reserveProviderBudget(String providerId, String requestId, String agentId, String sessionId,
                                               long estimatedTokens) {
         if (providerId == null || providerId.isBlank()) {

@@ -1,4 +1,4 @@
-import paramiko, sys, os, time, glob as globmod
+import paramiko, sys, os, time, glob as globmod, hashlib
 
 REMOTE_HOST = "106.55.54.63"
 REMOTE_PORT = 22
@@ -27,13 +27,41 @@ def remote_exec(c, cmd, timeout=120):
     exit_code = stdout.channel.recv_exit_status()
     return out, err, exit_code
 
-def upload_file(sftp, local, remote):
+def _md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def upload_file(sftp, local, remote, ssh_client=None):
     size = os.path.getsize(local)
     log(f"  uploading {os.path.basename(local)} ({size/1024/1024:.1f} MB) -> {remote}")
     sftp.put(local, remote)
+    # MD5 verify only for large files (>1MB) to avoid SSH channel exhaustion
+    if ssh_client and size > 1024 * 1024:
+        local_md5 = _md5(local)
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            _, stdout, _ = ssh_client.exec_command(f"md5sum {remote}", timeout=60)
+            remote_md5 = stdout.read().decode().strip().split()[0]
+            if remote_md5 == local_md5:
+                log(f"  done: {os.path.basename(local)} (MD5 verified)")
+                return
+            else:
+                log(f"  WARNING: MD5 mismatch for {os.path.basename(local)} (attempt {attempt}/{max_retries}) local={local_md5} remote={remote_md5}")
+                if attempt == max_retries:
+                    raise RuntimeError(f"Upload failed after {max_retries} attempts: MD5 mismatch for {os.path.basename(local)}")
+                sftp.put(local, remote)
+                time.sleep(2)
+    # Size verify for small files
+    if size <= 1024 * 1024:
+        remote_size = sftp.stat(remote).st_size
+        if remote_size != size:
+            raise RuntimeError(f"Size mismatch for {os.path.basename(local)}: local={size} remote={remote_size}")
     log(f"  done: {os.path.basename(local)}")
 
-def upload_dir(sftp, local_dir, remote_dir):
+def upload_dir(sftp, local_dir, remote_dir, ssh_client=None):
     for root, dirs, files in os.walk(local_dir):
         rel = os.path.relpath(root, local_dir).replace("\\", "/")
         if rel == ".":
@@ -47,7 +75,7 @@ def upload_dir(sftp, local_dir, remote_dir):
         for f in files:
             local_path = os.path.join(root, f)
             remote_path = f"{remote_root}/{f}"
-            upload_file(sftp, local_path, remote_path)
+            upload_file(sftp, local_path, remote_path, ssh_client=ssh_client)
 
 try:
     open(RESULT_FILE, "w").close()
@@ -129,7 +157,7 @@ try:
     for local_rel, remote_abs in upload_map.items():
         local_abs = os.path.join(LOCAL_BASE, local_rel.replace("/", os.sep))
         if os.path.exists(local_abs):
-            upload_file(sftp, local_abs, remote_abs)
+            upload_file(sftp, local_abs, remote_abs, ssh_client=c)
         else:
             log(f"  SKIP (not found): {local_rel}")
 
@@ -138,15 +166,15 @@ try:
         jars = globmod.glob(pattern)
         for jar in jars:
             remote_jar = f"{REMOTE_PATH}/skills/{s}/target/{os.path.basename(jar)}"
-            upload_file(sftp, jar, remote_jar)
+            upload_file(sftp, jar, remote_jar, ssh_client=c)
 
     log("Uploading MySQL migrations...")
-    upload_dir(sftp, os.path.join(LOCAL_BASE, "docker", "mysql", "migrations"), f"{REMOTE_PATH}/docker/mysql/migrations")
+    upload_dir(sftp, os.path.join(LOCAL_BASE, "docker", "mysql", "migrations"), f"{REMOTE_PATH}/docker/mysql/migrations", ssh_client=c)
 
     log("Uploading frontend dist...")
-    upload_dir(sftp, os.path.join(LOCAL_BASE, "echomind-web", "dist"), f"{REMOTE_PATH}/echomind-web/dist")
+    upload_dir(sftp, os.path.join(LOCAL_BASE, "echomind-web", "dist"), f"{REMOTE_PATH}/echomind-web/dist", ssh_client=c)
     log("Uploading frontend dist-admin...")
-    upload_dir(sftp, os.path.join(LOCAL_BASE, "echomind-web", "dist-admin"), f"{REMOTE_PATH}/echomind-web/dist-admin")
+    upload_dir(sftp, os.path.join(LOCAL_BASE, "echomind-web", "dist-admin"), f"{REMOTE_PATH}/echomind-web/dist-admin", ssh_client=c)
 
     sftp.close()
     log("All files uploaded!")

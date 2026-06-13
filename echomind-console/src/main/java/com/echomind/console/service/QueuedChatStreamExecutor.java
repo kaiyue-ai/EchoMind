@@ -346,7 +346,8 @@ class QueuedChatStreamExecutor {
         if (e instanceof TokenQuotaExceededException quota) {
             return new ErrorDetail(
                 "USER_TOKEN_QUOTA_EXCEEDED",
-                "Token 配额已超限",
+                "Token " + TokenQuotaExceededException.scopeLabel(quota.scope()) + "额度已超限（已用 " + quota.usedTokens()
+                    + " / 限额 " + quota.limitTokens() + "）",
                 "INITIAL_RESERVATION",
                 quota.scope(),
                 quota.limitTokens(),
@@ -360,15 +361,16 @@ class QueuedChatStreamExecutor {
         if (e instanceof ProviderTokenBudgetExceededException budget) {
             return new ErrorDetail(
                 "PROVIDER_TOKEN_BUDGET_EXCEEDED",
-                "模型服务预算不足，请稍后重试或切换模型",
+                "模型服务预算不足，" + ProviderTokenBudgetExceededException.scopeLabel(budget.scope()) + "预算已耗尽"
+                    + "（已用 " + budget.usedTokens() + " / 限额 " + budget.limitTokens() + "），请稍后重试或切换模型",
                 "INITIAL_RESERVATION",
+                budget.scope(),
+                budget.limitTokens(),
+                budget.usedTokens(),
                 null,
                 null,
-                null,
-                null,
-                null,
-                null,
-                null
+                Math.max(0, budget.limitTokens() - budget.usedTokens()),
+                budget.providerId()
             );
         }
         return null;

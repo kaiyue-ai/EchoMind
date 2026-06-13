@@ -79,7 +79,7 @@ class TokenQuotaServiceTest {
 
         assertThatThrownBy(() -> service.assertAllowed(new AuthUser("user-a", "alice", true)))
             .isInstanceOf(TokenQuotaExceededException.class)
-            .hasMessageContaining("daily");
+            .hasMessageContaining("每日额度已超限");
 
         verifyNoInteractions(usageMapper);
     }

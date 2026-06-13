@@ -117,7 +117,7 @@
         </el-form-item>
 
         <el-form-item label="知识库">
-          <el-upload v-model:file-list="newAgentKnowledgeFiles" drag multiple :auto-upload="false" accept=".txt,.pdf">
+          <el-upload v-model:file-list="newAgentKnowledgeFiles" drag multiple :auto-upload="false" accept=".txt,.pdf" :before-upload="beforeKnowledgeUpload">
             <div class="upload-copy">拖入或选择 txt / pdf 文件，扫描版 PDF 会自动 OCR</div>
           </el-upload>
         </el-form-item>
@@ -129,7 +129,7 @@
     </DrawerForm>
 
     <DrawerForm v-model="showKnowledgeDrawer" :title="`${selectedAgent?.name || 'Agent'} 知识库`" size="680px">
-      <el-upload v-model:file-list="knowledgeFiles" drag multiple :auto-upload="false" accept=".txt,.pdf">
+      <el-upload v-model:file-list="knowledgeFiles" drag multiple :auto-upload="false" accept=".txt,.pdf" :before-upload="beforeKnowledgeUpload">
         <div class="upload-copy">上传 txt / pdf，扫描版 PDF 会先 OCR，再切片写入该 Agent 私有向量库</div>
       </el-upload>
       <div class="drawer-toolbar">
@@ -176,6 +176,8 @@ const chatStore = useChatStore()
 const { agents, loading, saving, error, knowledgeByAgent, knowledgeLoading, knowledgeUploading } = storeToRefs(agentStore)
 const { models, loading: modelLoading, error: modelError } = storeToRefs(modelStore)
 const { skills, loading: skillLoading, error: skillError } = storeToRefs(skillStore)
+
+const MAX_KNOWLEDGE_FILE_SIZE = 50 * 1024 * 1024 // 50MB
 
 const mutatingId = ref(null)
 const showCreateDrawer = ref(false)
@@ -350,5 +352,13 @@ function formatBytes(size) {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function beforeKnowledgeUpload(file) {
+  if (file.size > MAX_KNOWLEDGE_FILE_SIZE) {
+    ElMessage.error(`文件「${file.name}」大小为 ${formatBytes(file.size)}，知识库文件不能超过 50MB，请压缩后重试`)
+    return false
+  }
+  return true
 }
 </script>
