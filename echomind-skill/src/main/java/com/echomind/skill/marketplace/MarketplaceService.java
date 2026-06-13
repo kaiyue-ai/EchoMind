@@ -82,7 +82,8 @@ public class MarketplaceService {
         try {
             Files.createDirectories(marketplaceDir);
         } catch (Exception e) {
-            throw new RuntimeException("Cannot create marketplace dir: " + marketplaceDirPath, e);
+            throw new IllegalStateException(
+                "无法创建 Skill 市场目录: " + marketplaceDirPath + "，请检查磁盘权限和路径配置", e);
         }
     }
 

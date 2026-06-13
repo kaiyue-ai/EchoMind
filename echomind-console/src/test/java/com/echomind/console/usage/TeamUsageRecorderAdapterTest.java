@@ -89,7 +89,7 @@ class TeamUsageRecorderAdapterTest {
 
         assertThatThrownBy(() -> adapter.assertAllowed("user-a", "planner", "session-a"))
             .isInstanceOf(TeamUsageQuotaExceededException.class)
-            .hasMessageContaining("Token quota exceeded");
+            .hasMessageContaining("每日额度已超限");
         verifyNoInteractions(alertService);
     }
 

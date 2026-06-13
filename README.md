@@ -2,6 +2,8 @@
 
 EchoMind 是一个 **企业级模块化 AI Agent 平台**，基于 Spring Boot 3.5 / Java 17 构建，提供完整的 Agent 生命周期管理、技能扩展体系和多 Agent 协作能力。
 
+> 📺 [观看项目演示视频](./demo.mp4)
+
 ## 项目定位
 
 EchoMind 旨在为企业提供一个可扩展、可定制的 AI Agent 基础设施，支持：

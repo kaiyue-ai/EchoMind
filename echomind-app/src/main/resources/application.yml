@@ -22,9 +22,9 @@ spring:
     name: echomind
   servlet:
     multipart:
-      # 聊天图片和 Skill JAR 都走 multipart/form-data；这里和前端 Nginx 限制保持一致。
-      max-file-size: 10MB
-      max-request-size: 12MB
+      # 聊天图片、Skill JAR 和知识库文件都走 multipart/form-data；这里和前端 Nginx 限制保持一致。
+      max-file-size: 50MB
+      max-request-size: 55MB
   profiles:
     active: dev
   thymeleaf:
@@ -315,7 +315,7 @@ echomind:
           resource: classpath:/knowledge-seeds/zhangxuefeng-volunteer-knowledge.txt
           content-type: text/plain
     retired-skills:
-      skill-ids: [qq-mail, web-search, zhangxuefeng-perspective, geng-academic-fraud-detector]
+      skill-ids: [qq-mail, web-search, zhangxuefeng-perspective, geng-academic-fraud-detector, date-query]
       prompt-replacements:
         - from: "web-search"
           to: "open-websearch MCP"

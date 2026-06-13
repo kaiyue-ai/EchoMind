@@ -30,6 +30,8 @@ import java.util.UUID;
 @Slf4j
 public class AgentKnowledgeApplicationService {
 
+    private static final long MAX_KNOWLEDGE_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+
     private final AgentKnowledgeManagementPort knowledgeService;
     private final ObjectStorageService storageService;
 
@@ -40,6 +42,10 @@ public class AgentKnowledgeApplicationService {
     public AgentKnowledgeDocument upload(String agentId, MultipartFile file) throws IOException {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("知识库文件不能为空");
+        }
+        if (file.getSize() > MAX_KNOWLEDGE_FILE_SIZE) {
+            throw new IllegalArgumentException("知识库文件大小不能超过 50MB，当前文件大小: "
+                + String.format("%.1f", file.getSize() / (1024.0 * 1024.0)) + "MB");
         }
         String originalFilename = file.getOriginalFilename();
         String contentType = contentType(file);
@@ -99,11 +105,17 @@ public class AgentKnowledgeApplicationService {
         String contentType = document.contentType() == null || document.contentType().isBlank()
             ? MediaType.APPLICATION_OCTET_STREAM_VALUE
             : document.contentType();
-        return new KnowledgeDownload(
-            document.fileName(),
-            contentType,
-            storageService.readObject(document.objectUri())
-        );
+        try {
+            return new KnowledgeDownload(
+                document.fileName(),
+                contentType,
+                storageService.readObject(document.objectUri())
+            );
+        } catch (Exception e) {
+            log.warn("Failed to read knowledge object uri={} for documentId={}: {}",
+                document.objectUri(), documentId, e.getMessage());
+            throw new IllegalArgumentException("知识库原文件在对象存储中不存在或已被删除，无法下载");
+        }
     }
 
     private AgentKnowledgeDocument findDocument(String agentId, Long documentId) {

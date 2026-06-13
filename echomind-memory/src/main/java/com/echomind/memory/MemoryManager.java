@@ -50,7 +50,8 @@ public class MemoryManager {
         String cacheKey = memoryKey(userId, memoryKey);
         chatStore.saveMessage(normalizeUserId(userId), memoryKey, agentId, message);
         recentCache.append(cacheKey, message);
-        refreshSummaryIfNeeded(normalizeUserId(userId), memoryKey);
+        // 摘要功能暂未接入模型上下文，暂停自动刷新以减少不必要的计算
+        // refreshSummaryIfNeeded(normalizeUserId(userId), memoryKey);
     }
 
     private List<AgentMessage> getRecentMessages(String memoryKey) {
