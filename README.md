@@ -193,17 +193,39 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    A["用户提交任务"] --> B["Planner 拆解为 Step"]
-    B --> C["Reviewer 审核规划"]
-    C -->|通过| D["Executor 并行执行各 Step"]
-    C -->|不通过| B
-    D --> E["SubReviewer 审查每步输出"]
-    E -->|通过| F["所有 Step 完成"]
-    E -->|不通过| D
-    F --> G["Merger 聚合结果"]
-    G --> H["Reviewer 全局终审"]
-    H -->|通过| I["Run 完成，输出最终报告"]
-    H -->|不通过| G
+    subgraph 规划["规划阶段"]
+        A["用户提交任务<br/>createRun()"] --> B["Planner 拆解为 Step<br/>planAndReview()"]
+        B --> C["Reviewer 审核规划"]
+        C -->|通过| D["初始化 DAG + 根 Step 就绪<br/>initializeDag() → dispatchReadySteps()"]
+        C -->|不通过| B
+    end
+
+    subgraph 执行["执行阶段"]
+        D --> E["Executor 并行执行各 Step<br/>executeStep() → reviewStepOutput()"]
+        E --> F["SubReviewer 审查输出"]
+        F -->|PASS / 有风险放行| G["completeStep() → Step 完成"]
+        F -->|RETRY| H["prepareStepRetry() → 重试"]
+        F -->|FAILED| I["failRun() → Run 终止"]
+        H --> E
+    end
+
+    subgraph 级联["DAG 级联调度"]
+        G --> J["completeStepAndCascade()<br/>解锁下游依赖"]
+        J -->|新 Step 就绪| K["dispatchReadySteps()"]
+        K --> E
+        J -->|所有 Step 完成| L["DAG_COMPLETE"]
+    end
+
+    subgraph 合并终审["合并 & 终审阶段"]
+        L --> M["Merger 聚合<br/>mergeAndReviewResults()"]
+        M --> N["ConflictDetector 冲突检测"]
+        N -->|有冲突| O["Planner 仲裁 → Merger 二次聚合"]
+        N -->|无冲突| P["Reviewer 全局终审"]
+        O --> P
+        P -->|SUCCESS| Q["Run 完成，输出最终报告"]
+        P -->|REMERGE| M
+        P -->|FAILED| I
+    end
 ```
 
 ## Agent Team 各阶段说明
@@ -212,28 +234,50 @@ flowchart TB
 
 ```
 1. 规划阶段
-   用户提交任务 → Planner 拆解为多个 Step → Reviewer 审核规划方案
-     ├─ 审核通过 → 进入执行阶段
-     ├─ 审核不通过 → Planner 重新规划（最多 maxPlanRetries 次）
-     └─ 审核失败 → Run 终止为 FAILED
+   createRun() → publish RunStarted event → coordinator.onRunStarted()
+     → publishControl(PLAN_AND_REVIEW) → TeamControlConsumer
+     → coordinator.startRunPlan(runId)
+       → blackboard.planAndReviewForCoordinator(runId)
+         ├─ Planner 拆解任务为多个 Step (callPlanner)
+         ├─ Reviewer 审核规划方案 (callReviewerForPlan)
+         │    ├─ CONTINUE → 审核通过
+         │    ├─ RETRY → Planner 重新规划（最多 maxPlanRetries 次）
+         │    └─ FAILED → failRun()
+         └─ markInitialStepStates → initializeDag() → 根 Step = READY
+   → dispatchReadySteps() → tryClaimSlot() → publishExecuteStep
 
 2. 执行阶段
-   各 Step 并行调度执行 → Executor 执行 → SubReviewer 审查每步输出
-     ├─ SubReview 通过 → 标记 Step 完成
-     ├─ SubReview 不通过 → Step 重试（最多 maxStepRetries 次）
-     └─ SubReview 失败 → Run 终止为 FAILED
-   已完成 Step 的下游依赖解锁后自动调度执行，直到所有 Step 完成
+   TeamStepExecutionConsumer 接收 ExecuteStepCommand
+     → blackboard.executeStepPublic(runId, stepId)
+       → selectExecutorWithModel → Agent 调用 → reviewStepOutput()
+         ├─ SubReview PASS → completeStep(PASSED)
+         ├─ SubReview ACCEPT_WITH_RISK → completeStep(FLAWED_ACCEPTED)
+         ├─ SubReview RETRY → prepareStepRetry() → 重试（最多 maxStepRetries 次）
+         └─ SubReview FAILED → failRun()
+     → publishOutcome → StepCompleted / StepFailed → Run Events Queue
 
-3. 合并阶段
-   所有 Step 完成 → Merger 聚合各 Step 结果 → ConflictDetector 检测冲突
-     ├─ 有冲突 → Planner 仲裁 → Merger 二次聚合
-     └─ 无冲突 → 进入终审
+3. DAG 级联调度
+   coordinator.onStepCompleted()
+     → completeStepAndCascade(runId, stepId)
+       ├─ 原子标记 Step 完成 + 递减下游依赖计数
+       ├─ 返回新就绪的 Step 列表 → markStepsReadyFromCoordinator
+       └─ dispatchReadySteps() → 为新就绪 Step 抢占并发槽位 + 派发
+     → isDagComplete()?
+       ├─ 否 → 继续等待后续 Step 完成
+       └─ 是 → publishControl(DAG_COMPLETE) → 进入合并阶段
 
-4. 终审阶段
-   Reviewer 全局终审 → 最终决策
-     ├─ SUCCESS → Run 完成，输出最终报告
-     ├─ REMERGE → Merger 重新聚合（最多 maxMergeAttempts 次）
-     └─ FAILED → Run 终止为 FAILED
+4. 合并 & 终审阶段
+   coordinator.completeDag(runId)
+     → blackboard.onDagCompleteInCoordinator(runId)
+       → mergeAndReviewResults(run, team)
+         ├─ callMerger → 聚合各 Step 结果
+         ├─ detectConflicts → 冲突检测
+         │    └─ 有冲突 → arbitrateConflicts → Planner 仲裁 → callMerger 二次聚合
+         └─ reviewResults → GlobalReviewer 终审
+              ├─ SUCCESS → completeRunWithFinalOutput → Run 完成
+              ├─ REMERGE → Merger 重新聚合（最多 maxMergeAttempts 次）
+              └─ FAILED → failRun()
+       → destroyDag()  清理运行时 DAG 状态
 ```
 
 Team Run、Step 和 Event 全部按当前登录用户隔离，前端 Team 看板只展示当前用户自己的 Team 和 Run 历史。系统内置定时巡检机制，会自动发现并修复因异常中断而处于非终态的 Run（重新规划、重新合并、或从数据库重建运行时状态并重新调度）。
