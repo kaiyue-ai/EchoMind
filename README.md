@@ -193,59 +193,17 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph Client["客户端"]
-        A["TeamController"]
-        A2["TeamBlackboardService"]
-    end
-
-    subgraph Queues["消息队列"]
-        C["Run Events Queue<br/>16 shards × 1 consumer"]
-        Ctrl["Control Queue<br/>4 consumers + per‑run lock"]
-        D["Step Execute Queue<br/>1 queue × N consumers"]
-    end
-
-    subgraph Workers["Worker"]
-        CW["TeamControlConsumer"]
-        F["TeamStepExecutionConsumer"]
-    end
-
-    subgraph Coordinator["DAG 协调器"]
-        E["TeamDagCoordinator + TeamRedisDagStore<br/>Lua 原子操作"]
-    end
-
-    subgraph Roles["Agent 角色"]
-        K["Planner — 拆解任务为 Step"]
-        M["Reviewer — 审核规划方案"]
-        L["Executor — 执行 Step"]
-        SR["SubReviewer — 每步审查"]
-        N["Merger — 聚合结果"]
-    end
-
-    subgraph Storage["持久化"]
-        P["MySQL: Team/Run/Step/Event"]
-        Q["Redis: DAG 状态 + 槽位"]
-    end
-
-    A -->|创建 Run| A2
-    A2 -->|scheduleRun| C
-    C -->|顺序消费| E
-    E -->|RunStarted| Ctrl
-    Ctrl --> CW -->|planAndReviewForCoordinator| A2
-    A2 -->|调用 Planner 拆解任务| K
-    A2 -->|调用 Reviewer 审核| M
-    M -->|审核通过| A2
-    A2 -->|初始化 Redis DAG + 写 MySQL Step| Q
-    A2 -->|dispatchReadySteps: claimSlot 原子设 RUNNING + 派发| D
-    D --> F -->|executeStep: 调用 Executor| L
-    L -->|SubReview: 调用 SubReviewer| SR
-    SR -->|PASS: completeStep| C
-    SR -->|RETRY: releaseSlotForRetry 原子减 running_count| Q
-    Q -->|markStepReady + 重新入队| D
-    E -->|DAG 全部完成| Ctrl
-    Ctrl --> CW -->|mergeAndReview| A2
-    A2 -->|调用 Merger 聚合 + Reviewer 终审| N
-    A2 -.->|读写| P
-    E -.->|Lua 原子| Q
+    A["用户提交任务"] --> B["Planner 拆解为 Step"]
+    B --> C["Reviewer 审核规划"]
+    C -->|通过| D["Executor 并行执行各 Step"]
+    C -->|不通过| B
+    D --> E["SubReviewer 审查每步输出"]
+    E -->|通过| F["所有 Step 完成"]
+    E -->|不通过| D
+    F --> G["Merger 聚合结果"]
+    G --> H["Reviewer 全局终审"]
+    H -->|通过| I["Run 完成，输出最终报告"]
+    H -->|不通过| G
 ```
 
 ## Agent Team 各阶段说明
@@ -253,53 +211,32 @@ flowchart TB
 ### 执行流程
 
 ```
-RunStarted 事件
-  │
-  ▼
-TeamDagCoordinator.onRunStarted()
-  └─ 发布 TeamControl(PLAN_AND_REVIEW)
-       │
-       ▼
-TeamControlConsumer
-  ├─ planAndReviewForCoordinator()   ← Planner ↔ Reviewer 闭环
-  │    ├─ Planner 拆解 Step
-  │    ├─ Reviewer 审核 → CONTINUE / RETRY / FAILED
-  │    └─ 审核通过 → Run=EXECUTING，根 Step=READY，初始化 Redis DAG
-  └─ dispatchReadySteps()
-       ├─ 检查 stopping flag
-       ├─ Lua claim_step_slot: CAS 抢占并发槽位 + 原子设置 Step=RUNNING（消除 status/running_count 窗口）
-       └─ 发布 ExecuteStep → Step Execute Queue
+1. 规划阶段
+   用户提交任务 → Planner 拆解为多个 Step → Reviewer 审核规划方案
+     ├─ 审核通过 → 进入执行阶段
+     ├─ 审核不通过 → Planner 重新规划（最多 maxPlanRetries 次）
+     └─ 审核失败 → Run 终止为 FAILED
 
-TeamStepExecutionConsumer (Worker)
-  ├─ 检查 stopping flag / 去重 / 幂等
-  ├─ tryClaimSlot 已原子设置 Step=RUNNING（无需再调用 setStepRunning）
-  ├─ AgentSelector 选择 Executor → executeStepPublic() → LLM 调用 → SubReview
-  │    ├─ SubReview PASS → completeStep → Step=COMPLETED
-  │    ├─ SubReview RETRY → prepareStepRetry → Step=RETRYING → 释放槽位 → 重新入队
-  │    │    └─ Lua release_slot_for_retry: 原子递减 running_count + 设置 RETRYING（消除并发重试竞态）
-  │    └─ SubReview FAILED → failRun → Run=FAILED
-  └─ publishOutcome → StepCompleted / StepFailed → Run Events Queue
+2. 执行阶段
+   各 Step 并行调度执行 → Executor 执行 → SubReviewer 审查每步输出
+     ├─ SubReview 通过 → 标记 Step 完成
+     ├─ SubReview 不通过 → Step 重试（最多 maxStepRetries 次）
+     └─ SubReview 失败 → Run 终止为 FAILED
+   已完成 Step 的下游依赖解锁后自动调度执行，直到所有 Step 完成
 
-TeamDagCoordinator.onStepCompleted()
-  ├─ Lua complete_step: 幂等完成计数 + 原子级联检查依赖
-  ├─ 新就绪步骤写 MySQL READY → dispatchReadySteps()
-  └─ DAG 全部完成 → 发布 TeamControl(DAG_COMPLETE)
-       │
-       ▼
-TeamControlConsumer
-  └─ mergeAndReviewResults()
-       ├─ MergeAgent 聚合 → ConflictDetector 冲突检测
-       ├─ 有冲突 → Planner 仲裁 → MergeAgent 二次聚合
-       └─ GlobalReviewer 终审 → SUCCESS / REMERGE / FAILED
+3. 合并阶段
+   所有 Step 完成 → Merger 聚合各 Step 结果 → ConflictDetector 检测冲突
+     ├─ 有冲突 → Planner 仲裁 → Merger 二次聚合
+     └─ 无冲突 → 进入终审
+
+4. 终审阶段
+   Reviewer 全局终审 → 最终决策
+     ├─ SUCCESS → Run 完成，输出最终报告
+     ├─ REMERGE → Merger 重新聚合（最多 maxMergeAttempts 次）
+     └─ FAILED → Run 终止为 FAILED
 ```
 
-Team Run、Step 和 Event 全部按当前登录用户隔离；`GET /api/teams`、`GET /api/teams/{teamId}/runs` 和 `/api/team-runs` 不返回其他用户的数据。前端 Team 看板只展示当前用户自己的 Team 和 Run 历史。
-
-Team 内部 Planner、AgentSelector、Executor、Reviewer、MergeAgent 等调用都走 `AgentOrchestrator.executeInternal`。内部控制面不读取或写入普通聊天会话，也跳过用户长期记忆召回和 Agent 私有知识库召回，避免 Team 规划/调度被聊天记忆、知识库 query rewrite 或外部 embedding/LLM 请求拖慢；Team 需要的上下文只从 MySQL 黑板 Run / Step / Event 组装。
-
-Team 看板的流程图由后端 Mermaid 和前端兜底图共同保证：Run 刚创建、Planner 尚未产出 Step 时也会显示规划阶段节点；Run 进入 `EXECUTING` 后 Step 消费器先写 `RUNNING` / `startedAt` / `STEP_STARTED`，再执行 AgentSelector 和 Executor，因此前端能看到正在执行的 Step。活跃 Run 轮询间隔为 800ms，并带 in-flight guard，避免请求重叠造成卡顿。
-
-`TeamRunReconciler` 会定期扫描超过宽限窗口的非终态 Run：无 Step 的 Run 重新投递规划命令；Step 已全部完成但未汇总的 Run 重新投递 DAG 完成命令；没有活动 Step 的未完成 DAG 从 MySQL Step 事实重建 Redis 热投影并重新调度 READY Step。MySQL 仍是事实源，Redis 只做可重建的运行时投影。
+Team Run、Step 和 Event 全部按当前登录用户隔离，前端 Team 看板只展示当前用户自己的 Team 和 Run 历史。系统内置定时巡检机制，会自动发现并修复因异常中断而处于非终态的 Run（重新规划、重新合并、或从数据库重建运行时状态并重新调度）。
 
 ### 审查阶段
 
